@@ -50,7 +50,7 @@ Requisitos: Python 3.10+ y `openpyxl` (única dependencia de terceros; el resto 
 stdlib a propósito, para que los tools corran en cualquier sandbox).
 
 ```bash
-git clone https://github.com/cfamexico/research_analyst && cd research_analyst
+git clone https://github.com/CFA-Society-Mexico/research_analyst && cd research_analyst
 ```
 
 ```bash

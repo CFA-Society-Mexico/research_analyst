@@ -24,15 +24,15 @@ reporte oficial, con página) · `guidance` (lo dijo la dirección) · `supuesto
 **Claude Code / Claude Cowork:**
 
 ```
-/plugin marketplace add cfamexico/research_analyst
+/plugin marketplace add CFA-Society-Mexico/research_analyst
 /plugin install research-analyst@cfamexico
 ```
 
-(En Cowork: menú **Customize → Add marketplace** → `cfamexico/research_analyst`.)
+(En Cowork: menú **Customize → Add marketplace** → `CFA-Society-Mexico/research_analyst`.)
 
 **Cursor / Codex:** clona el repo en tu workspace; [`AGENTS.md`](AGENTS.md)
 enruta cada tarea a la skill correcta. Codex también lee el marketplace:
-`codex plugin marketplace add cfamexico/research_analyst`.
+`codex plugin marketplace add CFA-Society-Mexico/research_analyst`.
 
 > **Entornos con red restringida (Claude Cowork, sandboxes):** para que la
 > descarga de filings, de historia XBRL y de series macro funcione, permite los
