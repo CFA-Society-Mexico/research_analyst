@@ -39,13 +39,14 @@ las best practices escritas y entregó Calibri con gridlines).
 1c. **Ratios una sola vez**: `build_ratios` se llama UNA vez por hoja sobre el
    horizonte completo — histórico y forecast en la misma fila. Secciones
    "Ratios histórico"/"Ratios forecast" separadas = F13 falla por duplicado.
-2. **Secciones**: el modelo vive en la hoja única `Model` — secciones
-   Assumptions → IS → BS → CF → DCF → Ratios → Schedules con `section_header`
+2. **Secciones**: en modo `quarterly`, `Operating` lleva Assumptions → IS →
+   BS → CF → Ratios → Schedules y `Annual` lleva IS → BS → CF → Ratios →
+   Schedules agregados → DCF; en modo `annual`, la hoja `Model` lleva las
+   mismas secciones con el DCF incluido. Cada sección con `section_header`
    (banda) y `group_rows` (colapsables). Schedules: un bloque por schedule con
    `schedule_block_header` ("Sch: X") — JAMÁS una hoja por schedule ni hojas
-   IS/BS/CF sueltas. Periodicidad mixta: `quarter_header` para el tramo
-   trimestral estimado antes de `period_header` anual; el anual corriente =
-   suma de sus trimestres por fórmula (C8 estructural).
+   IS/BS/CF sueltas. Las columnas FY intercaladas entre trimestres
+   (`interleaved_header`) están deprecadas desde el diseño 2026-08-31.
 2b. **Ratios por código**: la sección Ratios se genera con
    `ModelStyler.build_ratios(ws, start_row, first_col, n_cols, ref, wacc_ref)`
    — `ref` es el registro canon→referencia de fila que el build ya conoce
@@ -61,19 +62,21 @@ las best practices escritas y entregó Calibri con gridlines).
 4. **Constantes**: 365, 1000 y similares como celdas etiquetadas en Assumptions
    con `define_constant` (`DAYS_YEAR`, `MM_TO_B`); las fórmulas referencian el
    named range, nunca el literal (check S4).
-5. **Checks arriba**: `check_row` en fila 3 de IS/BS/CF (balance / tie-out por
+5. **Checks arriba**: `check_row` en fila 3 de `Operating`, o de `Model` en
+   modo annual (balance / tie-out por
    columna, estilo `=+IF(ABS(a-b)>0.0001,"Error","OK")`).
 6. **Bordes**: `subtotal_border` / `total_border` — no bordes manuales.
 
-**Ejemplo mínimo del API** (ancla la forma correcta de usarlo):
+**Ejemplo mínimo del API**, modo `annual` (ancla la forma correcta de usarlo;
+el libro v3 completo en modo `quarterly` está en `_demo` de `tools/xlsx_builder.py`):
 
 ```python
 styler = ModelStyler(brand=load_brand("brand/DESIGN.md"))  # brand opcional
-ws = styler.new_sheet("IS", freeze="C4")
-styler.brand_bar(ws, "Estado de resultados")
+ws = styler.new_sheet("Model", freeze="C4")
+styler.brand_bar(ws, "Modelo anual")
 styler.period_header(ws, 3, 3, PeriodHeader(2019, 2031, 2025))  # 2025A|2026E
 styler.series_row(ws, 7, "Crecimiento de ventas (%)", first_col=3,
-                  hist_values=["=D6/C6-1", ...],   # calculado, negro
+                  hist_values=[None, "=D6/C6-1", ...],  # C vacía: sin año previo
                   forecast_values=[0.05, ...],      # input, azul+amarillo
                   numfmt=NumFmt.PCT1)
 styler.total_border(ws, 26, 3, 13)

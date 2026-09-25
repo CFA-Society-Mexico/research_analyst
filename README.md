@@ -44,7 +44,7 @@ enruta cada tarea a la skill correcta. Codex también lee el marketplace:
 
 ## El flujo completo
 
-Cuatro comandos orquestan todo. Antes de correr verifican que nada falte
+Cinco comandos orquestan todo. Antes de correr verifican que nada falte
 (incluida la confirmación de que no hay información privilegiada); si algo
 falla, se detienen — nunca dejan trabajo a medias.
 
@@ -64,8 +64,8 @@ todo queda escrito en un diario de tesis:
    estándar y archiva tus documentos. Si faltan filings de una empresa de la
    SEC, ofrece descargarlos (`tools/sec_fetch.py`, EDGAR gratuito).
 2. **Perfil de la empresa** (`framework-mapper`) — deduce el marco contable
-   (IFRS / US GAAP / NIF), la periodicidad del modelo (anual, anual +
-   trimestral, trimestral — siempre te pregunta) y los métodos de valuación
+   (IFRS / US GAAP / NIF), la periodicidad del modelo (anual o trimestral —
+   siempre te pregunta) y los métodos de valuación
    que aplican. Tú confirmas cada derivación.
 3. **Captura de históricos** (`statement-mapper`) — para emisoras SEC, décadas
    de anuales y trimestrales en un comando (`tools/xbrl_fetch.py`, datos XBRL
@@ -82,7 +82,7 @@ todo queda escrito en un diario de tesis:
    **Operating** (el modelo se construye sobre trimestres — supuestos,
    estados, razones y schedules en secciones colapsables, navegación estilo
    CFI) + hoja **Annual** (los años como agregado calculado de sus trimestres
-   + el DCF desglosado línea por línea). Todo vigilado por ~40 checks.
+   + el DCF desglosado línea por línea). Todo vigilado por ~50 checks.
 7. **Poblar el forecast** (`driver-inventory`, segunda pasada) — el analista
    pone cada número viendo su serie histórica al lado; el asistente contrasta
    contra el guidance y registra las diferencias.
@@ -151,7 +151,8 @@ responde a lenguaje natural, sobre coberturas del plugin o trabajo tuyo previo.
 
 | Tipo | ¿Hoy? |
 |---|---|
-| SEC (10-K/10-Q, US GAAP) · BMV no financiera (IFRS) · privada (NIF) · ADR (20-F) · FIBRA/REIT | ✅ |
+| SEC (10-K/10-Q, US GAAP) · BMV no financiera (IFRS) · privada (NIF) · FIBRA/REIT | ✅ |
+| ADR (20-F, IFRS) | ⚠️ Perfil, modelo y valuación sí. `sec_fetch` baja 20-F y 6-K con `--forms 20-F,6-K`; `xbrl_fetch` solo lee US GAAP, así que la historia se captura desde el filing |
 | Comparar empresas entre marcos contables | ⚠️ Las 7 diferencias más comunes verificadas; el resto se marca `[VERIFICAR]` |
 | Bancos y aseguradoras | ❌ v2 — falta el mapeo CNBV/CNSF; el plugin lo detecta y te avisa |
 

@@ -46,7 +46,7 @@ trimestre por trimestre de 10-Qs; el filing HTML queda para lo que XBRL no trae
 
    ```
    line_item,period,value,source_doc,source_ref,tag
-   total_net_sales,FY2025,391035,AAPL_10-K_FY2025.htm,"Consolidated Statements of Operations, p.28",observado
+   total_net_sales,FY2024,391035,AAPL_10-K_FY2024.htm,"Consolidated Statements of Operations, p.28",observado
    ```
 3. Mapea a las líneas del model-spec. La presentación de la emisora rara vez coincide
    1:1 — propone el mapeo y las reclasificaciones como PROPUESTA, con el racional.

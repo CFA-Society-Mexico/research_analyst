@@ -26,7 +26,7 @@ Gates de usuario en cada transición + protocolo de debate
    `data.sec.gov` en el allowlist del entorno; JAMÁS sustituir el filing
    íntegro por contenido procesado de un lector web (el pipeline cita por
    documento y página): `python tools/sec_fetch.py <TICKER> --dest
-   workspace/<TICKER>/filings/sec --ua "<nombre correo>"` (o env `SEC_EDGAR_UA`;
+   <raiz>/<TICKER>/filings/sec --ua "<nombre correo>"` (o env `SEC_EDGAR_UA`;
    `--dry-run` para listar primero). El tool baja crudo por fecha de periodo +
    manifest CSV; coverage-folders renombra a la convención FY/#Q. Emisoras BMV:
    sin API pública — filings los trae el usuario.
@@ -34,14 +34,15 @@ Gates de usuario en cada transición + protocolo de debate
 4. Herramienta determinista para xlsx disponible (openpyxl o equivalente) — sin
    ella no se construye modelo.
 5. Usuario confirma alcance: periodos históricos, horizonte de forecast,
-   **periodicidad del modelo** (anual / anual + tab Quarterly / trimestral —
-   pregunta OBLIGATORIA: si el paso 2 encontró trimestrales archivados, proponer
-   `annual_plus_quarterly` como default y dejar decidir; JAMÁS asumir anual en
-   silencio) y métodos de valuación a estructurar (el perfil propondrá; aquí
+   **periodicidad del modelo** (anual / trimestral — pregunta OBLIGATORIA: si
+   el paso 2 encontró trimestrales archivados, proponer `quarterly` como default
+   y dejar decidir; JAMÁS asumir anual en silencio; `annual_plus_quarterly` está
+   deprecado y se trata como `quarterly`) y métodos de valuación a estructurar
+   (el perfil propondrá; aquí
    solo el marco general).
 6. **Guard MNPI (Standard II(A)):** usuario confirma que TODO el contenido de los
    folders es información pública. Sin confirmación, no se procesa contenido.
-7. `workspace/macro/macro-view.yaml`: existe y `updated_at` dentro de `staleness_warn_months` —
+7. `<raiz>/macro/macro-view.yaml`: existe y `updated_at` dentro de `staleness_warn_months` —
    stale o vacío AVISA (no bloquea): las etapas que lo consumen quedan marcadas.
 
 ## Pipeline (cada paso cierra con su gate + debate + entrada en thesis-journal)

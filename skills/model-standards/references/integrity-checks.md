@@ -11,8 +11,8 @@ implementación única, cero interpretación del agente.
 
 | # | Check | Cómo |
 |---|---|---|
-| S1 | Todas las tabs del model-spec v3 presentes (Cover, Checks, **Model**, Macro, condicionales); en la sección Schedules de `Model`, un bloque `Sch: <nombre>` por schedule del driver-map + cores (PPE, Debt, WC) | openpyxl: nombres de hoja vs contrato; escaneo de col. A por headers `Sch: ` vs driver-map |
-| S9 | Schedules como bloques, no como tabs: ninguna hoja con nombre `Sch_*` o `Sch *`; tampoco hojas `IS`/`BS`/`CF`/`Val_DCF` sueltas (viven como secciones de `Model`) | escaneo de nombres de hoja |
+| S1 | Todas las tabs del model-spec vigente presentes (Cover, Checks, `Operating` + `Annual` en modo quarterly o `Model` en modo annual, Macro, condicionales); en la sección Schedules de `Operating` (o `Model`), un bloque `Sch: <nombre>` por schedule del driver-map + cores (PPE, Debt, WC) | openpyxl: nombres de hoja vs contrato; escaneo de col. A por headers `Sch: ` vs driver-map |
+| S9 | Schedules como bloques, no como tabs: ninguna hoja con nombre `Sch_*` o `Sch *`; tampoco hojas `IS`/`BS`/`CF`/`Val_DCF` sueltas (viven como secciones de `Operating`/`Annual`, o de `Model` en modo annual) | escaneo de nombres de hoja |
 | S10 | Sin ciclos ni cadenas rotas: tras recalcular (Excel COM), ninguna celda de FÓRMULA queda sin valor cacheado | el síntoma del smoke #5: circularidad caja↔rendimiento↔utilidad dejó el forecast entero sin calcular; regla preventiva: rendimientos/intereses sobre saldo de APERTURA |
 | S2 | Cero links externos a otros libros | escaneo de fórmulas por `[` |
 | S3 | Sin funciones volátiles (OFFSET, INDIRECT, NOW, TODAY) | escaneo de fórmulas |
