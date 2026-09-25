@@ -7,7 +7,7 @@ US GAAP mapeados a lineas canon y escribe un CSV largo que statement-mapper
 convierte (con gate) en los canonical_*.csv de model/inputs/.
 
 Uso:
-    python tools/xbrl_fetch.py AAPL --dest workspace/AAPL/model/inputs \
+    python tools/xbrl_fetch.py AAPL --dest <raiz>/AAPL/model/inputs \
         --ua "Nombre correo@dominio.com"
 
 User-Agent obligatorio (--ua o env SEC_EDGAR_UA), igual que sec_fetch.
@@ -21,6 +21,7 @@ import csv
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import date
@@ -89,22 +90,50 @@ CONCEPT_MAP = {
 
 
 BLOCKED_MSG = """[x] Sin acceso de red a SEC ({err}).
-    El entorno bloquea data.sec.gov (proxy con allowlist — tipico en Claude
+    El entorno bloquea data.sec.gov (proxy con allowlist - tipico en Claude
     Cowork). Opciones: 1) permitir www.sec.gov y data.sec.gov en el allowlist
     del entorno y reintentar; 2) correr este comando en una maquina con red y
-    copiar el CSV a model/inputs/; 3) captura manual via statement-mapper."""
+    copiar el CSV a model/inputs/; 3) captura manual via statement-mapper.
+    Nota: SEC tambien responde 403 si el User-Agent no trae contacto valido
+    o si se excede la tasa de solicitudes."""
+
+NO_FACTS_MSG = """[x] SEC no tiene companyfacts XBRL para este CIK (HTTP 404).
+    Tipico en emisoras sin XBRL US GAAP (p. ej. FPI que reporta 20-F en
+    IFRS) o en CIKs antiguos. No es un problema de red: captura manual via
+    statement-mapper desde los filings."""
+
+RETRY_CODES = (429, 500, 502, 503, 504)
+RETRIES = 3
 
 
 def _get_json(url: str, user_agent: str) -> dict:
+    """GET JSON con clasificacion de errores.
+
+    HTTPError se atrapa ANTES que URLError porque es su subclase: sin ese
+    orden, un 404 o un 429 se reportaban como "red bloqueada".
+    """
     req = urllib.request.Request(url, headers={"User-Agent": user_agent})
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
-        code = getattr(exc, "code", None)
-        if code in (403, 407) or isinstance(exc, urllib.error.URLError):
-            raise SystemExit(BLOCKED_MSG.format(err=f"{type(exc).__name__} {code or exc.reason}"))
-        raise
+    for attempt in range(RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 407):
+                raise SystemExit(BLOCKED_MSG.format(err=f"HTTP {exc.code}"))
+            if exc.code == 404 and "companyfacts" in url:
+                raise SystemExit(NO_FACTS_MSG)
+            if exc.code in RETRY_CODES and attempt < RETRIES:
+                time.sleep(2 ** attempt)
+                continue
+            raise SystemExit(f"[x] SEC HTTP {exc.code} en {url}")
+        except urllib.error.URLError as exc:
+            raise SystemExit(BLOCKED_MSG.format(err=f"URLError {exc.reason}"))
+        except (TimeoutError, ConnectionError) as exc:
+            if attempt < RETRIES:
+                time.sleep(2 ** attempt)
+                continue
+            raise SystemExit(f"[x] SEC sin respuesta ({type(exc).__name__}) en {url}")
+    raise SystemExit(f"[x] SEC: reintentos agotados en {url}")  # pragma: no cover
 
 
 def resolve_cik(ticker: str, user_agent: str) -> str:
