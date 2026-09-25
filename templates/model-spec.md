@@ -70,7 +70,7 @@ NOPAT                                            [hist + forecast]
 (-) Capex (link)                                 [hist + forecast]
 (-) Delta working capital (link)                 [hist + forecast]
 FCFF                                             [hist + forecast]  <- sanity: FCFF realizado visible
-Factor de descuento (mid-year opcional)          [solo forecast]
+Factor de descuento (mid-year opcional)          [solo forecast; año en curso = stub]
 PV de FCFF                                       [solo forecast]
 Suma PV explicitos
 TV Gordon = FCFF_n x (1+g) / (WACC - g)
@@ -83,6 +83,11 @@ Cruce: multiplo implicito del TV Gordon · g implicita del exit (check D4)
 Reverse DCF: EV de mercado · TV implicita · g implicita de mercado (D4b)
 Bloque Hamada (beta pure-play, mecanica visible)
 ```
+
+Las g implícitas (exit y reverse DCF) se despejan con `FCFF_n`, nunca con un
+FCFF proyectado con la g del analista, y el año en curso con trimestres ya
+observados entra como **stub** (solo trimestres E, fracción de año restante).
+Fórmulas y exponentes en `valuation-conventions.md`.
 
 **Layout de los bloques de valor único** (terminal, puente a equity, cruces,
 reverse DCF, Hamada): los VALORES se anclan en la **columna C** (pegados a los
@@ -101,7 +106,8 @@ periodos para ver el valor por acción.
   - Assumptions POR TRIMESTRE en todo el forecast (la fatiga se paga una vez;
     la entrevista de populate va trimestre por trimestre).
   - DCF sobre los FY agregados de `Annual` (el valor terminal domina; los
-    trimestres aportan precisión del agregado, no el descuento).
+    trimestres aportan precisión del agregado, no el descuento). Excepción: el
+    año en curso, que entra como stub con solo sus trimestres estimados.
 
 ## §Summary — resumen ejecutivo (una pantalla, valores en columna C)
 
