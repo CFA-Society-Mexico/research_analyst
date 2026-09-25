@@ -54,7 +54,7 @@ git clone https://github.com/CFA-Society-Mexico/research_analyst && cd research_
 ```
 
 ```bash
-python -m pip install openpyxl
+python -m pip install -r requirements.txt
 ```
 
 Prueba de humo del builder (escribe un libro demo y corre encima el audit de
@@ -185,8 +185,10 @@ repo: convierte un error del modelo en un error de cumplimiento del analista.
 
 ## 6. Verificación antes de abrir el PR
 
-No hay suite de tests todavía (construirla es una contribución abierta, sección
-8). Hoy la verificación es esta lista, y se corre completa.
+Las pruebas unitarias viven en `tests/` (`unittest` de stdlib, sin red) y la
+CI (`.github/workflows/ci.yml`) las corre en cada PR junto con la sintaxis y el
+demo, en Python 3.10 y 3.13. Falta la suite de evals (sección 8). La
+verificación es esta lista, y se corre completa.
 
 Sintaxis de todos los tools:
 
@@ -200,12 +202,20 @@ Builder y audit de formato en verde:
 python tools/xlsx_builder.py demo ./scratch/demo.xlsx
 ```
 
+Pruebas unitarias:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 Y a mano:
 
 - [ ] Si tocaste un tool: corrió contra un caso real (un ticker de verdad) y
       también por el camino de error (sin red, sin key) sin traceback.
 - [ ] Si tocaste el builder o un check: el `demo` pasa en verde Y un libro
       deliberadamente roto falla en el check nuevo.
+- [ ] Si tocaste un tool o el builder: hay una prueba en `tests/` que falla
+      sin tu cambio y pasa con él.
 - [ ] Si tocaste una skill o comando: lo ejecutaste end-to-end en un workspace de
       dogfood, no solo lo leíste.
 - [ ] `grep` de los nombres que cambiaste: ninguna referencia colgada en
