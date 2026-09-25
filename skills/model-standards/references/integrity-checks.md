@@ -5,7 +5,10 @@ La celda de error del Cover agrega TODOS. Un check rojo = el comando reporta FAL
 nunca éxito. Orden: estructura → contabilidad → contenido → formato.
 
 Los checks F corren con `python tools/xlsx_builder.py audit <modelo.xlsx>` —
-implementación única, cero interpretación del agente.
+implementación única, cero interpretación del agente. Exit 0 = verde; exit 1 =
+alguna falla; exit 3 = sin fallas pero con checks `[pendiente]` (no se pudieron
+evaluar, p. ej. libro sin valores calculados). Un pendiente NUNCA se reporta
+como verde.
 
 ## Estructurales (escaneo por código)
 
@@ -64,7 +67,7 @@ externo se audita igual.
 | F1 | Gridlines ocultas | `showGridLines = False` en TODAS las hojas visibles |
 | F2 | Fuente estándar | Una sola familia (Aptos Narrow, `FONT_NAME` del builder) en celdas usadas |
 | F3 | Colores de fuente | Whitelist: negro, azul input `FF0000FF`, verde link `FF00CC00`, rojo warn, blanco |
-| F4 | Paleta de fills | Whitelist: navy `FF132E57`, naranja `FFED942D`, teal `FF1E8496`, amarillo input `FFFFF2CC`, gris escenario. Con `brand/DESIGN.md` presente, sus 3 slots se suman a la whitelist (pasar el archivo al audit) |
+| F4 | Paleta de fills | Whitelist: azul oscuro `FF1F4E79` (barra y bandas de sección), azul claro `FFBDD7EE` (sub-secciones), amarillo input `FFFFF2CC`, gris escenario `FFF2F2F2`. La paleta CFI navy/naranja/teal quedó FUERA (identidad 2026-08-31). Con `brand/DESIGN.md` presente, sus 3 slots se suman a la whitelist (pasar el archivo al audit) |
 | F5 | Formatos numéricos | Whitelist literal (miles con paréntesis y guion-cero, %, 0.0x, USD, fecha, A/E, `;;;`) |
 | F6 | Freeze panes | Presente en hojas de datos (Assumptions/IS/BS/CF/Ratios/Schedules/Rev_Reconcile/Val_*) |
 | F7 | Outline POR SECCIÓN | En `Operating` y `Annual` (o `Model`/`Schedules` legacy): CADA sección con contenido (marcador `x` + header bold) tiene filas agrupadas — agrupar solo algunas secciones FALLA |
@@ -73,9 +76,10 @@ externo se audita igual.
 | F10 | Sello del builder | Custom property `research_analyst_builder` presente — el modelo se construyó vía `tools/xlsx_builder.py`. En modelo externo: `[aviso]`, no falla |
 | F11 | **Continuidad de series** | Una serie = UNA fila continua en todo el horizonte: histórico calculado/observado y forecast en la misma fila (el rol cambia por columna), jamás columnas históricas vacías. Detección: toda fila con ≥3 celdas de input (fill amarillo) en columnas de periodo debe tener TODAS las columnas de periodo pobladas. Requiere headers A/E (F9) para ubicar las columnas — F9 rojo deja F11 sin efecto |
 | F12 | **Sin series partidas** | Fila cuyo label contiene "forecast" con la mitad histórica (columnas A) vacía, o "histórico" con la mitad estimada (columnas E) vacía = la serie se partió en dos filas. Complementa F11 (que solo vigila filas de input); cacha el patrón exacto del smoke AAPL. Derivables hacia atrás (índices, ratios implícitos) se POBLAN por fórmula |
-| F13 | **Ratios completa y ÚNICA** | (i) Completitud: el set completo de `REQUIRED_RATIO_LABELS` (~25) presente; (ii) UNICIDAD: cada razón UNA sola vez por hoja — un label duplicado delata secciones "Ratios histórico"/"Ratios forecast" partidas (bug del smoke #3); la serie completa vive en una fila. `build_ratios` cumple por construcción |
+| F13 | **Ratios completa y ÚNICA** | (i) Completitud: el set completo de `REQUIRED_RATIO_LABELS` (~25) presente; (ii) UNICIDAD: cada razón UNA sola vez por hoja — un label duplicado delata secciones "Ratios histórico"/"Ratios forecast" partidas (bug del smoke #3); la serie completa vive en una fila. `build_ratios` cumple por construcción (iii) Cada razón con FÓRMULA en sus columnas: una etiqueta sin fórmulas no cuenta como presente |
 | F14 | **Modelo trimestral-nativo** | Con sello `periodicity=quarterly`: (i) `Operating` trae ≥4 trimestres `A` y ≥4 `E` en el header — el modelo se CONSTRUYE sobre trimestres; (ii) `Annual` es FY-solo (cero columnas `#Q`) y sin UNA sola celda de input. Sin sello: n/a |
-| F19 | **Roll de caja cerrado** | En TODAS las columnas, incluido el histórico: (i) `inicio(t) = cierre(t−1)` y (ii) **`inicio(t) + cambio neto(t) = cierre(t)`**. El (ii) es el que caza un CF INCOMPLETO: si falta una sección del flujo (p. ej. el movimiento de valores negociables — el mayor flujo después del operativo en emisoras con tesorería grande), C1 y C2 siguen en verde porque ambos leen el MISMO efectivo observado, mientras el roll no cierra en silencio. Bug del smoke #5: 38 trimestres históricos con el roll roto y todos los demás checks verdes |
+| F19 | **Roll de caja cerrado** | En TODAS las columnas, incluido el histórico: (i) `inicio(t) = cierre(t−1)` y (ii) **`inicio(t) + cambio neto(t) = cierre(t)`**. El (ii) es el que caza un CF INCOMPLETO: si falta una sección del flujo (p. ej. el movimiento de valores negociables — el mayor flujo después del operativo en emisoras con tesorería grande), C1 y C2 siguen en verde porque ambos leen el MISMO efectivo observado, mientras el roll no cierra en silencio. Bug del smoke #5: 38 trimestres históricos con el roll roto y todos los demás checks verdes Requiere valores calculados: si las filas del roll tienen fórmulas sin valor (libro recién guardado por openpyxl), reporta `[pendiente]` y exit 3 — jamás `[ok]`. Recalcular (Excel COM) y re-auditar |
+| F20 | **Cobertura del audit** | Los checks F escanean hasta 5,000 filas × 400 columnas por hoja (`_MAX_SCAN_ROWS` / `_MAX_SCAN_COLS`). Una hoja más grande FALLA y se nombra: antes el tope era 400 × 40 y lo de abajo (los schedules de `Operating`) pasaba sin auditar y en verde. F18/F19 que truenan por excepción se reportan `[pendiente]`, no `[ok]` |
 | F18 | **Sin referencias circulares** | Grafo de dependencias de fórmulas + DFS, SIN necesitar Excel: un ciclo = el forecast no calcula (causa raíz del smoke #5: `caja → otros ingresos → utilidad → CFO → caja`). Reporta la cadena completa del ciclo. Ratios legítimos de la misma columna (EBT/EBIT) NO son ciclos y no aparecen. Complementa S10 (que sí requiere recalc) |
 | F17 | **FORECAST COMPLETO** (mandato duro) | Toda fila con histórico (≥3 celdas en columnas A) tiene el tramo E COMPLETO — una sola celda de forecast vacía = FALLA con fila y conteo. "Los forecast deben tener todas las fórmulas completas" — regla de primera clase, no negociable |
 | F16 | **Respiro antes de headers** | Fila EN BLANCO antes de cada header/sub-header (salvo headers consecutivos y el tope de la hoja); tras un header el contenido empieza sin blanco. Elegancia auditada, no opcional. **Prevención en el builder:** `section_header`/`subsection` FALLAN al construir si la fila previa tiene contenido y no es header (v0.6.0) — el respiro deja de depender de que el agente se acuerde |

@@ -31,7 +31,7 @@ freeze y outline salen del módulo. `/model-check` audita esto con los checks F
 
 ## Layout de toda hoja de datos (lo aplica el builder)
 
-- Fila 1-2: barra navy con copyright + título de hoja (16 bold blanco) +
+- Fila 1-2: barra azul oscuro con copyright + título de hoja (16 bold blanco) +
   unidades en el header — "(USD millones salvo indicado)" — nunca en celdas.
 - Fila 3: fila de CHECK por columna (ej. balance check), visible siempre.
 - Fila 3/4: header de periodos con sufijo A/E (`0"A"` / `0"E"` → 2025A, 2026E).
@@ -42,8 +42,9 @@ freeze y outline salen del módulo. `/model-check` audita esto con los checks F
   columna A salta de sección en sección. Las etiquetas viven en columna B
   (~42), descriptivas, sin crípticos. El builder lo aplica solo
   (`_nav_mark` en section_header/subsection/check_row).
-- Secciones dentro de la hoja: header con banda naranja bold 14; sub-secciones
-  bold 12; contenido agrupado (outline nivel 1) para colapsar a vista resumen.
+- Secciones dentro de la hoja: header con banda azul oscuro y texto blanco
+  bold 16; sub-secciones con banda azul claro bold 14; contenido agrupado
+  (outline nivel 1) para colapsar a vista resumen.
 
 ## Colores (paleta cerrada — check F3/F4)
 
@@ -166,7 +167,7 @@ parte de lo que la línea derivada absorbe.
 
 ## Integridad y controles
 
-- Check por columna en fila 3 de IS/BS/CF (estilo AMZN:
+- Check por columna en fila 3 de `Operating` (o `Model` en modo annual) (estilo AMZN:
   `=+IF(ABS(ref1-ref2)>0.0001,"Error","OK")`).
 - Tab `Checks` con la lista S/C/D en fórmulas; celda única de error en Cover
   agregando todo.
