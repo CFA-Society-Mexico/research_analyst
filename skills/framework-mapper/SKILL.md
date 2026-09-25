@@ -42,8 +42,9 @@ Para cada consulta ("¿qué norma gobierna arrendamientos aquí?"):
 1. Busca primero en `references/ifrs-asc-nif-line-map.md` — solo lo verificado ahí
    se cita directo.
 2. Fuera de la tabla: cita con `[VERIFICAR: <norma>]` y dilo explícitamente, o
-   verifica en fuente primaria (web search a IFRS Foundation / FASB / CINIF / Big 4)
-   antes de afirmar.
+   verifica en fuente primaria (IFRS Foundation, FASB, CINIF, SEC, CNBV) antes
+   de afirmar. Una guía de Big 4 sirve para ubicar el párrafo, no como fuente
+   de la cita (CONTRIBUTING §4.7).
 3. Siempre reporta las tres piezas: **norma exacta por marco → línea del modelo que
    toca → ajuste que exige al analista.** Ese es el formato; una norma sin línea ni
    ajuste es trivia, no análisis.
