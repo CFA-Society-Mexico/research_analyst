@@ -2,7 +2,8 @@
 
 Base: deep research con verificación adversarial (2026-08-25; 25 claims verificados
 3 votos c/u, 0 refutados; fuentes primarias: texto NIF B-10, Anexo 33 CUB, SEC
-33-8879/FRM, guías Big 4 2025-2026). **Regla: toda cita fuera de esta tabla, o
+33-8879/FRM; guías Big 4 2025-2026 solo como apoyo secundario para ubicar
+párrafos). **Regla: toda cita fuera de esta tabla, o
 marcada [VERIFICAR], se verifica en fuente primaria antes de usarse en una nota.**
 
 ## Diferencias que cambian una línea del modelo
@@ -16,7 +17,13 @@ marcada [VERIFICAR], se verifica en fuente primaria antes de usarse en una nota.
   nunca proyectar recuperaciones de write-downs en modelo anual US GAAP.
 
 ### 2. Deterioro de larga duración — ASC 360/350 · IAS 36 · NIF C-15 [VERIFICAR]
-- US GAAP: dos pasos (filtro de flujos NO descontados; pérdida a valor razonable).
+- US GAAP, activos de larga duración en uso (ASC 360-10): dos pasos (filtro de
+  recuperabilidad con flujos NO descontados; si falla, pérdida a valor razonable).
+  Goodwill (ASC 350-20): UN paso desde ASU 2017-04 — pérdida = exceso del valor
+  en libros de la unidad de reporte sobre su valor razonable, topada al goodwill
+  asignado; se eliminó el antiguo "paso 2" (valor razonable implícito del
+  goodwill). Obligatorio para emisoras SEC en ejercicios que inician después
+  del 15-dic-2019; conserva la evaluación cualitativa opcional.
   IAS 36: un paso (valor en libros vs mayor de FV−costos de disposición y valor en uso).
 - Reversas: prohibidas US GAAP (salvo held-for-sale); IAS 36 obliga evaluarlas cada
   periodo (excepto goodwill).
@@ -84,7 +91,16 @@ marcada [VERIFICAR], se verifica en fuente primaria antes de usarse en una nota.
 
 ## Fuentes primarias
 
+Texto NIF B-10 (PDF IFT) · SEC 33-8879 + FRM Topic 6 · Anexo 33 CUB
+(cnbv.gob.mx) · IAS 2/16/29/36/38 · perfil IFRS Foundation México · FASB ASU
+2017-04 (https://storage.fasb.org/ASU2017-04.pdf).
+
+## Fuentes secundarias (para ubicar el párrafo, nunca para citar)
+
 EY US GAAP vs IFRS (ene-2026) · KPMG IFRS/US GAAP (nov-2025) · PwC (2026) ·
-texto NIF B-10 (PDF IFT) · IPTF/PwC Q2-2025 y Q4-2025 · SEC 33-8879 + FRM Topic 6 ·
-Anexo 33 CUB (cnbv.gob.mx) · IAS 2/16/29/36/38 · perfil IFRS Foundation México.
-Dossier completo con evidencia y votos: vault `raw/ifrs-usgaap-nif-line-differences-2026-08-25.md`.
+IPTF/PwC Q2-2025 y Q4-2025. Por CONTRIBUTING §4.7, una guía de Big 4 que
+resume el estándar no es fuente primaria: la cita se verifica en el estándar
+o en el boletín del emisor.
+
+El dossier completo con evidencia y votos vive en el vault privado del autor
+(`raw/ifrs-usgaap-nif-line-differences-2026-08-25.md`) y no está en este repo.
