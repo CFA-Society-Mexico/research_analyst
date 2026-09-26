@@ -10,8 +10,11 @@ Advanced case, Valuation Model, template library) extracted 2026-08-30.
 Console output policy: ASCII only ([ok]/[x], no unicode symbols).
 
 Usage as CLI:
-    python tools/xlsx_builder.py audit <path.xlsx>     -> run checks F, exit 1 on failure
-    python tools/xlsx_builder.py demo  <path.xlsx>     -> build a skeleton (self-test)
+    python tools/xlsx_builder.py audit <path.xlsx>     -> run checks F
+    python tools/xlsx_builder.py demo  <path.xlsx>     -> build a v3 skeleton (self-test)
+
+Exit codes: 0 = verde; 1 = alguna falla; 3 = sin fallas pero con checks
+[pendiente] (p. ej. libro sin valores calculados: recalcular y re-auditar).
 """
 
 from __future__ import annotations
@@ -192,8 +195,12 @@ class ModelStyler:
 
     def define_constant(self, name: str, sheet: str, coord: str) -> None:
         """Named range for a labeled constant (e.g. DAYS_YEAR) — kills hardcodes."""
+        from openpyxl.utils.cell import absolute_coordinate
         from openpyxl.workbook.defined_name import DefinedName
-        ref = f"'{sheet}'!${coord[0]}${coord[1:]}"
+        # absolute_coordinate soporta columnas de 2+ letras ("AA10" -> "$AA$10");
+        # el corte por caracter producia "$A$A10", una referencia invalida.
+        quoted = sheet.replace("'", "''")
+        ref = f"'{quoted}'!{absolute_coordinate(coord)}"
         self.wb.defined_names.add(DefinedName(name, attr_text=ref))
 
     def save(self, path: str) -> None:
@@ -385,7 +392,7 @@ class ModelStyler:
         last = end
         while last >= start:
             has_content = any(ws.cell(row=last, column=c).value is not None
-                              for c in range(1, min(ws.max_column, 40) + 1))
+                              for c in range(1, min(ws.max_column, _MAX_SCAN_COLS) + 1))
             if has_content:
                 break
             last -= 1
@@ -598,15 +605,21 @@ _ALLOWED_FILLS = {c.value for c in (
     Color.DARK_BLUE, Color.LIGHT_BLUE, Color.INPUT_FILL, Color.SCENARIO_FILL)}
 _ALLOWED_NUMFMTS = {f.value for f in NumFmt}
 
-_MAX_SCAN_ROWS = 400
-_MAX_SCAN_COLS = 40
+# Limites de escaneo del audit. Una hoja mas grande NO se audita en silencio
+# a medias: el check F20 falla y nombra la hoja.
+_MAX_SCAN_ROWS = 5000
+_MAX_SCAN_COLS = 400
 
 
 @dataclass(frozen=True)
 class Finding:
+    """Resultado de un check F. ``pending`` = no se pudo evaluar (p. ej. libro
+    sin valores calculados): NO es verde ni falla; se reporta [pendiente]."""
+
     check: str
     ok: bool
     detail: str
+    pending: bool = False
 
 
 def _scan_fonts_fills_formats(ws: Worksheet) -> tuple[set[str], set[str], set[str], set[str]]:
@@ -648,7 +661,7 @@ def _period_columns(ws: Worksheet) -> tuple[list[int], list[int]]:
     cols_a: list[int] = []
     cols_e: list[int] = []
     for row in ws.iter_rows(min_row=1, max_row=8,
-                            max_col=min(ws.max_column, 200)):
+                            max_col=min(ws.max_column, _MAX_SCAN_COLS)):
         for c in row:
             if c.value is None:
                 continue
@@ -746,7 +759,7 @@ def _find_cycles(wb) -> list[str]:
     for name in wb.sheetnames:
         ws = wb[name]
         for row in ws.iter_rows(max_row=min(ws.max_row, _MAX_SCAN_ROWS),
-                                max_col=min(ws.max_column, 200)):
+                                max_col=min(ws.max_column, _MAX_SCAN_COLS)):
             for cell in row:
                 v = cell.value
                 if isinstance(v, str) and v.startswith("="):
@@ -887,7 +900,7 @@ def _series_continuity_violations(ws: Worksheet) -> list[str]:
 
 
 def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Finding]:
-    """Run checks F1-F11 on a workbook. Pure read; returns findings.
+    """Run checks F (F1-F20) on a workbook. Pure read; returns findings.
 
     ``brand``: output of load_brand(brand/DESIGN.md) — its values extend the
     fill whitelist (F4) so a branded model audits green with its own DESIGN.md.
@@ -900,6 +913,16 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
     # F1 gridlines off everywhere
     bad = [ws.title for ws in visible if ws.sheet_view.showGridLines in (True, None)]
     findings.append(Finding("F1 gridlines off", not bad, ", ".join(bad) or "todas ok"))
+
+    # F20 cobertura: los checks escanean hasta _MAX_SCAN_ROWS x _MAX_SCAN_COLS.
+    # Antes el tope era 400 filas x 40 columnas y lo que quedaba abajo (los
+    # schedules de Operating) pasaba sin auditar y en verde.
+    too_big = [f"{ws.title} ({ws.max_row}x{ws.max_column})" for ws in visible
+               if ws.max_row > _MAX_SCAN_ROWS or ws.max_column > _MAX_SCAN_COLS]
+    findings.append(Finding(
+        "F20 cobertura del audit", not too_big,
+        ("hojas mas grandes que el limite, auditadas a medias: " + ", ".join(too_big))
+        if too_big else f"todo dentro de {_MAX_SCAN_ROWS} filas x {_MAX_SCAN_COLS} columnas"))
 
     all_fonts: set[str] = set()
     all_colors: set[str] = set()
@@ -962,7 +985,7 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
                        else min(host.max_row, _MAX_SCAN_ROWS))
                 content = [r for r in range(hr + 1, end + 1)
                            if any(host.cell(row=r, column=c).value is not None
-                                  for c in range(2, min(host.max_column, 30) + 1))]
+                                  for c in range(2, min(host.max_column, _MAX_SCAN_COLS) + 1))]
                 if not content:
                     continue
                 grouped = sum(1 for r in content
@@ -1031,7 +1054,7 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
                 continue  # headers consecutivos: sin respiro
             prev_has_content = any(
                 ws.cell(row=prev, column=c).value is not None
-                for c in range(1, min(ws.max_column, 30) + 1))
+                for c in range(1, min(ws.max_column, _MAX_SCAN_COLS) + 1))
             label = ws.cell(row=r, column=2).value
             if prev_has_content:
                 breath_hits.append(f"{ws.title}!fila {r} ({str(label)[:22]})")
@@ -1089,6 +1112,7 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
     # "Ratios historico" / "Ratios forecast" partidas (bug del smoke #3);
     # la serie completa vive en UNA fila.
     counts: dict[tuple[str, str], int] = {}
+    with_formula: set[str] = set()
     for ws in visible:
         if ws.title not in ("Operating", "Annual", "Model", "Ratios"):
             continue
@@ -1117,19 +1141,31 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
                 if low.startswith(req.lower()):
                     key_ = (ws.title, req)
                     counts[key_] = counts.get(key_, 0) + 1
+                    # Una etiqueta sin formulas no es una razon: el demo
+                    # anterior pasaba F13 escribiendo solo los 25 nombres.
+                    if any(isinstance(v, str) and v.startswith("=")
+                           for v in (ws.cell(row=r, column=c).value for c in
+                                     range(3, min(ws.max_column, _MAX_SCAN_COLS) + 1))):
+                        with_formula.add(req)
     labels_found = {label for (_, label) in counts}
     missing_ratios = [x for x in REQUIRED_RATIO_LABELS if x not in labels_found]
+    no_formula = [x for x in REQUIRED_RATIO_LABELS
+                  if x in labels_found and x not in with_formula]
     dup_ratios = [f"{sheet}:{label}" for (sheet, label), n in counts.items()
                   if n >= 2]
-    ok13 = not missing_ratios and not dup_ratios
+    ok13 = not missing_ratios and not dup_ratios and not no_formula
+    parts13: list[str] = []
     if missing_ratios:
-        detail13 = ("faltan: " + ", ".join(missing_ratios[:8])
-                    + (" ..." if len(missing_ratios) > 8 else ""))
-    elif dup_ratios:
-        detail13 = ("secciones de Ratios PARTIDAS (label duplicado): "
-                    + ", ".join(dup_ratios[:5]))
-    else:
-        detail13 = f"{len(REQUIRED_RATIO_LABELS)} razones presentes, sin duplicados"
+        parts13.append("faltan: " + ", ".join(missing_ratios[:8])
+                       + (" ..." if len(missing_ratios) > 8 else ""))
+    if no_formula:
+        parts13.append("sin formulas (solo etiqueta): " + ", ".join(no_formula[:8])
+                       + (" ..." if len(no_formula) > 8 else ""))
+    if dup_ratios:
+        parts13.append("secciones de Ratios PARTIDAS (label duplicado): "
+                       + ", ".join(dup_ratios[:5]))
+    detail13 = ("; ".join(parts13) if parts13 else
+                f"{len(REQUIRED_RATIO_LABELS)} razones con formula, sin duplicados")
     findings.append(Finding("F13 Ratios completa y unica", ok13, detail13))
     # F14 columnas trimestrales estimadas: si el sello dice periodicidad con
     # trimestres, el header debe traer columnas #Q20yyE (el contrato 1a que el
@@ -1144,7 +1180,7 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
             if ws.title not in ("Operating", "Model"):
                 continue
             for row in ws.iter_rows(min_row=1, max_row=8,
-                                    max_col=min(ws.max_column, 200)):
+                                    max_col=min(ws.max_column, _MAX_SCAN_COLS)):
                 for c in row:
                     if isinstance(c.value, str):
                         v = c.value.strip()
@@ -1162,13 +1198,13 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
             q_in_annual = 0
             inputs_in_annual = 0
             for row in annual.iter_rows(min_row=1, max_row=8,
-                                        max_col=min(annual.max_column, 60)):
+                                        max_col=min(annual.max_column, _MAX_SCAN_COLS)):
                 for c in row:
                     if isinstance(c.value, str) and _re.fullmatch(
                             r"[1-4]Q20\d\d[AE]", c.value.strip()):
                         q_in_annual += 1
             for row in annual.iter_rows(max_row=min(annual.max_row, _MAX_SCAN_ROWS),
-                                        max_col=min(annual.max_column, 60)):
+                                        max_col=min(annual.max_column, _MAX_SCAN_COLS)):
                 for c in row:
                     if (c.fill is not None and c.fill.patternType == "solid"
                             and getattr(c.fill.fgColor, "rgb", None)
@@ -1189,18 +1225,31 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
     # inicio(t) = cierre(t-1), en TODAS las columnas incluido el historico.
     # Requiere valores calculados; sin ellos reporta [pendiente de recalc].
     try:
-        roll_hits = _cash_roll_violations(path)
+        roll = _cash_roll_violations(path)
     except Exception as exc:  # noqa: BLE001
-        findings.append(Finding("F19 roll de caja cerrado", True,
-                                f"[no evaluado: {type(exc).__name__}]"))
+        findings.append(Finding("F19 roll de caja cerrado", False,
+                                f"no evaluado ({type(exc).__name__})", pending=True))
     else:
-        if roll_hits is None:
+        if roll is None:
             findings.append(Finding("F19 roll de caja cerrado", True,
                                     "n/a (sin filas de roll identificables)"))
         else:
-            findings.append(Finding("F19 roll de caja cerrado", not roll_hits,
-                                    "; ".join(roll_hits[:6]) or
-                                    "inicio+cambio=cierre e inicio=cierre previo"))
+            roll_hits, evaluated, uncalculated = roll
+            if roll_hits:
+                findings.append(Finding("F19 roll de caja cerrado", False,
+                                        "; ".join(roll_hits[:6])))
+            elif uncalculated or not evaluated:
+                # openpyxl guarda formulas SIN valores calculados: sin recalculo
+                # no hay nada que comparar. Antes esto salia [ok].
+                findings.append(Finding(
+                    "F19 roll de caja cerrado", False,
+                    f"{uncalculated} columnas con formulas sin valor calculado: "
+                    "recalcula el libro (Excel COM: CalculateFullRebuild + Save) "
+                    "y re-audita", pending=True))
+            else:
+                findings.append(Finding("F19 roll de caja cerrado", True,
+                                        f"inicio+cambio=cierre e inicio=cierre previo "
+                                        f"({evaluated} columnas)"))
     # F18 sin referencias circulares: grafo de dependencias + DFS. Caza la
     # causa raiz del "forecast que no calcula" (rendimiento/interes sobre
     # saldo de la MISMA columna) SIN necesitar Excel; ratios legitimos de la
@@ -1208,8 +1257,8 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
     try:
         cycles = _find_cycles(wb)
     except Exception as exc:  # noqa: BLE001 - nunca tumbar el audit completo
-        findings.append(Finding("F18 sin referencias circulares", True,
-                                f"[no evaluado: {type(exc).__name__}]"))
+        findings.append(Finding("F18 sin referencias circulares", False,
+                                f"no evaluado ({type(exc).__name__})", pending=True))
     else:
         findings.append(Finding("F18 sin referencias circulares", not cycles,
                                 ("CICLOS: " + " | ".join(cycles[:3]))
@@ -1217,7 +1266,7 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
     return findings
 
 
-def _cash_roll_violations(path: str) -> Optional[list[str]]:
+def _cash_roll_violations(path: str) -> Optional[tuple[list[str], int, int]]:
     """F19: el roll de caja debe CERRAR en todas las columnas.
 
     (i) inicio(t) = cierre(t-1)  — el desfase temporal;
@@ -1234,6 +1283,7 @@ def _cash_roll_violations(path: str) -> Optional[list[str]]:
     wbv = load_workbook(path, data_only=True)
     hits: list[str] = []
     found_any = False
+    evaluated = uncalculated = 0
     for name in wbf.sheetnames:
         wsf, wsv = wbf[name], wbv[name]
         ca, ce = _period_columns(wsf)
@@ -1262,7 +1312,12 @@ def _cash_roll_violations(path: str) -> Optional[list[str]]:
             op = wsv.cell(row=r_open, column=c).value
             cl = wsv.cell(row=r_close, column=c).value
             ch = wsv.cell(row=r_change, column=c).value
-            if all(isinstance(x, (int, float)) for x in (op, ch, cl)):
+            if not all(isinstance(x, (int, float)) for x in (op, ch, cl)):
+                if any(str(wsf.cell(row=rr, column=c).value or "").startswith("=")
+                       for rr in (r_open, r_close, r_change)):
+                    uncalculated += 1        # formula sin valor: libro sin recalcular
+            else:
+                evaluated += 1
                 tol = max(1.0, abs(cl) * 1e-6)
                 if abs(op + ch - cl) > tol:
                     hdr = wsf.cell(row=4, column=c).value
@@ -1275,7 +1330,7 @@ def _cash_roll_violations(path: str) -> Optional[list[str]]:
                         and abs(op - prev_cl) > max(1.0, abs(op) * 1e-6)):
                     hdr = wsf.cell(row=4, column=c).value
                     hits.append(f"{name}!{col} ({hdr}): inicio != cierre previo")
-    return hits if found_any else None
+    return (hits, evaluated, uncalculated) if found_any else None
 
 
 def _split_series_violations(ws: Worksheet) -> list[str]:
@@ -1305,45 +1360,181 @@ def _split_series_violations(ws: Worksheet) -> list[str]:
 
 
 def _print_report(findings: Iterable[Finding]) -> int:
-    failures = 0
+    """Imprime el reporte. Exit: 1 si hay fallas; 3 si solo hay pendientes."""
+    findings = list(findings)
+    failures = pending = 0
     for f in findings:
-        mark = "[ok]" if f.ok else "[x]"
-        if not f.ok:
+        if f.pending:
+            mark = "[pendiente]"
+            pending += 1
+        elif f.ok:
+            mark = "[ok]"
+        else:
+            mark = "[x]"
             failures += 1
         print(f"{mark} {f.check}: {f.detail}")
-    print(f"Resumen F: {sum(1 for f in findings if f.ok)} ok, {failures} fallas")
-    return 1 if failures else 0
+    ok_count = sum(1 for f in findings if f.ok and not f.pending)
+    print(f"Resumen F: {ok_count} ok, {failures} fallas, {pending} pendientes")
+    if failures:
+        return 1
+    if pending:
+        print("Veredicto: PENDIENTE - no es verde; resuelve los pendientes y re-audita")
+        return 3
+    return 0
 
 
 def _demo(path: str) -> None:
-    """Self-test skeleton: proves the builder passes its own audit."""
+    """Self-test: libro v3 minimo construido SOLO con la API del builder.
+
+    Estructura del model-spec vigente (modo quarterly): Operating trimestral
+    puro con Assumptions -> IS -> BS -> CF -> Ratios (build_ratios) ->
+    Schedules, y Annual como agregado por formula. Debe pasar su propio audit
+    en verde; un check nuevo debe fallar en un libro malo y pasar aqui.
+    """
+    from pathlib import Path as _Path
+
+    _Path(path).parent.mkdir(parents=True, exist_ok=True)
     styler = ModelStyler()
-    spec = PeriodHeader(first_year=2019, last_year=2031, last_actual_year=2025)
-    for name in ("Cover", "Checks", "Assumptions", "Macro", "IS", "BS", "CF",
-                 "Ratios", "Schedules", "Rev_Reconcile", "Val_DCF", "Val_Comps",
-                 "Sensitivity", "Summary"):
+    styler.set_periodicity("quarterly")
+    wb = styler.wb
+
+    def label(ws: Worksheet, row: int, text: str) -> None:
+        ws.cell(row=row, column=2, value=text).font = Font(name=FONT_NAME, size=11)
+
+    for name in ("Cover", "Checks"):
+        ws = styler.new_sheet(name, freeze=None)
+        styler.brand_bar(ws, name)
+        styler.label_col_width(ws)
+    label(wb["Checks"], 5, "D3 Staleness de comps (ejemplo de escaneo)")
+    styler.check_result(wb["Checks"], 5, 3, "OK", note="demo: escaneo de ejemplo",
+                        computed_at="2026-01-01")
+
+    # --- Operating: trimestral puro, 8 trimestres A + 8 E ---------------------
+    op = styler.new_sheet("Operating")
+    styler.brand_bar(op, "Operating model (trimestral)")
+    styler.label_col_width(op)
+    quarters = [f"{q}Q{y}{'A' if y <= 2024 else 'E'}"
+                for y in range(2023, 2027) for q in (1, 2, 3, 4)]
+    first, n_cols, n_act = 3, len(quarters), 8
+    styler.quarter_header(op, 3, first, quarters)
+    cols = [get_column_letter(first + i) for i in range(n_cols)]
+
+    rows = {"days_q": 6, "days_y": 7, "wacc": 8, "growth": 9,
+            "rev": 12, "cogs": 13, "gross": 14, "da": 15, "ebit": 16,
+            "interest": 17, "ebt": 18, "tax": 19, "ni": 20,
+            "cash": 23, "ar": 24, "inv": 25, "ca": 26, "ta": 27, "ap": 28,
+            "cl": 29, "debt": 30, "equity": 31, "re": 32, "cfo": 35}
+
+    styler.section_header(op, 5, "Assumptions")
+    for key, text, value, fmt in (("days_q", "Dias por trimestre", 91.25, NumFmt.DEC2),
+                                  ("days_y", "Dias por anio", 365, NumFmt.NUM),
+                                  ("wacc", "WACC", 0.09, NumFmt.PCT2)):
+        label(op, rows[key], text)
+        styler.set_cell(op, f"C{rows[key]}", value, CellRole.INPUT, fmt)
+    styler.define_constant("DAYS_QUARTER", "Operating", f"C{rows['days_q']}")
+    styler.define_constant("DAYS_YEAR", "Operating", f"C{rows['days_y']}")
+    styler.define_constant("WACC", "Operating", f"C{rows['wacc']}")
+    r_rev, r_g = rows["rev"], rows["growth"]
+    styler.series_row(
+        op, r_g, "Crecimiento de ventas yoy (%)", first,
+        hist_values=[None] * 4 + [f"={c}{r_rev}/{cols[i - 4]}{r_rev}-1"
+                                  for i, c in enumerate(cols[4:n_act], start=4)],
+        forecast_values=[0.05] * (n_cols - n_act), numfmt=NumFmt.PCT1)
+    styler.group_rows(op, 6, 9)
+
+    def line(key: str, text: str, hist: object, fc: object) -> None:
+        """Una serie = una fila: observado en A, formula en E (o formula en todo)."""
+        r = rows[key]
+        label(op, r, text)
+        for i, c in enumerate(cols):
+            prev = cols[i - 1] if i else c
+            if i < n_act and not callable(hist):
+                styler.set_cell(op, f"{c}{r}", hist[i], CellRole.OBSERVED)
+                continue
+            make = hist if (i < n_act or fc is None) else fc
+            styler.set_cell(op, f"{c}{r}", make(c, prev, i), CellRole.FORMULA)
+
+    rv = [100 + 3 * i for i in range(n_act)]
+    styler.section_header(op, 11, "Estado de resultados")
+    line("rev", "Ventas", rv, lambda c, p, i: f"={cols[i - 4]}{r_rev}*(1+{c}{r_g})")
+    line("cogs", "Costo de ventas", [round(0.6 * v) for v in rv],
+         lambda c, p, i: f"={c}{r_rev}*{p}{rows['cogs']}/{p}{r_rev}")
+    line("gross", "Utilidad bruta", lambda c, p, i: f"={c}{r_rev}-{c}{rows['cogs']}", None)
+    line("da", "D&A", [5] * n_act, lambda c, p, i: f"={p}{rows['da']}")
+    line("ebit", "EBIT", lambda c, p, i: f"={c}{rows['gross']}-{c}{rows['da']}", None)
+    line("interest", "Gasto por intereses", [2] * n_act,
+         lambda c, p, i: f"={p}{rows['interest']}")
+    line("ebt", "Utilidad antes de impuestos",
+         lambda c, p, i: f"={c}{rows['ebit']}-{c}{rows['interest']}", None)
+    line("tax", "Impuestos", [8] * n_act,
+         lambda c, p, i: f"={c}{rows['ebt']}*{p}{rows['tax']}/{p}{rows['ebt']}")
+    line("ni", "Utilidad neta", lambda c, p, i: f"={c}{rows['ebt']}-{c}{rows['tax']}", None)
+    styler.group_rows(op, 12, 20)
+
+    styler.section_header(op, 22, "Balance")
+    carry = lambda key: (lambda c, p, i: f"={p}{rows[key]}")  # noqa: E731
+    for key, text, base in (("cash", "Efectivo", 40), ("ar", "Cuentas por cobrar", 30),
+                            ("inv", "Inventario", 25), ("ca", "Activo circulante", 95),
+                            ("ta", "Activo total", 300), ("ap", "Cuentas por pagar", 20),
+                            ("cl", "Pasivo circulante", 45), ("debt", "Deuda total", 80),
+                            ("equity", "Capital contable", 150),
+                            ("re", "Utilidades retenidas", 60)):
+        line(key, text, [base + i for i in range(n_act)], carry(key))
+    styler.group_rows(op, 23, 32)
+
+    styler.section_header(op, 34, "Flujo de efectivo")
+    line("cfo", "Flujo de operacion", [22] * n_act,
+         lambda c, p, i: f"={c}{rows['ni']}+{c}{rows['da']}")
+    styler.group_rows(op, 35, 35)
+
+    ref = {k: f"Operating!{{c}}{rows[k]}" for k in (
+        "rev", "cogs", "gross", "ebit", "ebt", "ni", "interest", "tax", "ta",
+        "equity", "cash", "ar", "inv", "ap", "ca", "cl", "debt", "re", "cfo", "da")}
+    end_row, skipped = styler.build_ratios(op, 37, first, n_cols, ref,
+                                           wacc_ref="WACC", days_ref="DAYS_QUARTER")
+    assert not skipped, skipped
+    heads = [r for r in range(37, end_row) if op.cell(row=r, column=1).value == "x"]
+    for i, hr in enumerate(heads):
+        styler.group_rows(op, hr + 1, (heads[i + 1] if i + 1 < len(heads) else end_row) - 1)
+
+    r = end_row + 1
+    styler.section_header(op, r, "Schedules")
+    for block, text, key in (("PPE", "D&A (link a IS)", "da"),
+                             ("Debt", "Deuda (link a BS)", "debt"),
+                             ("WC", "Cuentas por cobrar (link a BS)", "ar")):
+        r += 1
+        styler.schedule_block_header(op, r, block)
+        label(op, r + 1, text)
+        for c in cols:
+            styler.set_cell(op, f"{c}{r + 1}", f"={c}{rows[key]}", CellRole.FORMULA)
+        styler.group_rows(op, r + 1, r + 1)
+        r += 2
+
+    # --- Annual: agregados por formula, cero inputs ---------------------------
+    an = styler.new_sheet("Annual")
+    styler.brand_bar(an, "Annual (agregado de Operating)")
+    styler.label_col_width(an)
+    styler.period_header(an, 3, 3, PeriodHeader(2023, 2026, 2024))
+    styler.section_header(an, 5, "Estado de resultados (suma de 4 trimestres)")
+    for r_an, (key, text) in enumerate((("rev", "Ventas"), ("ni", "Utilidad neta")), start=6):
+        label(an, r_an, text)
+        for y in range(4):
+            a, b = cols[4 * y], cols[4 * y + 3]
+            styler.set_cell(an, f"{get_column_letter(3 + y)}{r_an}",
+                            f"=SUM(Operating!{a}{rows[key]}:{b}{rows[key]})", CellRole.LINK)
+    styler.group_rows(an, 6, 7)
+    styler.section_header(an, 9, "Balance (saldo del 4Q)")
+    label(an, 10, "Efectivo")
+    for y in range(4):
+        styler.set_cell(an, f"{get_column_letter(3 + y)}10",
+                        f"=Operating!{cols[4 * y + 3]}{rows['cash']}", CellRole.LINK)
+    styler.group_rows(an, 10, 10)
+
+    for name in ("Macro", "Rev_Reconcile", "Val_Comps", "Sensitivity", "Summary"):
         freeze = "C4" if name.startswith(FROZEN_SHEET_PREFIXES) else None
         ws = styler.new_sheet(name, freeze=freeze)
         styler.brand_bar(ws, name)
         styler.label_col_width(ws)
-        if name.startswith(FROZEN_SHEET_PREFIXES):
-            styler.period_header(ws, 3, 3, spec)
-    sched = styler.wb["Schedules"]
-    row = 5
-    for block in ("PPE", "Debt", "WC"):
-        styler.schedule_block_header(sched, row, block)
-        styler.group_rows(sched, row + 1, row + 4)
-        styler.subtotal_border(sched, row + 4, 3, 13)
-        row += 6
-    assum = styler.wb["Assumptions"]
-    styler.subsection(assum, 5, "Drivers (demo)")
-    styler.series_row(assum, 6, "Crecimiento unidades (%)", 3,
-                      hist_values=[0.05] * 7, forecast_values=[0.04] * 6,
-                      numfmt=NumFmt.PCT1)
-    ratios = styler.wb["Ratios"]
-    for i, label in enumerate(REQUIRED_RATIO_LABELS):
-        ratios.cell(row=5 + i, column=2, value=label).font = Font(
-            name=FONT_NAME, size=11)
     styler.save(path)
     print(f"[ok] demo escrito: {path}")
 

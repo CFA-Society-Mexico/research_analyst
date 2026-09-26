@@ -1,6 +1,6 @@
 ---
 name: xlsx-building
-description: Construcción determinista del xlsx del plugin — TODO workbook se arma vía tools/xlsx_builder.py (ModelStyler), jamás con openpyxl crudo; formato (paleta brandeable desde brand/DESIGN.md, fuentes, formatos numéricos, gridlines, freeze, outline, bordes, series continuas hist→forecast) sale del código y se verifica con los checks F1-F11; incluye el modo REBUILD para reconstruir cualquier modelo existente al estándar con audit previo y paridad de números obligatoria. Usa esta skill siempre que haya que crear o editar un archivo Excel del plugin, aplicar o corregir formato de un modelo, reconstruir un modelo viejo o ajeno, correr el audit de formato, aplicar colores de marca, o cuando el usuario diga "construye el xlsx", "formatea el modelo", "el modelo salió feo", "reconstrúyelo al estándar", "corre el audit de formato" — model-standards la invoca en su paso de construcción y es obligatoria: si un xlsx se va a escribir y esta skill no está en uso, detente y cárgala.
+description: Construcción determinista del xlsx del plugin — TODO workbook se arma vía tools/xlsx_builder.py (ModelStyler), jamás con openpyxl crudo; formato (paleta brandeable desde brand/DESIGN.md, fuentes, formatos numéricos, gridlines, freeze, outline, bordes, series continuas hist→forecast) sale del código y se verifica con los checks F (F1-F20); incluye el modo REBUILD para reconstruir cualquier modelo existente al estándar con audit previo y paridad de números obligatoria. Usa esta skill siempre que haya que crear o editar un archivo Excel del plugin, aplicar o corregir formato de un modelo, reconstruir un modelo viejo o ajeno, correr el audit de formato, aplicar colores de marca, o cuando el usuario diga "construye el xlsx", "formatea el modelo", "el modelo salió feo", "reconstrúyelo al estándar", "corre el audit de formato" — model-standards la invoca en su paso de construcción y es obligatoria: si un xlsx se va a escribir y esta skill no está en uso, detente y cárgala.
 ---
 
 # xlsx-building
@@ -85,8 +85,10 @@ styler.save(path)  # luego: python tools/xlsx_builder.py audit <path>
    python tools/xlsx_builder.py audit <modelo.xlsx>
    ```
 
-   Exit 0 = formato verde. Exit 1 = FALLA: corrige y re-corre. Nunca entregues
-   con audit rojo. Luego corren S/C/D (integrity-checks.md).
+   Exit 0 = formato verde. Exit 1 = FALLA: corrige y re-corre. Exit 3 =
+   PENDIENTE (p. ej. F19 sin valores calculados): recalcula con Excel COM y
+   re-audita; sin Excel disponible se reporta pendiente, nunca verde. Nunca
+   entregues con audit rojo. Luego corren S/C/D (integrity-checks.md).
 
 ## Modo rebuild (modelo existente → modelo al estándar)
 

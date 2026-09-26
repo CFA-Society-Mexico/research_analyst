@@ -17,7 +17,8 @@ Uso: `/model-check [ruta del xlsx]` (default: el modelo vigente de la cobertura 
 Corre la lista completa de `skills/model-standards/references/integrity-checks.md`
 en orden S (estructurales) → C (contables) → D (contenido) → F (formato). Los F
 corren con `python tools/xlsx_builder.py audit <modelo.xlsx>` — implementación
-única, exit 1 = falla. Solo lectura: este comando NUNCA modifica el modelo.
+única, exit 1 = falla, exit 3 = pendiente de recálculo (se reporta
+`[pendiente]`, nunca como ok). Solo lectura: este comando NUNCA modifica el modelo.
 En modelo externo, F10 (sello del builder) se reporta `[aviso]`, no falla.
 
 ## Recalculo (detección de ciclos — S10)
