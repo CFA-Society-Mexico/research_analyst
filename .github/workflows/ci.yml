@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Dependencias
+        run: python -m pip install -r requirements.txt
+      - name: Sintaxis de los tools
+        run: python -c "import ast,glob;[ast.parse(open(f,encoding='utf-8').read()) for f in glob.glob('tools/*.py')];print('[ok] sintaxis')"
+      - name: Demo del builder + audit de formato
+        run: |
+          mkdir -p scratch
+          python tools/xlsx_builder.py demo ./scratch/demo.xlsx
+      - name: Pruebas unitarias (sin red)
+        run: |
+          if [ -d tests ]; then
+            python -m unittest discover -s tests -v
+          else
+            echo "[aviso] sin carpeta tests/"
+          fi
