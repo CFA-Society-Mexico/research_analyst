@@ -7,7 +7,7 @@ US GAAP mapeados a lineas canon y escribe un CSV largo que statement-mapper
 convierte (con gate) en los canonical_*.csv de model/inputs/.
 
 Uso:
-    python tools/xbrl_fetch.py AAPL --dest workspace/AAPL/model/inputs \
+    python tools/xbrl_fetch.py AAPL --dest <raiz>/AAPL/model/inputs \
         --ua "Nombre correo@dominio.com"
 
 User-Agent obligatorio (--ua o env SEC_EDGAR_UA), igual que sec_fetch.
@@ -23,7 +23,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -76,6 +76,9 @@ CONCEPT_MAP = {
     # es el mayor flujo despues del operativo; omitirlo descuadra el roll.
     "PaymentsToAcquireAvailableForSaleSecuritiesDebt": "cf_buy_securities",
     "ProceedsFromSaleOfAvailableForSaleSecuritiesDebt": "cf_sell_securities",
+    # Vencimientos: el concepto vigente NO lleva sufijo "Debt" (Apple lo usa
+    # de FY2007 a FY2025; la variante "...Debt" no existe en sus datos).
+    "ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities": "cf_mature_securities",
     "ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecuritiesDebt": "cf_mature_securities",
     "PaymentsToAcquireBusinessesNetOfCashAcquired": "cf_acquisitions",
     "PaymentsForProceedsFromOtherInvestingActivities": "cf_other_investing",
@@ -86,6 +89,22 @@ CONCEPT_MAP = {
     "ProceedsFromIssuanceOfCommonStock": "cf_stock_issued",
     "PaymentsRelatedToTaxWithholdingForShareBasedCompensation": "cf_tax_withholding",
 }
+
+# Conceptos de la taxonomia anterior a 2018. Sin ellos la historia se corta:
+# Apple reporto ventas como SalesRevenueNet de FY2007 a FY2017 y compras/ventas
+# de valores sin el sufijo "Debt" hasta FY2018. Se procesan DESPUES del mapa
+# principal: en un empate de fecha de filing gana el concepto vigente.
+LEGACY_CONCEPT_MAP = {
+    "SalesRevenueNet": "is_ns_total",
+    "PaymentsToAcquireAvailableForSaleSecurities": "cf_buy_securities",
+    "ProceedsFromSaleOfAvailableForSaleSecurities": "cf_sell_securities",
+}
+
+# Flujos que se desacumulan y cuyo 4Q se deriva FY - acumulado a 3Q. La UPA no
+# es aditiva entre trimestres (cambia el conteo de acciones): nunca se deriva.
+FLOW_PREFIXES = ("is_", "cf_")
+NON_ADDITIVE = frozenset({"is_eps_diluted"})
+YTD_UNRESOLVED_TAG = "acumulado YTD sin desacumular"
 
 
 BLOCKED_MSG = """[x] Sin acceso de red a SEC ({err}).
@@ -132,6 +151,19 @@ def duration_months(item: dict) -> Optional[int]:
     return round((end - start).days / 30.44)
 
 
+def nominal_month(end: date) -> tuple[int, int]:
+    """(anio, mes) NOMINAL de un cierre, tolerante a anios de 52/53 semanas.
+
+    Las emisoras con anio de 52/53 semanas cierran en el sabado o domingo mas
+    cercano a fin de mes, a veces unos dias DENTRO del mes siguiente: Costco
+    cerro FY2023 el 2023-09-03 y Starbucks el 2023-10-01. Ese cierre pertenece
+    al mes anterior. Regla: dia <= 15 -> mes previo; dia > 15 -> ese mes.
+    """
+    if end.day <= 15:
+        return (end.year - 1, 12) if end.month == 1 else (end.year, end.month - 1)
+    return end.year, end.month
+
+
 def period_label(item: dict, fye_month: int) -> Optional[str]:
     """Periodo FISCAL derivado de la FECHA DE CIERRE, no de fp/fy.
 
@@ -141,13 +173,16 @@ def period_label(item: dict, fye_month: int) -> Optional[str]:
     ancla confiable es ``end`` contra el cierre fiscal de la emisora.
 
     Con cierre fiscal en septiembre: end 2024-12-28 -> 1Q2025 (FY2025 corre
-    de oct-2024 a sep-2025); end 2025-09-27 -> 4Q2025.
+    de oct-2024 a sep-2025); end 2025-09-27 -> 4Q2025. El mes se toma NOMINAL
+    (ver ``nominal_month``): con cierre en septiembre, end 2023-10-01 ->
+    FY2023 y end 2023-01-01 -> 1Q2023. FY = anio calendario del cierre.
     """
     end = _parse_date(item.get("end"))
     if not end:
         return None
-    fy = end.year + (1 if end.month > fye_month else 0)
-    offset = (end.month - fye_month) % 12       # 0 = cierre de anio fiscal
+    year, month = nominal_month(end)
+    fy = year + (1 if month > fye_month else 0)
+    offset = (month - fye_month) % 12           # 0 = cierre de anio fiscal
     months = duration_months(item)
     if months is not None and months >= 11:
         return f"FY{fy}"
@@ -166,25 +201,38 @@ def detect_fye_month(facts: dict) -> int:
                 months = duration_months(item)
                 end = _parse_date(item.get("end"))
                 if months and months >= 11 and end:
-                    counts[end.month] = counts.get(end.month, 0) + 1
+                    month = nominal_month(end)[1]
+                    counts[month] = counts.get(month, 0) + 1
     if not counts:
         return 12
     return max(counts.items(), key=lambda kv: kv[1])[0]
 
 
-def deaccumulate(rows: dict[tuple[str, str], dict]) -> list[str]:
-    """Convierte flujos YTD a TRIMESTRALES (in place).
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
-    En los 10-Q los flujos son acumulados del anio fiscal: 2Q cubre 6 meses,
-    3Q nueve, FY doce. Tomarlos como trimestrales infla cada trimestre y
-    rompe el roll de caja. El trimestre real se obtiene por diferencia con
-    el acumulado previo del MISMO anio fiscal; el 4Q se deriva de FY menos
-    los tres primeros.
+
+def is_flow(canon: str) -> bool:
+    """Linea de flujo aditiva (IS o CF), excluida la UPA."""
+    return canon.startswith(FLOW_PREFIXES) and canon not in NON_ADDITIVE
+
+
+def deaccumulate(rows: dict[tuple[str, str], dict]) -> list[str]:
+    """Convierte flujos YTD a TRIMESTRALES y deriva el 4Q (in place).
+
+    En los 10-Q el flujo de efectivo viene acumulado del anio fiscal: 2Q cubre
+    6 meses, 3Q nueve, FY doce. El trimestre real es el acumulado menos el
+    acumulado previo del MISMO anio fiscal. El 4Q no se reporta aislado en el
+    10-K: se deriva FY - acumulado a 3Q, para IS y CF por igual (salvo UPA).
+
+    Un acumulado sin el acumulado previo NO se puede desacumular: la fila se
+    conserva con tag ``YTD_UNRESOLVED_TAG`` y una nota ``[aviso]`` para que
+    nunca entre al modelo como si fuera un trimestre.
     """
     notes: list[str] = []
     by_canon_fy: dict[tuple[str, str], dict[str, dict]] = {}
     for (canon, period), row in rows.items():
-        if not canon.startswith("cf_") or row.get("months") is None:
+        if not is_flow(canon) or row.get("months") is None:
             continue
         if period.startswith("FY"):
             fy, q = period[2:], "FY"
@@ -192,37 +240,49 @@ def deaccumulate(rows: dict[tuple[str, str], dict]) -> list[str]:
             q, fy = period[0], period[2:]
         by_canon_fy.setdefault((canon, fy), {})[q] = row
     for (canon, fy), qs in by_canon_fy.items():
-        cumulative = {}
-        for q in ("1", "2", "3"):
-            row = qs.get(q)
-            if row and isinstance(row.get("value"), (int, float)):
-                cumulative[q] = row
-        # desacumular 3Q y 2Q (de mayor a menor para no usar valores ya netos)
-        for q, prev_q in (("3", "2"), ("2", "1")):
-            row, prev = cumulative.get(q), cumulative.get(prev_q)
-            if not row or not prev:
+        # cum[q]: acumulado del anio fiscal hasta el trimestre q (None = no se sabe)
+        cum: dict[int, Optional[float]] = {0: 0.0}
+        for q in (1, 2, 3):
+            row = qs.get(str(q))
+            if row is None or not _is_number(row.get("value")):
+                cum[q] = None
                 continue
-            if (row.get("months") or 0) <= 4:
-                continue                      # ya venia trimestral
-            row["value"] = row["value"] - prev["value"]
-            row["tag"] = "observado (desacumulado YTD)"
-            row["months"] = 3
-            notes.append(f"{canon} {q}Q{fy}")
-        # 4Q = FY - (1Q + 2Q + 3Q), ya netos
+            months = row.get("months") or 0
+            if months <= 4:                           # trimestre discreto
+                prev = cum[q - 1]
+                cum[q] = None if prev is None else prev + row["value"]
+            elif abs(months - 3 * q) <= 1:            # acumulado YTD de q trimestres
+                ytd = row["value"]
+                prev = cum[q - 1]
+                if prev is None:
+                    row["tag"] = f"{YTD_UNRESOLVED_TAG} ({months}m, falta {q - 1}Q)"
+                    notes.append(f"[aviso] {canon} {q}Q{fy}: acumulado {months}m "
+                                 f"sin {q - 1}Q -> NO es trimestral")
+                else:
+                    row["value"] = ytd - prev
+                    row["months"] = 3
+                    row["tag"] = "observado (desacumulado YTD)"
+                    notes.append(f"{canon} {q}Q{fy}")
+                cum[q] = ytd
+            else:
+                row["tag"] = f"{YTD_UNRESOLVED_TAG} (duracion {months}m inesperada)"
+                notes.append(f"[aviso] {canon} {q}Q{fy}: duracion {months}m inesperada")
+                cum[q] = None
+        # 4Q = FY - acumulado a 3Q (solo si no hay un 4Q discreto reportado)
         fy_row = qs.get("FY")
         q4 = qs.get("4")
-        if fy_row and isinstance(fy_row.get("value"), (int, float)):
-            partials = [cumulative.get(q) for q in ("1", "2", "3")]
-            if all(p and isinstance(p.get("value"), (int, float)) for p in partials):
-                derived = fy_row["value"] - sum(p["value"] for p in partials)
-                if q4 is None or (q4.get("months") or 0) > 4:
-                    rows[(canon, f"4Q{fy}")] = {
-                        **fy_row,
-                        "canon": canon, "period": f"4Q{fy}",
-                        "value": derived, "months": 3,
-                        "tag": "derivado (FY - 1Q - 2Q - 3Q)",
-                    }
-                    notes.append(f"{canon} 4Q{fy} (derivado)")
+        cum3 = cum.get(3)
+        if (fy_row and _is_number(fy_row.get("value")) and cum3 is not None
+                and (q4 is None or (q4.get("months") or 0) > 4)):
+            q3_end = _parse_date(qs["3"].get("end"))
+            start = (q3_end + timedelta(days=1)).isoformat() if q3_end else ""
+            rows[(canon, f"4Q{fy}")] = {
+                **fy_row,
+                "canon": canon, "period": f"4Q{fy}", "start": start,
+                "value": fy_row["value"] - cum3, "months": 3,
+                "tag": "derivado (FY - acumulado 3Q)",
+            }
+            notes.append(f"{canon} 4Q{fy} (derivado)")
     return notes
 
 
@@ -234,7 +294,7 @@ def fetch(ticker: str, dest: Path, user_agent: str) -> Path:
     print(f"[ok] cierre fiscal detectado: mes {fye_month}")
     rows: dict[tuple[str, str], dict] = {}
     found: set[str] = set()
-    for concept, canon in CONCEPT_MAP.items():
+    for concept, canon in [*CONCEPT_MAP.items(), *LEGACY_CONCEPT_MAP.items()]:
         node = facts.get(concept)
         if not node:
             continue
@@ -269,7 +329,13 @@ def fetch(ticker: str, dest: Path, user_agent: str) -> Path:
                     "tag": "observado",
                 }
     deacc = deaccumulate(rows)
-    print(f"[ok] flujos desacumulados/derivados: {len(deacc)}")
+    warnings = [n for n in deacc if n.startswith("[aviso]")]
+    print(f"[ok] flujos desacumulados/derivados: {len(deacc) - len(warnings)}")
+    if warnings:
+        print(f"[aviso] {len(warnings)} filas acumuladas YTD que NO son trimestrales "
+              f"(tag '{YTD_UNRESOLVED_TAG}'):")
+        for note in warnings[:5]:
+            print(f"    {note[len('[aviso] '):]}")
     dest.mkdir(parents=True, exist_ok=True)
     out = dest / f"xbrl_facts_{ticker.upper()}.csv"
     fieldnames = ["canon", "period", "value", "months", "start", "end",
@@ -285,13 +351,15 @@ def fetch(ticker: str, dest: Path, user_agent: str) -> Path:
     print(f"[ok] trimestres cubiertos: {len(quarters)} ({quarters[0] if quarters else '-'}"
           f" .. {quarters[-1] if quarters else '-'})")
     print(f"[ok] anios cubiertos: {len(years)}")
-    missing = sorted(set(CONCEPT_MAP) - found)
+    canons_with_data = {r["canon"] for r in ordered}
+    missing = sorted(c for c, canon in CONCEPT_MAP.items()
+                     if c not in found and canon not in canons_with_data)
     if missing:
         print(f"[!] conceptos sin datos en esta emisora ({len(missing)}): "
               + ", ".join(missing[:6]) + (" ..." if len(missing) > 6 else ""))
     print("[i] siguiente paso: statement-mapper convierte este CSV largo en los")
-    print("    canonical_*.csv (mapeo canon con gate del analista); 4Q de flujos")
-    print("    se deriva FY - (1Q+2Q+3Q).")
+    print("    canonical_*.csv (mapeo canon con gate del analista). El 4Q de")
+    print("    IS y CF ya viene derivado (FY - acumulado 3Q); la UPA de 4Q no.")
     return out
 
 

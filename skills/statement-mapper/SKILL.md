@@ -14,10 +14,13 @@ model-standards) y **no mueve archivos** (eso es coverage-folders).
 <TICKER> --dest model/inputs --ua "<nombre correo>"` baja TODA la historia
 reportada (anual y trimestral, décadas) desde companyfacts de SEC como CSV
 largo con periodo fiscal, form y filed — sin parsear HTML. Esta skill convierte
-ese CSV en los `canonical_*.csv` (mapeo canon → línea con gate del analista;
-4Q de flujos = FY − 1Q−2Q−3Q, marcado derivado). Preferir esta ruta a extraer
-trimestre por trimestre de 10-Qs; el filing HTML queda para lo que XBRL no trae
-(notas, segmentos, guidance).
+ese CSV en los `canonical_*.csv` (mapeo canon → línea con gate del analista).
+El tool ya entrega el 4Q de IS y CF derivado (FY − acumulado a 3Q, tag
+`derivado`) — esta skill no resta nada a mano; la UPA de 4Q no se deriva
+porque no es aditiva. Filas con tag `acumulado YTD sin desacumular` NO son
+trimestrales: se reportan al analista y jamás entran al canónico como
+trimestre. Preferir esta ruta a extraer trimestre por trimestre de 10-Qs; el
+filing HTML queda para lo que XBRL no trae (notas, segmentos, guidance).
 
 **Salida formal — `model/inputs/`** (dueña también de esta carpeta):
 - `extract_*.json`: papeles de trabajo por filing — cada cifra con valor,
