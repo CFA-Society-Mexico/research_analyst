@@ -123,6 +123,11 @@ REQUIRED_RATIO_LABELS = (
 
 JUNK_SHEET_NAMES = ("Hoja1", "Hoja2", "Sheet1", "Sheet2", "Hoja 1", "Sheet 1")
 
+# Canons de FLUJO: en ventana UDM se SUMAN (t-3..t); el resto son SALDOS y se
+# promedian sobre la misma ventana (build_ratios).
+RATIO_FLOW_CANONS = frozenset({"rev", "cogs", "gross", "ebit", "ebt", "ni",
+                               "interest", "tax", "cfo", "da"})
+
 
 @dataclass(frozen=True)
 class PeriodHeader:
@@ -465,49 +470,90 @@ class ModelStyler:
     def build_ratios(self, ws: Worksheet, start_row: int, first_col: int,
                      n_cols: int, ref: dict[str, str],
                      wacc_ref: Optional[str] = None,
-                     days_ref: str = "DAYS_YEAR") -> tuple[int, list[str]]:
+                     days_ref: Optional[str] = None,
+                     window: Optional[int] = None) -> tuple[int, list[str]]:
         """Write the FULL Ratios section (blocks A-G of ratios-analytics.md).
 
-        ``days_ref``: named range de dias para las razones de dias (DSO/DIO/
-        DPO/CCC). REGLA FINANCIERA: el numerador es un STOCK promedio y el
-        denominador un FLUJO — ambos deben cubrir la MISMA ventana. En hojas
-        trimestrales, o el flujo es UDM (12 meses) con ``DAYS_YEAR``, o es el
-        flujo del trimestre con ``DAYS_QUARTER``; mezclar flujo trimestral con
-        DAYS_YEAR infla los dias ~4x.
+        ``window``: periodos por ventana anual. OBLIGATORIO en hojas con header
+        trimestral (``Operating``): el builder no puede saber si ``ref`` apunta
+        a flujos de un trimestre o a filas UDM que el caller ya construyo, y
+        adivinar por el header anualiza dos veces en silencio.
+          - ``window=4``: el caller pasa flujos de UN trimestre; el builder los
+            suma (t-3..t, exactamente 4 trimestres) y promedia los saldos de
+            los 5 cierres t-4..t (apertura y cierre del periodo de 12 meses,
+            igual que (inicio+fin)/2 en modo anual).
+          - ``window=1``: el caller ya pasa filas UDM (o quiere razones de un
+            solo trimestre); flujos tal cual, saldos (t-1+t)/2.
+        Sin ``window`` en hoja trimestral: ValueError. En hojas anuales el
+        default es 1.
 
-        ``ref`` maps canon line -> absolute row reference WITHOUT column, e.g.
-        {"rev": "Model!{c}27", ...} where "{c}" is replaced per period column
-        and "{p}" by the previous column. Required canons: rev, cogs, gross,
-        ebit, ebt, ni, interest, tax, ta, equity, cash, ar, inv, ap, ca, cl,
-        debt, re, cfo, da. Missing canons skip their rows (returned in the
-        skipped list) — but check F13 fails if the section is incomplete, so
-        a skip is visible, never silent.
+        ``days_ref``: named range de dias para DSO/DIO/DPO/CCC; default
+        ``DAYS_YEAR``. Stock promedio y flujo deben cubrir la MISMA ventana:
+        ``DAYS_QUARTER`` solo con ``window=1`` explicito (flujo de un
+        trimestre); con ventana UDM es un error y se rechaza.
+
+        ``ref`` maps canon line -> row reference with ``{c}`` for the period
+        column, e.g. {"rev": "Operating!{c}27", ...}. Required canons: rev,
+        cogs, gross, ebit, ebt, ni, interest, tax, ta, equity, cash, ar, inv,
+        ap, ca, cl, debt, re, cfo, da. Missing canons skip their rows
+        (returned in the skipped list) — but check F13 fails if the section is
+        incomplete, so a skip is visible, never silent.
         """
+        if window is None:
+            if _has_quarter_header(ws):
+                raise ValueError(
+                    f"build_ratios: la hoja {ws.title} tiene header trimestral y "
+                    "falta window. Pasa window=4 si ref apunta a flujos de un "
+                    "trimestre (el builder suma t-3..t), o window=1 si ref ya "
+                    "apunta a filas UDM.")
+            window = 1
+        if window < 1:
+            raise ValueError(f"build_ratios: window={window} invalido")
+        if days_ref is None:
+            days_ref = "DAYS_YEAR"
+        if window > 1 and days_ref == "DAYS_QUARTER":
+            raise ValueError(
+                "build_ratios: con ventana UDM (window=4) los flujos cubren 12 "
+                "meses y los dias van con DAYS_YEAR; DAYS_QUARTER solo con "
+                "window=1 explicito (flujo de un trimestre).")
         skipped: list[str] = []
         r = start_row
-        # Auto-generar referencias de periodo previo: el caller pasa canons
-        # planos ({c}); aqui se derivan los <canon>_p ({p}) que usan las
-        # plantillas — evita el footgun de claves manuales.
-        ref = dict(ref)
-        for k, v in list(ref.items()):
-            if not k.endswith("_p") and isinstance(v, str) and "{c}" in v:
-                ref.setdefault(k + "_p", v.replace("{c}", "{p}"))
+        tag = " [UDM]" if window > 1 else ""
+        # Primera columna con ventana completa: los saldos se promedian sobre
+        # window+1 cierres (t-window..t), asi que arranca en i = window. Las
+        # previas quedan VACIAS (F15 admite hasta 4).
+        first_i = window
+        canons = [k for k, v in ref.items()
+                  if not k.endswith("_p") and isinstance(v, str) and "{c}" in v]
+
+        def at(canon: str, i: int) -> str:
+            return ref[canon].replace("{c}", get_column_letter(first_col + i))
+
+        def parts_for(i: int) -> dict[str, str]:
+            parts: dict[str, str] = {}
+            flow_span = range(i - window + 1, i + 1)     # t-window+1..t
+            stock_span = range(i - window, i + 1)        # t-window..t (incluye apertura)
+            for canon in canons:
+                if window > 1 and canon in RATIO_FLOW_CANONS:
+                    parts[canon] = "SUM(" + ",".join(at(canon, j) for j in flow_span) + ")"
+                else:
+                    parts[canon] = at(canon, i)
+                parts["avg_" + canon] = ("AVERAGE(" + ",".join(at(canon, j) for j in stock_span)
+                                         + ")")
+            return parts
 
         def row_out(label: str, template: str, fmt: NumFmt,
                     needs: tuple[str, ...]) -> None:
             nonlocal r
-            if any(k not in ref for k in needs):
+            if any(k not in canons for k in needs):
                 skipped.append(label)
                 return
-            ws.cell(row=r, column=2, value=label).font = Font(
+            ws.cell(row=r, column=2, value=label + tag).font = Font(
                 name=FONT_NAME, size=11)
-            for i in range(1, n_cols):  # first period column has no prior year
+            for i in range(first_i, n_cols):
                 col = get_column_letter(first_col + i)
-                prev = get_column_letter(first_col + i - 1)
-                parts = {k: v.replace("{c}", col).replace("{p}", prev)
-                         for k, v in ref.items()}
-                formula = template.format(**parts)
-                self.set_cell(ws, f"{col}{r}", formula, CellRole.FORMULA, fmt)
+                self.set_cell(ws, f"{col}{r}", template.format(**parts_for(i)),
+                              CellRole.FORMULA, fmt)
             r += 1
 
         def header(title: str) -> None:
@@ -515,53 +561,42 @@ class ModelStyler:
             self.section_header(ws, r, title)
             r += 1
 
-        AVG = "AVERAGE({p_ref},{c_ref})"
-
-        def avg(canon: str) -> dict[str, str]:
-            return {}
-
         header("DuPont")
         row_out("Margen neto (NI/Ventas)", '=IF({rev}=0,"",{ni}/{rev})', NumFmt.PCT1, ("ni", "rev"))
         row_out("Rotacion de activos (Ventas/Activos prom.)",
-                '=IF(AVERAGE({ta_p},{ta})=0,"",{rev}/AVERAGE({ta_p},{ta}))', NumFmt.DEC2, ("rev", "ta", "ta_p"))
+                '=IF({avg_ta}=0,"",{rev}/{avg_ta})', NumFmt.DEC2, ("rev", "ta"))
         row_out("Apalancamiento (Activos/Capital prom.)",
-                '=IF(AVERAGE({equity_p},{equity})=0,"",AVERAGE({ta_p},{ta})/AVERAGE({equity_p},{equity}))', NumFmt.DEC2, ("ta", "ta_p", "equity", "equity_p"))
-        row_out("ROE DuPont 3", '=IF(AVERAGE({equity_p},{equity})=0,"",{ni}/AVERAGE({equity_p},{equity}))', NumFmt.PCT1, ("ni", "equity", "equity_p"))
+                '=IF({avg_equity}=0,"",{avg_ta}/{avg_equity})', NumFmt.DEC2, ("ta", "equity"))
+        row_out("ROE DuPont 3", '=IF({avg_equity}=0,"",{ni}/{avg_equity})', NumFmt.PCT1, ("ni", "equity"))
         row_out("Carga fiscal (NI/EBT)", '=IF({ebt}=0,"",{ni}/{ebt})', NumFmt.PCT1, ("ni", "ebt"))
         row_out("Carga de interes (EBT/EBIT)", '=IF({ebit}=0,"",{ebt}/{ebit})', NumFmt.PCT1, ("ebt", "ebit"))
         row_out("Margen EBIT (EBIT/Ventas)", '=IF({rev}=0,"",{ebit}/{rev})', NumFmt.PCT1, ("ebit", "rev"))
         row_out("ROE DuPont 5 (producto)",
-                '=IF(OR({ebt}=0,{ebit}=0,{rev}=0,AVERAGE({equity_p},{equity})=0),"",'
-                '{ni}/{ebt}*{ebt}/{ebit}*{ebit}/{rev}*{rev}/AVERAGE({ta_p},{ta})'
-                '*AVERAGE({ta_p},{ta})/AVERAGE({equity_p},{equity}))', NumFmt.PCT1,
-                ("ni", "ebt", "ebit", "rev", "ta", "ta_p", "equity", "equity_p"))
+                '=IF(OR({ebt}=0,{ebit}=0,{rev}=0,{avg_equity}=0),"",'
+                '{ni}/{ebt}*{ebt}/{ebit}*{ebit}/{rev}*{rev}/{avg_ta}'
+                '*{avg_ta}/{avg_equity})', NumFmt.PCT1,
+                ("ni", "ebt", "ebit", "rev", "ta", "equity"))
         r += 1
 
         header("ROIC y economic profit")
         row_out("Tasa efectiva (tax/EBT)", '=IF({ebt}=0,"",{tax}/{ebt})', NumFmt.PCT1, ("tax", "ebt"))
         row_out("NOPAT (EBIT x (1-t))", '=IF({ebt}=0,"",{ebit}*(1-{tax}/{ebt}))', NumFmt.NUM, ("ebit", "tax", "ebt"))
         # Capital invertido PROMEDIO (consistente con el resto de ratios que
-        # usan denominadores de balance promediados — antes usaba el saldo de
-        # cierre, inconsistente con ratios-analytics.md).
-        _ic = ("(AVERAGE({debt_p},{debt})+AVERAGE({equity_p},{equity})"
-               "-AVERAGE({cash_p},{cash}))")
+        # usan denominadores de balance promediados).
+        _ic = "({avg_debt}+{avg_equity}-{avg_cash})"
         row_out("Capital invertido promedio (deuda+capital-caja)", "=" + _ic,
-                NumFmt.NUM, ("debt", "debt_p", "equity", "equity_p", "cash", "cash_p"))
+                NumFmt.NUM, ("debt", "equity", "cash"))
         # Guardas explicitas: capital invertido <= 0 (caja > deuda+capital,
         # caso real en emisoras con caja neta enorme) hace el ROIC absurdo —
         # se reporta "n/s" (no significativo), jamas un numero inflado.
         row_out("ROIC",
                 '=IF(OR(' + _ic + '<=0,{ebt}=0),"n/s",{ebit}*(1-{tax}/{ebt})/' + _ic + ')',
-                NumFmt.PCT1,
-                ("debt", "debt_p", "equity", "equity_p", "cash", "cash_p",
-                 "ebit", "tax", "ebt"))
+                NumFmt.PCT1, ("debt", "equity", "cash", "ebit", "tax", "ebt"))
         if wacc_ref:
             row_out(f"Economic profit (spread vs WACC {wacc_ref})",
                     '=IF(OR(' + _ic + '<=0,{ebt}=0),"n/s",'
                     '({ebit}*(1-{tax}/{ebt})/' + _ic + '-' + wacc_ref + ')*' + _ic + ')',
-                    NumFmt.NUM,
-                    ("ebit", "tax", "ebt", "debt", "debt_p", "equity",
-                     "equity_p", "cash", "cash_p"))
+                    NumFmt.NUM, ("ebit", "tax", "ebt", "debt", "equity", "cash"))
         else:
             skipped.append("Economic profit (sin wacc_ref)")
         r += 1
@@ -576,21 +611,21 @@ class ModelStyler:
         r += 1
 
         header("Ciclo de conversion de efectivo")
-        row_out("DSO (dias)", '=IF({rev}=0,"",AVERAGE({ar_p},{ar})/{rev}*' + days_ref + ')', NumFmt.DEC2, ("ar", "ar_p", "rev"))
-        row_out("DIO (dias)", '=IF({cogs}=0,"",AVERAGE({inv_p},{inv})/{cogs}*' + days_ref + ')', NumFmt.DEC2, ("inv", "inv_p", "cogs"))
-        row_out("DPO (dias)", '=IF({cogs}=0,"",AVERAGE({ap_p},{ap})/{cogs}*' + days_ref + ')', NumFmt.DEC2, ("ap", "ap_p", "cogs"))
+        row_out("DSO (dias)", '=IF({rev}=0,"",{avg_ar}/{rev}*' + days_ref + ')', NumFmt.DEC2, ("ar", "rev"))
+        row_out("DIO (dias)", '=IF({cogs}=0,"",{avg_inv}/{cogs}*' + days_ref + ')', NumFmt.DEC2, ("inv", "cogs"))
+        row_out("DPO (dias)", '=IF({cogs}=0,"",{avg_ap}/{cogs}*' + days_ref + ')', NumFmt.DEC2, ("ap", "cogs"))
         row_out("CCC (DSO+DIO-DPO)",
-                '=IF({cogs}=0,"",AVERAGE({ar_p},{ar})/{rev}*' + days_ref
-                + '+AVERAGE({inv_p},{inv})/{cogs}*' + days_ref
-                + '-AVERAGE({ap_p},{ap})/{cogs}*' + days_ref + ')',
-                NumFmt.DEC2, ("ar", "ar_p", "inv", "inv_p", "ap", "ap_p", "rev", "cogs"))
+                '=IF(OR({cogs}=0,{rev}=0),"",{avg_ar}/{rev}*' + days_ref
+                + '+{avg_inv}/{cogs}*' + days_ref
+                + '-{avg_ap}/{cogs}*' + days_ref + ')',
+                NumFmt.DEC2, ("ar", "inv", "ap", "rev", "cogs"))
         r += 1
 
         header("Apalancamiento operativo y calidad")
         row_out("DFL (EBIT/(EBIT-interes))", '=IF(({ebit}-ABS({interest}))=0,"",{ebit}/({ebit}-ABS({interest})))', NumFmt.DEC2, ("ebit", "interest"))
         row_out("CFO / NI (calidad de utilidades)", '=IF({ni}=0,"",{cfo}/{ni})', NumFmt.DEC2, ("cfo", "ni"))
         row_out("Accruals proxy (NI-CFO)/Activos prom.",
-                '=IF(AVERAGE({ta_p},{ta})=0,"",({ni}-{cfo})/AVERAGE({ta_p},{ta}))', NumFmt.PCT1, ("ni", "cfo", "ta", "ta_p"))
+                '=IF({avg_ta}=0,"",({ni}-{cfo})/{avg_ta})', NumFmt.PCT1, ("ni", "cfo", "ta"))
         return r, skipped
 
 
@@ -676,6 +711,16 @@ def _period_columns(ws: Worksheet) -> tuple[list[int], list[int]]:
         if len(cols_a) + len(cols_e) >= 4:
             break
     return cols_a, cols_e
+
+
+def _has_quarter_header(ws: Worksheet) -> bool:
+    """True si el header (filas 1-8) trae trimestres de texto ('1Q2026E')."""
+    for row in ws.iter_rows(min_row=1, max_row=8,
+                            max_col=min(ws.max_column, _MAX_SCAN_COLS)):
+        for c in row:
+            if isinstance(c.value, str) and _QUARTER_HDR.fullmatch(c.value.strip()):
+                return True
+    return False
 
 
 def _is_header_row(ws: Worksheet, r: int) -> bool:
@@ -1490,8 +1535,9 @@ def _demo(path: str) -> None:
     ref = {k: f"Operating!{{c}}{rows[k]}" for k in (
         "rev", "cogs", "gross", "ebit", "ebt", "ni", "interest", "tax", "ta",
         "equity", "cash", "ar", "inv", "ap", "ca", "cl", "debt", "re", "cfo", "da")}
-    end_row, skipped = styler.build_ratios(op, 37, first, n_cols, ref,
-                                           wacc_ref="WACC", days_ref="DAYS_QUARTER")
+    # window=4 explicito: ref apunta a flujos de UN trimestre.
+    end_row, skipped = styler.build_ratios(op, 37, first, n_cols, ref, wacc_ref="WACC",
+                                           window=4)
     assert not skipped, skipped
     heads = [r for r in range(37, end_row) if op.cell(row=r, column=1).value == "x"]
     for i, hr in enumerate(heads):
