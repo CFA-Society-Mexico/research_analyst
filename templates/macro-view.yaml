@@ -1,5 +1,5 @@
 # macro-view.yaml — house view macro COMPARTIDO por toda la cobertura
-# Vive en workspace/macro/macro-view.yaml (nombre fijo — lo consume código),
+# Vive en <raiz>/macro/macro-view.yaml (nombre fijo — lo consume código),
 # FUERA de las carpetas por emisora. Uno solo para todas.
 # Lo llena el analista. El plugin puede PROPONERLO desde macro/sources/
 # (/update-macro: propuesta campo por campo con cita, gate por campo) — pero

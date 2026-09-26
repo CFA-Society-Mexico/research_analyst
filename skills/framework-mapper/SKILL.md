@@ -1,6 +1,6 @@
 ---
 name: framework-mapper
-description: Regulación contable para el analista — deriva el marco de la emisora (IFRS, US GAAP, NIF o criterios CNBV), la periodicidad del modelo (anual / anual+trimestral / trimestral — siempre pregunta, jamás asume) y los métodos de valuación aplicables, y escribe issuer-profile.yaml; mapea qué norma exacta gobierna qué línea del modelo y qué diferencias entre marcos cambian un forecast. Usa esta skill siempre que haya que crear o confirmar el perfil de una emisora, citar una norma (ASC, NIC/NIIF, NIF), comparar tratamiento contable entre marcos, ajustar comparabilidad entre emisoras de marcos distintos, o cuando el usuario pregunte "¿qué norma gobierna X?", "¿cambia mi forecast por diferencia contable?", "¿bajo qué marco reporta esta emisora?" — es la ÚNICA skill autorizada a emitir citas normativas y a escribir el perfil.
+description: Regulación contable para el analista — deriva el marco de la emisora (IFRS, US GAAP, NIF o criterios CNBV), la periodicidad del modelo (anual / trimestral — siempre pregunta, jamás asume) y los métodos de valuación aplicables, y escribe issuer-profile.yaml; mapea qué norma exacta gobierna qué línea del modelo y qué diferencias entre marcos cambian un forecast. Usa esta skill siempre que haya que crear o confirmar el perfil de una emisora, citar una norma (ASC, NIC/NIIF, NIF), comparar tratamiento contable entre marcos, ajustar comparabilidad entre emisoras de marcos distintos, o cuando el usuario pregunte "¿qué norma gobierna X?", "¿cambia mi forecast por diferencia contable?", "¿bajo qué marco reporta esta emisora?" — es la ÚNICA skill autorizada a emitir citas normativas y a escribir el perfil.
 ---
 
 # framework-mapper
@@ -27,8 +27,9 @@ inventar una cita.** Una cita inventada es la falla más grave posible de esta s
    usuario, no resolver por su cuenta.
 4. Llena `templates/issuer-profile.yaml` completo (convenciones: moneda, unidades,
    cierre, segmentos, life_cycle_stage, métodos de valuación derivados,
-   `model_periodicity` — propuesta: `annual_plus_quarterly` si coverage-folders
-   archivó trimestrales, `annual` si solo hay anuales; PREGUNTA, no asumas).
+   `model_periodicity` — propuesta: `quarterly` si coverage-folders archivó
+   trimestrales, `annual` si solo hay anuales; PREGUNTA, no asumas;
+   `annual_plus_quarterly` está deprecado).
 5. Gate: el usuario confirma cada derivación (`framework_confirmed_by_user: true`
    y `periodicity_confirmed_by_user: true`).
 

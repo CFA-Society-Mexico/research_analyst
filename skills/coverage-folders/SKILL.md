@@ -17,7 +17,9 @@ metadatos, mueve y renombra. Las demás skills solo leen rutas.
 
 ## Procedimiento — setup
 
-1. Instancia el árbol de `templates/coverage-tree.md` bajo `workspace/<TICKER>/`.
+1. Instancia el árbol de `templates/coverage-tree.md` bajo `<raiz>/<TICKER>/`,
+   donde `<raiz>` es la carpeta que designó el usuario — jamás una
+   subcarpeta intermedia como `workspace/` (ver coverage-tree).
    Colisión con cobertura existente ⇒ preguntar; NUNCA sobrescribir.
 2. Clasifica los archivos sueltos que el usuario entregó: tipo (10-K/10-Q/8-K/
    BMV-annual/BMV-quarterly/evento relevante/**transcript de earnings call**),
@@ -40,9 +42,9 @@ metadatos, mueve y renombra. Las demás skills solo leen rutas.
 3b. `brand/` se crea siempre (vacía está bien). Si el usuario entregó un
    DESIGN.md o menciona colores de marca, va ahí — xlsx-building lo carga al
    construir el modelo.
-4. Verifica que `workspace/macro/macro-view.yaml` existe (si no: crear la
+4. Verifica que `<raiz>/macro/macro-view.yaml` existe (si no: crear la
    estructura `macro/{macro-view.yaml, sources/, history/}` desde template,
-   vacía, y avisar). **Regla dura: lo macro vive SOLO en `workspace/macro/`** —
+   vacía, y avisar). **Regla dura: lo macro vive SOLO en `<raiz>/macro/`** —
    jamás dentro del folder del ticker; si aparece un macro-view suelto ahí
    (cobertura vieja o error), tratarlo con el procedimiento de migración.
 
@@ -51,7 +53,7 @@ metadatos, mueve y renombra. Las demás skills solo leen rutas.
 Para coberturas creadas con el árbol viejo (profile/ assumptions/ notes/ log/
 earnings-transcripts/): aplicar el mapa de `templates/coverage-tree.md`
 (§Migración) — solo movimientos, nada se borra; `macro-view.yaml` suelto (raíz
-del workspace o dentro de un ticker) va a `workspace/macro/` (si ya existe uno
+del workspace o dentro de un ticker) va a `<raiz>/macro/` (si ya existe uno
 ahí, preguntar cuál manda);
 carpetas viejas vacías se eliminan al final; reportar cada movimiento.
 
@@ -71,7 +73,7 @@ carpetas viejas vacías se eliminan al final; reportar cada movimiento.
 | `q3 apple.pdf` (10-Q del 3T fiscal 2026) | `filings/sec/10-Q/AAPL_10-Q_3Q2026.pdf` |
 | `earnings call jul.pdf` | `transcripts/AAPL_transcript_3Q2026.pdf` |
 | `nota MS sobre cloud.pdf` | `research/industry/sources/` (nombre original — sources no se renombran, se citan por archivo) |
-| deck macro de la casa | `workspace/macro/sources/` |
+| deck macro de la casa | `<raiz>/macro/sources/` |
 
 ## Procedimiento — renombrado desde sec_fetch
 

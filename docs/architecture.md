@@ -57,6 +57,7 @@ Cada flecha del flujo principal lleva un gate: entrevista adaptativa + debate co
 | industry-report.md + comp universe | industry-analysis |
 | driver-map.md, assumptions, forecast-accuracy.md | driver-inventory |
 | El xlsx completo | model-standards |
+| Formato del xlsx por código (vía `tools/xlsx_builder.py`) | xlsx-building — el contenido sigue siendo de model-standards |
 | Clasificación de materialidad | impact-triage |
 
 ## Decisiones de diseño y su porqué
@@ -89,7 +90,7 @@ adapter se encoge y el núcleo no se toca).
 
 Deep research con verificación adversarial (2026-08-25): 25 claims, 3 votos c/u,
 0 refutados. Consolidado en `skills/framework-mapper/references/ifrs-asc-nif-line-map.md`.
-Huecos conocidos marcados `[VERIFICAR]` (ver README → Áreas de oportunidad).
+Huecos conocidos marcados `[VERIFICAR]` (ver README → Contribuir, fronteras conocidas).
 
 ## Estado
 
@@ -99,5 +100,6 @@ Huecos conocidos marcados `[VERIFICAR]` (ver README → Áreas de oportunidad).
   19 checks F + 10 S en verde); doctrina de la auditoría completa
   (`integrity-checks.md`); builder con respiro fail-fast y `check_result`
   fechado.
-- Pendiente: suite de evals; push a GitHub público; slots `filings/management/`
-  y `research/sell-side/` en uso real.
+- v0.6.0: repo público en CFA-Society-Mexico; 8 skills y 5 comandos.
+- Pendiente: suite de evals; slots `filings/management/` y
+  `research/sell-side/` en uso real.

@@ -143,9 +143,9 @@ lectura expandida respira.
 ## Reglas transversales
 
 - Periodos en columnas, líneas en filas; flujo top-to-bottom, left-to-right.
-- **Menos tabs, mejor**: el modelo completo vive en `Model`; solo lo que tiene
-  granularidad o estructura distinta (Quarterly, comps, data tables, summary)
-  gana tab propia.
+- **Menos tabs, mejor**: el modelo vive en `Operating` + `Annual` (o en `Model`
+  en modo annual); solo lo que tiene estructura distinta (comps, data tables,
+  summary) gana tab propia.
 - **Formato por código**: el libro se construye vía `tools/xlsx_builder.py`
   (skill xlsx-building); los checks F auditan paleta, fuentes, formatos,
   gridlines, freeze, outline, series y completitud de Ratios.

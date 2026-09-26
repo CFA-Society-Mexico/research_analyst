@@ -59,7 +59,8 @@ SKILL.md); las demás solo leen.
 
 ## Restricciones de entorno
 
-- Sin APIs de pago ni keys privadas (v1). Fuentes: filings locales del usuario,
+- Sin APIs de pago (v1); las keys gratuitas (FRED) las pone el usuario en su
+  workspace, nunca en el repo ni en consola. Fuentes: filings locales del usuario,
   datos públicos, web search de tu plataforma si existe. Filings SEC faltantes:
   `python tools/sec_fetch.py <TICKER> --ua "<nombre correo>"` (EDGAR público,
   gratis; SIEMPRE con gate del usuario antes de descargar).

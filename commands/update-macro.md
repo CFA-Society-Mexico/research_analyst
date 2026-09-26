@@ -1,7 +1,7 @@
 # /update-macro — actualizar el house view macro desde las fuentes del analista
 
-Orquesta la actualización de `workspace/macro/macro-view.yaml` a partir del
-research que el analista dejó en `workspace/macro/sources/` (propio, de su casa
+Orquesta la actualización de `<raiz>/macro/macro-view.yaml` a partir del
+research que el analista dejó en `<raiz>/macro/sources/` (propio, de su casa
 o de terceros; pdf/html/md). Uso: `/update-macro [contexto del porqué]`.
 
 Doctrina: el plugin PROPONE campo por campo con cita; el analista confirma cada
