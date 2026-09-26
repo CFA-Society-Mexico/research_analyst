@@ -15,12 +15,15 @@ código implementa. Lo marcado *pendiente* abajo está especificado pero
 **Ventanas móviles (modo trimestral)**: UDM/LTM = EXACTAMENTE 4 trimestres
 (t−3 … t) — ni 5 (columna −4 a la actual: el bug del smoke #4, infla ~25%) ni
 "trimestre × 4". Toda razón anualizada sobre base trimestral (DSO/DIO/DPO,
-deuda/EBITDA, cobertura) usa flujos UDM y stocks promedio de los mismos 4
-trimestres. La fórmula de la ventana es idéntica en toda la fila (S5).
-`build_ratios` lo aplica solo: en una hoja con header trimestral usa ventana
-de 4 (flujos `SUM` de t−3..t, saldos `AVERAGE` de esos mismos 4 trimestres,
-días con `DAYS_YEAR`) y marca cada fila con `[UDM]`; las 3 primeras columnas
-quedan vacías. En hojas anuales, saldos (inicio+fin)/2.
+deuda/EBITDA, cobertura) usa flujos UDM y stocks promedio de los 5 cierres
+t−4..t: apertura y cierre del periodo de 12 meses, igual que (inicio+fin)/2
+en modo anual. La fórmula de la ventana es idéntica en toda la fila (S5).
+En una hoja con header trimestral, `build_ratios` EXIGE `window` y falla si no
+se pasa, porque no puede saber qué trae `ref`: con `window=4` el caller pasa
+flujos de un trimestre y el builder los suma (t−3..t), promedia los saldos de
+t−4..t, usa `DAYS_YEAR` y marca cada fila con `[UDM]` (las 4 primeras columnas
+quedan vacías); con `window=1` el caller ya pasa filas UDM y el builder no suma
+nada. En hojas anuales el default es `window=1`: saldos (inicio+fin)/2.
 
 ## Bloque A — DuPont
 

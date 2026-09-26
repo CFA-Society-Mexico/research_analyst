@@ -474,12 +474,18 @@ class ModelStyler:
                      window: Optional[int] = None) -> tuple[int, list[str]]:
         """Write the FULL Ratios section (blocks A-G of ratios-analytics.md).
 
-        ``window``: periodos por ventana anual. ``None`` = automatico: 4 si la
-        hoja trae header trimestral (``Operating``), 1 si es anual. Con 4, los
-        FLUJOS son UDM (suma de t-3..t, exactamente 4 trimestres) y los SALDOS
-        se promedian sobre esos mismos 4 trimestres. Sin ventana, en una hoja
-        trimestral la Deuda/EBITDA salia ~4x, ROIC/ROE/rotacion ~1/4 y el
-        economic profit restaba un WACC anual a un ROIC trimestral.
+        ``window``: periodos por ventana anual. OBLIGATORIO en hojas con header
+        trimestral (``Operating``): el builder no puede saber si ``ref`` apunta
+        a flujos de un trimestre o a filas UDM que el caller ya construyo, y
+        adivinar por el header anualiza dos veces en silencio.
+          - ``window=4``: el caller pasa flujos de UN trimestre; el builder los
+            suma (t-3..t, exactamente 4 trimestres) y promedia los saldos de
+            los 5 cierres t-4..t (apertura y cierre del periodo de 12 meses,
+            igual que (inicio+fin)/2 en modo anual).
+          - ``window=1``: el caller ya pasa filas UDM (o quiere razones de un
+            solo trimestre); flujos tal cual, saldos (t-1+t)/2.
+        Sin ``window`` en hoja trimestral: ValueError. En hojas anuales el
+        default es 1.
 
         ``days_ref``: named range de dias para DSO/DIO/DPO/CCC; default
         ``DAYS_YEAR``. Stock promedio y flujo deben cubrir la MISMA ventana:
@@ -494,7 +500,13 @@ class ModelStyler:
         incomplete, so a skip is visible, never silent.
         """
         if window is None:
-            window = 4 if _has_quarter_header(ws) else 1
+            if _has_quarter_header(ws):
+                raise ValueError(
+                    f"build_ratios: la hoja {ws.title} tiene header trimestral y "
+                    "falta window. Pasa window=4 si ref apunta a flujos de un "
+                    "trimestre (el builder suma t-3..t), o window=1 si ref ya "
+                    "apunta a filas UDM.")
+            window = 1
         if window < 1:
             raise ValueError(f"build_ratios: window={window} invalido")
         if days_ref is None:
@@ -507,9 +519,10 @@ class ModelStyler:
         skipped: list[str] = []
         r = start_row
         tag = " [UDM]" if window > 1 else ""
-        # Primera columna con ventana completa: t-1 para promedios anuales,
-        # t-3..t para UDM. Las previas quedan VACIAS (F15 admite hasta 4).
-        first_i = window - 1 if window > 1 else 1
+        # Primera columna con ventana completa: los saldos se promedian sobre
+        # window+1 cierres (t-window..t), asi que arranca en i = window. Las
+        # previas quedan VACIAS (F15 admite hasta 4).
+        first_i = window
         canons = [k for k, v in ref.items()
                   if not k.endswith("_p") and isinstance(v, str) and "{c}" in v]
 
@@ -518,17 +531,15 @@ class ModelStyler:
 
         def parts_for(i: int) -> dict[str, str]:
             parts: dict[str, str] = {}
-            span = range(i - window + 1, i + 1)
+            flow_span = range(i - window + 1, i + 1)     # t-window+1..t
+            stock_span = range(i - window, i + 1)        # t-window..t (incluye apertura)
             for canon in canons:
                 if window > 1 and canon in RATIO_FLOW_CANONS:
-                    parts[canon] = "SUM(" + ",".join(at(canon, j) for j in span) + ")"
+                    parts[canon] = "SUM(" + ",".join(at(canon, j) for j in flow_span) + ")"
                 else:
                     parts[canon] = at(canon, i)
-                if window > 1:
-                    parts["avg_" + canon] = ("AVERAGE(" + ",".join(at(canon, j) for j in span)
-                                             + ")")
-                else:
-                    parts["avg_" + canon] = f"AVERAGE({at(canon, i - 1)},{at(canon, i)})"
+                parts["avg_" + canon] = ("AVERAGE(" + ",".join(at(canon, j) for j in stock_span)
+                                         + ")")
             return parts
 
         def row_out(label: str, template: str, fmt: NumFmt,
@@ -1524,7 +1535,9 @@ def _demo(path: str) -> None:
     ref = {k: f"Operating!{{c}}{rows[k]}" for k in (
         "rev", "cogs", "gross", "ebit", "ebt", "ni", "interest", "tax", "ta",
         "equity", "cash", "ar", "inv", "ap", "ca", "cl", "debt", "re", "cfo", "da")}
-    end_row, skipped = styler.build_ratios(op, 37, first, n_cols, ref, wacc_ref="WACC")
+    # window=4 explicito: ref apunta a flujos de UN trimestre.
+    end_row, skipped = styler.build_ratios(op, 37, first, n_cols, ref, wacc_ref="WACC",
+                                           window=4)
     assert not skipped, skipped
     heads = [r for r in range(37, end_row) if op.cell(row=r, column=1).value == "x"]
     for i, hr in enumerate(heads):

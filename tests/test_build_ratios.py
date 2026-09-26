@@ -1,4 +1,4 @@
-"""Pruebas de ModelStyler.build_ratios: ventana UDM en hojas trimestrales.
+"""Pruebas de ModelStyler.build_ratios: ventana UDM explicita en hojas trimestrales.
 
 Correr: python -m unittest discover -s tests -v
 """
@@ -39,45 +39,72 @@ def _row(rows: dict[str, list[object]], prefix: str) -> list[object]:
     return next(v for k, v in rows.items() if k.startswith(prefix))
 
 
-class BuildRatiosTests(unittest.TestCase):
+def _refs(canon: str, cols: str) -> str:
+    return ",".join(f"Operating!{c}{ROW[canon]}" for c in cols)
 
-    def test_quarterly_sheet_uses_ltm_flows_and_four_quarter_averages(self) -> None:
-        rows = _build("Operating", quarterly=True)
+
+class QuarterlyWindowTests(unittest.TestCase):
+
+    def test_quarterly_sheet_without_window_is_rejected(self) -> None:
+        # Adivinar por el header anualizaba dos veces si ref ya trae filas UDM.
+        with self.assertRaises(ValueError) as ctx:
+            _build("Operating", quarterly=True)
+        self.assertIn("window=4", str(ctx.exception))
+        self.assertIn("window=1", str(ctx.exception))
+
+    def test_window_one_with_ltm_rows_reproduces_main_formulas(self) -> None:
+        # Caso de la cobertura AAPL: ref apunta a filas UDM ya construidas.
+        # Formulas identicas a las que genera main hoy (salvo CCC, que ahora
+        # tambien se protege contra ventas en cero).
+        rows = _build("Operating", quarterly=True, window=1)
+        self.assertEqual(_row(rows, "Margen neto")[1],
+                         '=IF(Operating!D10=0,"",Operating!D15/Operating!D10)')
+        self.assertEqual(_row(rows, "Rotacion de activos")[1],
+                         '=IF(AVERAGE(Operating!C18,Operating!D18)=0,"",'
+                         'Operating!D10/AVERAGE(Operating!C18,Operating!D18))')
+        self.assertEqual(_row(rows, "Deuda / EBITDA")[1],
+                         '=IF((Operating!D13+Operating!D29)=0,"",'
+                         'Operating!D26/(Operating!D13+Operating!D29))')
+        self.assertEqual(_row(rows, "DSO")[1],
+                         '=IF(Operating!D10=0,"",AVERAGE(Operating!C21,Operating!D21)'
+                         '/Operating!D10*DAYS_YEAR)')
+        self.assertFalse(any(k.endswith("[UDM]") for k in rows))
+
+    def test_window_four_sums_four_flows_and_averages_five_closes(self) -> None:
+        rows = _build("Operating", quarterly=True, window=4)
         debt_ebitda = _row(rows, "Deuda / EBITDA")
-        ebit = ",".join(f"Operating!{c}{ROW['ebit']}" for c in "CDEF")
-        da = ",".join(f"Operating!{c}{ROW['da']}" for c in "CDEF")
-        self.assertEqual(debt_ebitda[:3], [None, None, None])
-        self.assertIn(f"SUM({ebit})", debt_ebitda[3])
-        self.assertIn(f"SUM({da})", debt_ebitda[3])
-        roe = _row(rows, "ROE DuPont 3")[3]
-        self.assertIn("AVERAGE(" + ",".join(f"Operating!{c}{ROW['equity']}" for c in "CDEF")
-                      + ")", roe)
+        self.assertEqual(debt_ebitda[:4], [None, None, None, None])
+        self.assertIn(f"SUM({_refs('ebit', 'DEFG')})", debt_ebitda[4])
+        self.assertIn(f"SUM({_refs('da', 'DEFG')})", debt_ebitda[4])
+        # Saldos: 5 cierres t-4..t (apertura y cierre del periodo de 12 meses).
+        self.assertIn(f"AVERAGE({_refs('equity', 'CDEFG')})", _row(rows, "ROE DuPont 3")[4])
         self.assertTrue(all(k.endswith("[UDM]") for k in rows))
 
     def test_ltm_days_ratios_use_days_year(self) -> None:
-        self.assertIn("*DAYS_YEAR", _row(_build("Operating", quarterly=True), "DSO")[3])
+        rows = _build("Operating", quarterly=True, window=4)
+        self.assertIn("*DAYS_YEAR", _row(rows, "DSO")[4])
 
     def test_days_quarter_with_ltm_window_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            _build("Operating", quarterly=True, days_ref="DAYS_QUARTER")
+            _build("Operating", quarterly=True, window=4, days_ref="DAYS_QUARTER")
 
-    def test_explicit_single_quarter_window_keeps_legacy_behavior(self) -> None:
+    def test_single_quarter_ratios_with_days_quarter_still_allowed(self) -> None:
         rows = _build("Operating", quarterly=True, window=1, days_ref="DAYS_QUARTER")
         self.assertIn("*DAYS_QUARTER", _row(rows, "DSO")[1])
-        self.assertEqual(_row(rows, "Margen neto")[1],
-                         f'=IF(Operating!D{ROW["rev"]}=0,"",'
-                         f'Operating!D{ROW["ni"]}/Operating!D{ROW["rev"]})')
 
-    def test_annual_sheet_keeps_begin_end_average(self) -> None:
+
+class AnnualTests(unittest.TestCase):
+
+    def test_annual_sheet_defaults_to_begin_end_average(self) -> None:
         rows = _build("Annual", quarterly=False)
         turnover = _row(rows, "Rotacion de activos")
         self.assertIsNone(turnover[0])
-        self.assertIn(f"AVERAGE(Annual!C{ROW['ta']},Annual!D{ROW['ta']})", turnover[1])
+        self.assertIn("AVERAGE(Annual!C18,Annual!D18)", turnover[1])
         self.assertFalse(any(k.endswith("[UDM]") for k in rows))
 
     def test_ccc_guards_zero_revenue(self) -> None:
         ccc = _row(_build("Annual", quarterly=False), "CCC")[1]
-        self.assertIn(f"Annual!D{ROW['rev']}=0", ccc)
+        self.assertIn("Annual!D10=0", ccc)
 
 
 if __name__ == "__main__":

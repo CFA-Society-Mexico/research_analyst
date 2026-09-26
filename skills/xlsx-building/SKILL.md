@@ -53,7 +53,10 @@ las best practices escritas y entregó Calibri con gridlines).
    (viene de poblar los estados desde los CSVs canónicos). PROHIBIDO armar
    Ratios a mano: el check F13 exige el set completo y `build_ratios` lo
    escribe por construcción. Si `build_ratios` reporta canons faltantes, eso
-   es un hueco del mapeo de captura — repórtalo, no lo tapes.
+   es un hueco del mapeo de captura — repórtalo, no lo tapes. En `Operating`
+   (header trimestral) pasa `window` SIEMPRE: `window=4` si `ref` apunta a
+   flujos de un trimestre, `window=1` si ya apunta a filas UDM; sin él,
+   `build_ratios` falla a propósito.
 3. **Contenido**: toda celda vía `set_cell` con su `CellRole` (INPUT / OBSERVED /
    FORMULA / LINK / WARN / LABEL) y `NumFmt` de la whitelist. El role fija color
    y fill — no elijas colores. Series (drivers, líneas de estados): vía
