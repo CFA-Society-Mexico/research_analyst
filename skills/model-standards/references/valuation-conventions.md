@@ -43,6 +43,22 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
 - **Terminal dual obligatorio:** Gordon (g) Y exit multiple, lado a lado.
   Cruce: Gordon ⇒ múltiplo implícito; exit multiple ⇒ g implícita. Ambos visibles.
   Divergencia grande = check D4: revisar supuesto con el analista, no promediar.
+  La g implícita de CUALQUIER terminal (exit multiple o reverse DCF) se despeja
+  con el FCFF del último año explícito, nunca con uno proyectado con la g del
+  analista:
+  `g implícita = (TV × WACC − FCFF_n) / (TV + FCFF_n)`, que es el despeje de
+  `TV = FCFF_n × (1+g) / (WACC − g)`.
+- **Año en curso (stub).** En modo `quarterly`, si el último trimestre
+  reportado no es 4Q, el primer año del DCF ya tiene trimestres observados
+  cuya caja está dentro de la deuda neta del último balance. Descontar ese FY
+  completo cuenta dos veces ese flujo. Regla: la fecha de valuación es el
+  cierre del último trimestre reportado; el primer periodo del DCF es el
+  **stub** = FCFF solo de los trimestres estimados que faltan del año (suma
+  de sus columnas E en `Operating`), con fracción de año `f = trimestres
+  restantes / 4`. Exponentes de descuento: el stub, `f` (o `f/2` con
+  mid-year); el año completo k después del stub (k = 1…n), `f + k` (o
+  `f + k − 0.5` con mid-year); el TV, al cierre del último año explícito,
+  `f + n`. La deuda neta es la del mismo último trimestre reportado.
 - Etapas: single-stage es el caso degenerado; default 2-3 etapas según
   `life_cycle_stage` (growth ⇒ horizonte largo).
 - **Bloque beta pure-play (Hamada)** — mecánica visible, no "beta con fuente" a secas:
@@ -54,8 +70,13 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
     queda visible como referencia.
 - **Bloque reverse DCF (expectativas implícitas)** — forma cerrada, sin Goal Seek:
   - EV de mercado = mkt cap actual + deuda neta + minoritarios + preferentes.
-  - TV implícita = (EV − PV de FCFF explícitos) × (1+WACC)^n.
-  - g implícita = WACC − FCFF_{n+1} / TV implícita.
+  - TV implícita = (EV − PV de FCFF explícitos) ÷ factor de descuento que el
+    DCF aplica al TV (`(1+WACC)^n` si el TV se descuenta a fin del año n; con
+    stub, el mismo exponente `f + n`).
+  - g implícita = (TV implícita × WACC − FCFF_n) / (TV implícita + FCFF_n).
+    La forma anterior, `WACC − FCFF_{n+1} / TV`, usaba `FCFF_{n+1} = FCFF_n ×
+    (1 + g del analista)`: la g "del mercado" salía contaminada por el mismo
+    supuesto que el bloque existe para contrastar.
   - Tercera columna junto al cruce de terminales: "el mercado descuenta g = X; tú
     supones g = Y" (check D4b — debate, nunca bloqueo).
 
@@ -64,6 +85,11 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
   + minoritarios + preferentes; cada componente del snapshot, con fuente.
 - Promedio del grupo: **media armónica** (doctrina CFA para múltiplos), mediana como
   referencia; nunca media aritmética sola.
+- Múltiplos no significativos (denominador ≤ 0: utilidad, EBITDA o valor en
+  libros negativos o cero) se EXCLUYEN de la media armónica y de la mediana y
+  se muestran como `NM` con su motivo, por fórmula (`IF` sobre el
+  denominador). Con un negativo dentro, la media armónica cambia de signo o se
+  dispara. Excluir el múltiplo no borra al comparable: su fila sigue visible.
 - Staleness: `as_of` de cada snapshot flaggeado si viejo (check D3).
 - Comparabilidad entre marcos: EBITDA IFRS 16 vs ASC 842 NO comparable directo —
   fila de ajuste de arrendamientos cuando el universo mezcla marcos (ver
