@@ -76,7 +76,12 @@ carpetas viejas vacías se eliminan al final; reportar cada movimiento.
 ## Procedimiento — renombrado desde sec_fetch
 
 `tools/sec_fetch.py` baja crudo (`<TICKER>_<form>_<reportDate>.htm`) + manifest
-CSV. Esta skill convierte al naming de la convención usando el manifest y el
+CSV. Si dos filings comparten form y fecha (dos 8-K del mismo día de evento),
+el segundo lleva la accession al final del nombre. Las enmiendas solo bajan con
+`--amendments` y llegan con form `10-K/A` en el manifest y `10-K-A` en el
+nombre: se archivan con sufijo `_amended`. El manifest se acumula entre
+corridas (una corrida con `--since` no borra filas previas). Esta skill
+convierte al naming de la convención usando el manifest y el
 `fiscal_year_end` del perfil: 10-K ⇒ `FYyyyy`; 10-Q ⇒ `#Qyyyy` (trimestre
 FISCAL derivado del reportDate vs cierre fiscal, no calendario); 8-K ⇒ fecha.
 Sin perfil aún (init paso 1): dejar el nombre crudo y renombrar al confirmarse
