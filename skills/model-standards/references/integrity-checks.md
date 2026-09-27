@@ -34,7 +34,7 @@ como verde.
 | C3 | Roll de utilidades retenidas | RE₁ = RE₀ + NI − dividendos |
 | C4 | Depreciación acumulada consistente con schedule | BS vs bloque `Sch: PPE` de Schedules |
 | C5 | Interés consistente con schedule de deuda | IS vs bloque `Sch: Debt` (documentar switch si hay circularidad) |
-| C6 | Identidad DuPont | ROE directo (NI/capital prom.) − ROE DuPont 5 factores = 0, todos los periodos (tab Ratios) |
+| C6 | ~~Identidad DuPont~~ **DEROGADO** (2026-09-25) | ROE directo − ROE DuPont 5 se cumple por álgebra: los factores se cancelan y la resta da cero aunque el modelo esté mal, así que no detectaba nada. El ID no se recicla |
 | C7 | CCC del forecast consistente con schedule de WC | Ratios (forecast) vs días DIO/DSO/DPO del bloque `Sch: WC` |
 | C8 | Agregado anual estructural (modo `quarterly`) | La hoja `Annual` es 100% fórmulas: cada FY del tramo trimestral agrega los 4 trimestres de `Operating` (flujos = Σ4Q; stocks = 4Q; ratios recalculados); pre-corte, links a canonical_annual. Un número tecleado en `Annual` = falla (F14 lo detecta por fill de input) |
 | C10 | **Desfase del roll de caja** | Escaneo de fórmulas: (i) cada celda de "Efectivo al inicio" referencia la celda de CIERRE de la columna previa; (ii) cada celda de caja del BS referencia el cierre del CF de su misma columna; (iii) rendimientos/intereses referencian saldos de la columna PREVIA. Una referencia a cierre de la misma columna en (iii) = ciclo = falla |
@@ -95,7 +95,7 @@ Falla => exit report "FALLA", lista de celdas/hojas afectadas, siguiente acción
 
 ## Resultados en la tab Checks: fórmula viva o escaneo FECHADO
 
-Un check de la tab `Checks` es una **fórmula viva** sobre el libro (C1–C7, D2,
+Un check de la tab `Checks` es una **fórmula viva** sobre el libro (C1–C5, C7, D2,
 D4, D9) o el **resultado de un escaneo por código** al construir (C8, C9, D3,
 D6, D10, D1). Un literal `"OK"` sin fecha ni nota es un check congelado: queda
 verde aunque el hecho cambie (bug de la auditoría AAPL 2026-09-02: D3 decía
