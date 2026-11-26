@@ -26,7 +26,7 @@ ni estima una cifra: una sin origen impide generar el deck.
 
 | Input | De quién | Para qué |
 |---|---|---|
-| `model/<ticker>-model_<fecha>_v#.xlsx`, recalculado | `model-standards` | toda cifra del deck |
+| El modelo vigente de `model/` (fecha y versión más recientes), recalculado | `model-standards` | toda cifra del deck |
 | `driver-map.md` (raíz) | `driver-inventory` | la identidad de ventas y los drivers del acto de crecimiento |
 | `research/industry/industry-report_<fecha>.md` vigente | `industry-analysis` | contexto, posicionamiento, fuente de hechos |
 | `journal/thesis-journal.md`, `journal/decisions.md` | gates previos | la tesis y sus contra-argumentos; supuestos con su porqué |
@@ -69,14 +69,18 @@ docstring de `tools/deck_builder.py`.
    cifras aplica aquí: un número suelto detiene el build y el mensaje dice la
    lámina. Se corrige el origen de la cifra, no el texto para esquivar la regla.
    `lit()` es para conteos editoriales y nombres propios, jamás para una cifra
-   del negocio. Después: construir, medir, ajustar alturas; dos o tres rondas es
-   lo normal.
+   del negocio. Después: construir, medir, ajustar; dos o tres rondas es lo
+   normal. La medición no decide el contenido: si para pasarla hace falta un
+   visual o un hallazgo que el guion no tenía, se anota en el outline y va como
+   excepción al gate 2; si cambia el argumento, vuelve al analista.
 4. **Verificación** (§6 y §7). `audit --report` y `measure --shots` hasta verde.
-   Luego evidencia frase por frase (la que no la tenga se elimina y se
-   regenera), revisión de las capturas **una por una** y pasada de texto. La
-   medición en verde no sustituye mirar las capturas. Entrega al gate 2 el
-   reporte, las capturas y la lista de excepciones (usos de `lit()`, hechos con
-   verificación manual, frases eliminadas).
+   Luego evidencia frase por frase, tablas y rótulos incluidos (lo que no la
+   tenga se elimina y se regenera): con subagentes disponibles la hace uno que
+   no redactó el deck. Después, revisión de las capturas **una por una** y
+   pasada de texto. La medición en verde no sustituye mirar las capturas.
+   Entrega al gate 2 el reporte, las capturas y la lista de excepciones (usos
+   de `lit()`, hechos con verificación manual, frases eliminadas, cambios
+   posteriores al gate 1, lo que quedó sin documento primario).
 
 ## Reglas duras
 

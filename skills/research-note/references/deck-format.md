@@ -20,7 +20,9 @@ Una fila por lámina:
 | # | Acto | Tipo | Hallazgo (será el título) | Visual | Del modelo | Hechos |
 |---|---|---|---|---|---|---|
 | 5 | Crecimiento | `slide` | Las ventas crecen menos de lo observado hasta el último año proyectado | barras, observado contra proyectado | `Annual` · Ingresos netos | — |
-| 6 | Crecimiento | `slide` | La emisora concentra la mayor parte de su mercado | tabla | — | `foundry_share` |
+| 6 | Crecimiento | `slide` | La emisora concentra la mayor parte de su mercado | tabla, siete filas | — | `foundry_share` y seis más |
+| 9 | Rentabilidad | `slide` | La depreciación pesa más sobre las ventas cada año proyectado | líneas | derivado: `Annual` · Depreciación entre Ingresos netos | — |
+| 11 | Valuación | `slide` | El valor por acción queda arriba del precio que usa el modelo | football + tabla | celda: `Summary` · Valor por acción; rango: `Sensitivity` C9:E11 | — |
 
 Reglas del guion:
 
@@ -34,6 +36,16 @@ Reglas del guion:
   audiencia tiene conocimiento promedio de finanzas.
 - Todo dato que no esté en el modelo se anota en la columna Hechos. En el paso 2
   consigue fuente o sale del guion.
+- **El rótulo dice lo que es la fila del modelo.** Si la celda se llama "DCF -
+  múltiplo de salida", la lámina no la presenta como "múltiplo de comparables";
+  si la serie es ventas totales entre obleas, no es "precio por oblea". Un
+  nombre más claro para la audiencia se explica en la entradilla, no sustituye
+  al concepto.
+- **Planea la densidad.** Una tabla de cuatro filas, una cuadrícula de
+  sensibilidad de tres por tres o un football field de un método no llenan una
+  lámina: la medición la marcará vacía (P6). Desde el guion: más filas, o dos
+  visuales que sostengan el mismo hallazgo (football + tabla de supuestos). No
+  dos hallazgos en una lámina.
 - Tipos: `cover` y `section` (plantillas fijas), `slide` (anatomía completa),
   `raw` (diagrama o tabla a medida de la emisora), `legal` (aviso al cierre).
 
@@ -84,8 +96,23 @@ número de clientes, una fecha de evento, guidance de la dirección.
   (check P4). Se coteja a mano en el gate 2.
 - Dato sin fuente: sale del guion, o el analista aporta el documento a la
   cobertura. No se sustituye por memoria ni por una búsqueda sin archivar.
-- Opinión o estimación de un tercero: se atribuye en la frase ("<fuente> estima")
-  y lleva su hecho con ese documento.
+- Opinión o estimación de un tercero: lleva su hecho con ese documento, `tag`
+  `observado` (lo observado es que la fuente lo publica), y la frase la
+  atribuye ("<fuente> estima"). Nunca se presenta como dato de la emisora.
+- El registro solo admite dos etiquetas. Si el industry report marca un dato
+  como fuente secundaria sin verificar, o como estimación que el analista no
+  adoptó, ese dato queda fuera del deck hasta que el documento primario esté en
+  la cobertura.
+- Guidance que ya vive dentro del modelo (un año anclado en la guía de la
+  dirección): sin el documento en la cobertura no hay hecho `guidance` que
+  citar. La lámina lo dice como supuesto del modelo ("el modelo supone"), sin
+  atribuir cifra a la dirección.
+- **Cita de una tabla:** una celda, no la fila. Al quitar las etiquetas, las
+  celdas de una fila quedan separadas por un espacio (`2,192,931 58%`); una
+  cita que cruza celdas es frágil.
+- **Valida temprano.** El registro se valida al crear el `Deck`: antes de
+  escribir láminas, corre un script de cinco líneas que solo construya
+  `Deck(..., facts=...)`. Cada cita que no aparezca falla ahí, con su clave.
 
 ## 3. El script (`research/notes/build_deck.py`)
 
@@ -136,9 +163,44 @@ if __name__ == "__main__":
         sys.exit(1)
 ```
 
-Las rutas de `model`, `facts` y `design` son relativas a la cobertura. `facts`
-solo se pasa si el archivo existe; `design` puede pasarse siempre (sin archivo,
-estilo neutro). La salida es `research/notes/<ticker>-deck_<as_of>.html`.
+Las rutas de `model`, `facts` y `design` son relativas a la cobertura. `model`
+es el vigente de `model/` (fecha y versión más recientes), con el nombre que
+tenga en esa cobertura. `facts` solo se pasa si el archivo existe; `design`
+puede pasarse siempre (sin archivo, estilo neutro; los slots están en
+`templates/coverage-tree.md`). La salida es
+`research/notes/<ticker>-deck_<as_of>.html`.
+
+### Conocer el modelo antes de escribir
+
+El script necesita la etiqueta EXACTA de la columna B, la banda de sección
+cuando la etiqueta se repite y la letra de columna cuando la fila tiene varias
+celdas. Vuelca eso primero, a un archivo (las etiquetas llevan acentos y la
+consola es ASCII-only):
+
+```python
+from pathlib import Path
+from openpyxl import load_workbook
+
+wb = load_workbook(MODEL, data_only=True)
+lines = []
+for ws in wb.worksheets:
+    lines.append(f"## {ws.title}")
+    for r in range(1, ws.max_row + 1):
+        cell = ws.cell(row=r, column=2)
+        if not (isinstance(cell.value, str) and cell.value.strip()):
+            continue
+        band = bool(cell.font and cell.font.bold and (cell.font.size or 0) >= 16)
+        nums = [c.column_letter for c in ws[r][2:]
+                if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)]
+        lines.append(f"{'SECCION ' if band else ''}{r} | {cell.value.strip()} | "
+                     f"{len(nums)} celdas {nums[:1]}..{nums[-1:]}")
+Path(OUT).write_text("\n".join(lines), encoding="utf-8")
+```
+
+Es solo lectura. Una banda de sección es una etiqueta en negrita de 16 pt o
+más. Para inspeccionar un `Num` en consola usa `float(n)` y `n.src`: `print(n)`
+y `f"{n}"` devuelven un marcador interno que la consola de Windows no puede
+escribir.
 
 ### Leer del modelo
 
@@ -187,7 +249,8 @@ Formato: solo signo, separador de miles, decimales y tipo (`+,.1f`, `.0%`,
 
 El contenido de una lámina no admite `<style>`, `<script>`, `<iframe>`,
 `<object>` ni `<embed>`. Sí admite atributos `style=`. Una lámina `raw` pasa por
-el mismo bloqueo de cifras y la misma medición que las demás.
+el mismo bloqueo de cifras y la misma medición que las demás; no tiene `title`:
+su título va dentro del contenido, como `<h2>`.
 
 ### Gráficas (devuelven el HTML del visual; son opcionales)
 
@@ -206,6 +269,15 @@ el mismo bloqueo de cifras y la misma medición que las demás.
   suelto ahí bloquea igual que en la prosa.
 - Un color de serie con poco contraste contra el fondo obliga al tool a
   etiquetar todos los valores de esa gráfica.
+- **Escala:** solo `bars` tiene `scale=`. En las demás se divide el `Num` antes
+  de pasarlo (`valor / 1e6`); la constante queda en la expresión de origen.
+- **Componer visuales:** `visual=` es HTML; dos visuales se concatenan con `+`.
+  Quedan pegados (las marcas de eje del primero parecen una fila de la tabla
+  que sigue): envuelve el segundo en `<div style="margin-top:16px">…</div>`.
+- **Solo `bars`, `lines` y `waterfall` crecen con `h=`.** `table` y `heatmap`
+  miden lo que midan sus filas. En `football` las filas tienen alto fijo: un
+  `h` mayor solo agrega blanco dentro del SVG, y la medición quedaría en verde
+  con la lámina igual de vacía. No se usa para pasar P6.
 
 ## 4. Regla de bloqueo y cuándo usar `lit()`
 
@@ -219,7 +291,7 @@ número sin origen.
 | El mismo con símbolos o en rango: `~38%`, `>38%`, `n=30`, `10%-12%` | Bloquea |
 | Año del eje del modelo, escrito solo: `2027`, `(2027)` | Pasa |
 | Año fuera del eje, o con símbolo: `1987`, `$2027` | Bloquea |
-| Dígitos pegados a letras que no son unidad: `N2`, `A14`, `3nm`, `IFRS16`, `1Q2026E`, `FY2026` | Pasa |
+| Dígitos pegados a letras que no son unidad: `N2`, `A14`, `3nm`, `IFRS16`, `1Q2026E`, `2T26`, `FY2026` | Pasa |
 | Dígitos, guion, letras: `20-F`, `10-K`, `COVID-19` | Pasa |
 | Nombre con el número separado: `IFRS 16`, `S&P 500`, `top 3`, `26 de noviembre` | Bloquea |
 | `lit("4", why="pasos del método")` | Pasa y queda listado (P3) |
@@ -230,7 +302,9 @@ Cómo escribir sin pelear con la regla:
 - **Cifra del negocio**: siempre por f-string de un `Num`. Si no está en el
   modelo ni en los hechos, no va en el deck.
 - **Conteo editorial** ("cuatro pasos", "tres condiciones"): en letra. Con
-  dígito, `lit("4", why="pasos del método")`.
+  dígito, `lit("4", why="pasos del método")`. Un conteo sobre el negocio
+  ("durante cinco años", "tres clientes") no es editorial aunque vaya en letra:
+  es una afirmación y lleva evidencia en la verificación.
 - **Nombre propio con número** ("IFRS 16", "S&P 500"): `lit("16", why="nombre de
   la norma")`, o se reescribe.
 - **Año fuera del eje o fecha de evento**: es una afirmación sobre la emisora.
@@ -251,10 +325,17 @@ son dos o tres rondas.
 
 | Falla | Qué hacer |
 |---|---|
-| P6, lámina vacía (el detalle da los px libres y la altura del visual) | Subir `h=` del visual en esa cantidad, o partir el contenido de otra forma |
+| P6, lámina vacía (el detalle da los px libres y la altura del visual) | En `bars`, `lines` y `waterfall`: subir `h=` en esa cantidad. En `table`, `heatmap` y `football`: más filas o un segundo visual del mismo hallazgo |
 | P5, contenido encimado o cortado | Bajar `h=`, acortar la Nota o la entradilla, o partir la lámina |
 | P7, desborde horizontal | Acortar el título o el rótulo; en tablas, menos columnas |
 | P8, etiqueta fuera de la gráfica o encimada con otra | Menos periodos en `show=`, otro `fmt`, rótulos de serie más cortos |
+| P8, nombres de serie encimados (`encimadas 'A / B'`) | Dos líneas que terminan en el mismo valor apilan sus nombres: recorta `keys=` a un tramo donde difieran, o grafica niveles (`apply`) en lugar de tasas |
+
+**La medición no decide el contenido.** Si para pasar P6 o P8 hace falta otro
+visual, más filas con hechos nuevos o un hallazgo que el guion no tenía, el
+cambio se anota en el outline (sección "Cambios posteriores al gate 1") y se
+presenta como excepción en el gate 2. Un hallazgo nuevo que cambie el argumento
+vuelve al analista antes de seguir.
 
 El SVG se escala al ancho útil de la lámina (`1280 - 2 * deck_margin`): con
 `w=1100` y margen 56, cada 10 unidades de `h` son unos 10.6 px en pantalla.
@@ -281,6 +362,10 @@ verde. Los IDs no se reciclan.
 | P9 | Contraste del texto | Razón WCAG del texto contra el fondo, mínimo 4.5 | `audit --design` | Avisa |
 | P10 | Series distinguibles con daltonismo | Distancia entre cada par de colores de serie bajo deuteranopia | `audit --design` | Avisa |
 
+P9 y P10 evalúan la marca del analista. Sin `brand/DESIGN.md` no se corren y se
+reportan `[n/a]`: la paleta neutra del tool pasa ambos por prueba del repo.
+`audit --design` con un archivo que no existe es error, no estilo neutro.
+
 ## 7. Verificación del gate 2
 
 Cuatro partes. Las dos primeras las hace el código; las otras dos, quien
@@ -294,21 +379,49 @@ python tools/deck_builder.py audit <deck.html> <modelo.xlsx> --facts <hechos.jso
 python tools/deck_builder.py measure <deck.html> --shots research/notes/shots_<fecha>
 ```
 
-`--design` solo si el archivo existe. `--report` reescribe el reporte completo
-en cada corrida: la columna de evidencia se llena sobre el de la última.
+`--design` solo si el archivo existe. Dos límites del reporte que hay que
+cubrir a mano:
 
-**Evidencia por frase.** La sección "Afirmaciones" del reporte lista cada frase
-visible del deck. Cada fila recibe evidencia: la celda del modelo (ya está en
+- `--report` reescribe el archivo completo en cada corrida y borra la columna
+  de evidencia. Se llena sobre el de la ÚLTIMA corrida, cuando el deck ya no va
+  a cambiar. Mientras se itera, la evidencia vive en un archivo de trabajo:
+  `python tools/deck_builder.py claims <deck.html> <salida.md>` da la misma
+  tabla.
+- `measure` no escribe en el reporte: P5 a P8 solo salen en consola. Al cerrar,
+  se agrega al reporte una sección "Espacio" con la salida literal de la última
+  corrida de `measure`, y P9 y P10 como `[n/a]` si no hay `brand/DESIGN.md`.
+
+**Evidencia por frase.** La sección "Afirmaciones" lista el texto corrido del
+deck (títulos, entradillas, Notas, cierres). **No lista** celdas ni encabezados
+de tabla, rótulos de las cifras de portada, ni rótulos de serie, de método o de
+paso en las gráficas: esos se revisan sobre el script y las capturas, con el
+mismo criterio. Cada frase recibe evidencia: la celda del modelo (ya está en
 "Cifras y su origen"), o el documento con su localizador. Una frase sin
 evidencia se elimina del script, se regenera el deck y se repite la corrida.
-Para iterar sin perder lo ya resuelto,
-`python tools/deck_builder.py claims <deck.html> <salida.md>` da la misma tabla
-en un archivo de trabajo. Si el runtime permite subagentes, esta parte la hace
-uno que no redactó el deck: quien escribió una frase tiende a darla por buena.
 
-Lo que el bloqueo no ve y esta pasada sí debe ver: "récord", "primero", "único",
-"siempre", fechas de eventos escritas con un año del eje, y comparaciones contra
-competidores. Llevan evidencia aunque no tengan número.
+Quien redactó una frase tiende a darla por buena. Si el runtime permite
+subagentes, esta parte la hace uno que no redactó el deck, con el deck, el
+modelo, los hechos y los documentos fuente, y la consigna de encontrar lo que no
+se sostiene, tablas y rótulos incluidos. En el dogfood, la pasada propia cambió
+tres frases y el revisor independiente encontró trece más. Sin subagentes: la
+pasada se hace igual y el reporte dice que no hubo revisor independiente.
+
+Lo que el bloqueo no ve y esta pasada sí debe ver. Llevan evidencia aunque no
+tengan número:
+
+- "récord", "primero", "único", "siempre", "cada año";
+- conteos en letra sobre el negocio ("durante cinco años": se cuenta año por
+  año en la serie);
+- fechas de eventos escritas con un año del eje;
+- comparaciones contra competidores;
+- un rótulo que renombra la fila del modelo (el deck debe decir lo mismo que la
+  etiqueta de la celda, o explicar la diferencia);
+- un título que mezcla periodos (un dato trimestral junto a uno anual);
+- "el mayor", "el principal" cuando la identidad cambia entre periodos (el
+  cliente mayor de un año no es el del siguiente);
+- moneda ambigua ("dólares" en un deck que reporta en otra moneda);
+- una cifra de un tercero que no cuadra con las demás cifras de su propia
+  fuente: se resuelve o se retira, no se presenta con reserva en letra chica.
 
 **Capturas, una por una.** `measure` en verde dice que no hay hueco ni
 encimado; no dice que la lámina se vea bien. En el dogfood hubo defectos
@@ -338,8 +451,12 @@ Sin visión en el runtime, las capturas las revisa el analista en el gate.
 
 - El bloqueo solo atrapa números. Una afirmación sin número pasa: queda para la
   evidencia por frase.
-- La evidencia la evalúa el asistente sobre texto que él mismo redactó. El
-  código garantiza que la lista está completa, no que el juicio sea correcto.
+- La evidencia la evalúa el asistente, a veces sobre texto que él mismo redactó.
+  El código lista todo el texto corrido; no lista tablas ni rótulos de gráfica,
+  y no garantiza que el juicio sea correcto.
+- El reporte de verificación no conserva la evidencia entre corridas ni incluye
+  la medición: ambos se agregan a mano al cerrar.
+- `football` no reparte sus filas en el alto: `h=` no sirve para llenar.
 - Atributos (`alt`, `title`) y la numeración de `<ol>` no se escanean.
 - Graficar hechos exige armar la `Series` a mano (`from deck_builder import
   Series`); no hay control de densidad en las tablas.

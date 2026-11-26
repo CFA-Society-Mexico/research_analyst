@@ -58,3 +58,5 @@ tono de nota de research (ver AGENTS.md §Estilo de reporte).
 | `driver-inventory` (populate) | Cuál driver es el más frágil; dónde difiere del guidance y por qué |
 | Valuación | Dónde discreparía el consenso; qué rompería la tesis |
 | `impact-triage` | ¿El trimestre confirma o erosiona la tesis? ¿Qué cambió de opinión? |
+| `research-note` (guion) | ¿El guion cuenta la tesis o recita el modelo? ¿Qué contra-argumento del journal no aparece? |
+| `research-note` (entrega) | ¿Qué frase del deck no firmaría el analista? Excepciones y capturas, una por una |
