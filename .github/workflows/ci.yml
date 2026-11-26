@@ -10,9 +10,16 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     strategy:
+      fail-fast: false
       matrix:
+        # Windows es la plataforma del analista: su consola cp1252 es la que
+        # revienta con un caracter fuera de rango (CONTRIBUTING 4.3).
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -28,9 +35,4 @@ jobs:
           mkdir -p scratch
           python tools/xlsx_builder.py demo ./scratch/demo.xlsx
       - name: Pruebas unitarias (sin red)
-        run: |
-          if [ -d tests ]; then
-            python -m unittest discover -s tests -v
-          else
-            echo "[aviso] sin carpeta tests/"
-          fi
+        run: python -m unittest discover -s tests -v

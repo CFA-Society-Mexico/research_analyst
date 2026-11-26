@@ -187,7 +187,11 @@ repo: convierte un error del modelo en un error de cumplimiento del analista.
 
 Las pruebas unitarias viven en `tests/` (`unittest` de stdlib, sin red) y la
 CI (`.github/workflows/ci.yml`) las corre en cada PR junto con la sintaxis y el
-demo, en Python 3.10 y 3.13. Falta la suite de evals (sección 8). La
+demo, en Linux y Windows (la consola cp1252 es el caso real del analista), con
+Python 3.10 y 3.13. Dos de ellas vigilan el repo, no un tool:
+`tests/test_repo_contracts.py` (versión sincronizada, toda skill y comando con
+ruta en `AGENTS.md`, rutas citadas que existen, checks F documentados =
+implementados) y `tests/test_cli_ascii.py` (consola ASCII-only, 4.3). Falta la suite de evals (sección 8). La
 verificación es esta lista, y se corre completa.
 
 Sintaxis de todos los tools:

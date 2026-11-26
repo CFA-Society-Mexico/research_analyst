@@ -54,7 +54,7 @@ Cada flecha del flujo principal lleva un gate: entrevista adaptativa + debate co
 | Árbol, naming, archivado | coverage-folders |
 | issuer-profile.yaml, citas normativas | framework-mapper |
 | Cifras capturadas + comps/*.yaml | statement-mapper |
-| industry-report.md + comp universe | industry-analysis |
+| `research/industry/industry-report_<fecha>.md` + comp universe | industry-analysis |
 | driver-map.md, assumptions, forecast-accuracy.md | driver-inventory |
 | El xlsx completo | model-standards |
 | Formato del xlsx por código (vía `tools/xlsx_builder.py`) | xlsx-building — el contenido sigue siendo de model-standards |
@@ -82,9 +82,11 @@ Cada flecha del flujo principal lleva un gate: entrevista adaptativa + debate co
 ## Multi-plataforma
 
 Núcleo portable (skills/, commands/, templates/ en markdown) + adapters delgados:
-`.claude-plugin/plugin.json` (Claude Code nativo) y `AGENTS.md` (router para
-Cursor/Codex — mínimo común denominador; si ganan soporte nativo de skills, el
-adapter se encoge y el núcleo no se toca).
+`.claude-plugin/plugin.json` (Claude Code nativo), `.codex-plugin/plugin.json`
+(Codex, apunta a `./skills`) y `AGENTS.md` (router para Cursor/Codex — mínimo
+común denominador; si ganan soporte nativo de skills, el adapter se encoge y el
+núcleo no se toca). La versión vive en los dos manifests y en el README;
+`tests/test_repo_contracts.py` falla si divergen.
 
 ## Base regulatoria
 

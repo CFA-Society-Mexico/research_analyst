@@ -50,8 +50,8 @@ paso a paso; cada paso te manda al SKILL.md correspondiente.
 
 ## Contratos (templates/)
 
-`issuer-profile.yaml` (perfil por emisora) · `macro/macro-view.yaml` (house view
-compartido, nivel workspace, con sources/ e history/) · `comp-snapshot.yaml` (un comparable) ·
+`issuer-profile.yaml` (perfil por emisora) · `macro-view.yaml` (house view
+compartido; se instancia en `<raiz>/macro/`, con sources/ e history/) · `comp-snapshot.yaml` (un comparable) ·
 `driver-map` (formato en driver-inventory) · `model-spec.md` (estructura del xlsx) ·
 `coverage-tree.md` (árbol y naming) · `debate-protocol.md` (formato del journal).
 Cada artefacto tiene UNA skill dueña que lo escribe (está declarada en cada
