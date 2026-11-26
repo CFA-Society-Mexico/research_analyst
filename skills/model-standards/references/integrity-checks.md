@@ -15,8 +15,10 @@ Los checks S, C9, C10 y C11 corren con `python tools/model_check.py <modelo.xlsx
 mismos exit codes; esa corrida encadena además los F, así que es la única que
 hace falta. Con `--recalc` recalcula antes una copia con Excel o LibreOffice
 (checks R) y entonces también evalúa los C de fórmula viva de la tab `Checks`;
-sin valores calculados los reporta `[pendiente]: SIN evaluar`. Los D son
-doctrina y los evalúa la skill dueña.
+sin valores calculados los reporta `[pendiente]: SIN evaluar`. Los tres D de
+vigencia (D3, D6, D10) salen de esa misma corrida, medidos a la fecha de hoy
+(`--as-of YYYY-MM-DD` la fija); los demás D son doctrina y los evalúa la
+skill dueña.
 
 ## Estructurales (checks S — `tools/model_check.py`)
 
@@ -55,14 +57,14 @@ doctrina y los evalúa la skill dueña.
 |---|---|---|
 | D1 | **Cobertura de drivers**: cada línea de forecast referencia un input de Assumptions | línea sin driver = flag (driver-inventory la reporta) |
 | D2 | **Reconciliación de revenue**: ruta bottom-up (schedules) vs top-down (PIB × industria × participación) | divergencia > umbral (default 10%) = flag: supuesto roto. **Solo aplica a años PLENAMENTE ESTIMADOS** (0 trimestres observados): la reconciliación contrasta dos rutas de SUPUESTOS, y un año ya ocurrido no se reconcilia contra una fórmula de PIB × prima — se observa. Detección genérica con `COUNTIF` de headers `*Q<año>A` en Operating: 4 observados ⇒ `n/a (observado)`; 1–3 ⇒ `n/a (transición)`; 0 ⇒ reconcilia de verdad. Si un año estimado diverge, ahí sí es supuesto roto |
-| D3 | **Staleness de comps**: `as_of` de cada snapshot dentro de `stale_days` | snapshot viejo = flag en Val_Comps |
+| D3 | **Staleness de comps**: `as_of` de cada snapshot dentro de `stale_days` | snapshot viejo = flag en Val_Comps. **Por código** (`tools/model_check.py`): lee `as_of` y `stale_days` (default 5) de cada `comps/*.yaml`; por comparable cuenta su snapshot más reciente; vencido o sin `as_of` = `[aviso]`, nunca bloquea. Sin snapshots: n/a |
 | D4 | **Cruce de terminales**: múltiplo implícito por Gordon y g implícita por exit multiple, ambos visibles | divergencia grande = revisar g o múltiplo con el analista |
 | D5 | **Convergencia de métodos**: si DDM/FCFE/RI activos junto a DCF, divergencia extrema entre métodos se reporta como supuesto inconsistente | nunca se "promedia" para ocultarla |
-| D6 | **Staleness de macro-view**: `updated_at` dentro de `staleness_warn_months` | aviso, no bloqueo |
+| D6 | **Staleness de macro-view**: `updated_at` dentro de `staleness_warn_months` | aviso, no bloqueo. **Por código**: `<raiz>/macro/macro-view.yaml`, `staleness_warn_months` default 3; archivo ausente o `updated_at` vacío = `[aviso]` |
 | D7 | **Monitor NIF B-10**: si emisora NIF y acumulado trienal en macro-view ≥ 22%, exigir escenario de reconexión pre-modelado | ver framework-mapper reference |
 | D8 | Etiquetas de trazabilidad presentes: inputs con comentario de fuente (observado) o marca guidance/supuesto | muestreo por tab |
 | D9 | **Calidad de utilidades**: CFO/NI < 1 en ≥ 2 periodos consecutivos, o accruals ratio fuera de la banda histórica de la emisora | aviso, no bloqueo; material de entrevista |
-| D10 | **Staleness de industry-report**: fecha del reporte más reciente en `research/industry/` dentro de `industry_staleness_months` (issuer-profile, default 6) | aviso, no bloqueo — recomendar `/update-industry` |
+| D10 | **Staleness de industry-report**: fecha del reporte más reciente en `research/industry/` dentro de `industry_staleness_months` (issuer-profile, default 6) | aviso, no bloqueo — recomendar `/update-industry`. **Por código**: fecha del nombre `industry-report_YYYY-MM-DD.md` más reciente; sin reporte = `[aviso]` |
 | D4b | **g implícita de mercado** (reverse DCF en Val_DCF) vs g terminal del analista | divergencia grande = pregunta obligada en entrevista de cierre; nunca bloquea. Si la g implícita sale como texto (`ninguna g < WACC reproduce el TV`), eso ES la lectura: el mercado paga más de lo que cualquier perpetuidad por debajo del WACC justifica con ese RONIC |
 | D11 | **Terminal Gordon vs comps**: múltiplo implícito del TV Gordon (TV ÷ EBITDA_n) contra la mediana de comps | **Bloquea** (fórmula viva en `Checks`, `terminal_multiple_alarm_formula`): por debajo de `TV_MULT_FLOOR` × mediana (constante con nombre en Assumptions, default 0.5) marca `Error`. Un terminal a la mitad del múltiplo de mercado casi siempre perpetúa capex de crecimiento (TSMC: 2.7x contra 20.6x) — usar el flujo terminal normalizado, no `FCFF_n`. Caso legítimo (emisora en declive estructural frente a comps en crecimiento): el analista baja `TV_MULT_FLOOR` y deja el racional en `journal/decisions.md`; sin comps numéricos el check da `n/a` |
 | D12 | **Rango de cordura de múltiplos de comps**: EV/EBITDA de cada comparable dentro de `COMP_MULT_MIN`–`COMP_MULT_MAX` (constantes con nombre, default 2x–60x) | **Aviso, no bloqueo** (`multiple_range_flag_formula`): fuera de rango marca `REVISAR` en la fila del comparable. Casi siempre es un error de unidades o de moneda (precio por ADS × acciones ordinarias; market cap en USD contra deuda en moneda local), no una oportunidad. El múltiplo no se excluye solo: el analista corrige el snapshot o confirma el dato |
@@ -135,3 +137,9 @@ escribe con `ModelStyler.check_result(ws, row, col, resultado, note=..., compute
 — el builder rechaza el literal sin `computed_at` y sin `note`, y deja la
 fecha de cálculo en la celda contigua para que el lector sepa cuándo dejó de
 ser verdad.
+
+Lo estampado al construir envejece con el libro. Por eso D3, D6 y D10 se
+vuelven a medir en cada corrida de `tools/model_check.py`, contra el árbol de
+cobertura y a la fecha de la corrida: el veredicto vigente es el del reporte,
+no el de la celda. Fuera de un árbol de cobertura (sin `issuer-profile.yaml`
+en la carpeta padre de `model/`) los tres son n/a.

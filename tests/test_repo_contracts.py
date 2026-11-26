@@ -22,6 +22,9 @@ BUILDER = ROOT / "tools" / "xlsx_builder.py"
 CHECKER = ROOT / "tools" / "model_check.py"
 # Checks C que son escaneo por codigo (el resto son formulas de la tab Checks).
 SCANNED_C_CHECKS = {"C9", "C10", "C11"}
+# Checks D que son escaneo por codigo: los de vigencia. El resto de los D son
+# doctrina y los evalua la skill duena.
+SCANNED_D_CHECKS = {"D3", "D6", "D10"}
 
 # Documentos cuyas rutas citadas deben existir en el repo.
 ROUTED_DOCS = ("AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/architecture.md")
@@ -141,6 +144,13 @@ class IntegrityCheckTests(unittest.TestCase):
         self.assertEqual(emitted - SCANNED_C_CHECKS, documented,
                          "checks S documentados vs emitidos por tools/model_check.py")
         self.assertLessEqual(SCANNED_C_CHECKS, emitted, "check C de escaneo sin implementar")
+
+    def test_scanned_d_checks_are_documented_and_emitted(self) -> None:
+        documented = {i for i in _CHECK_ROW.findall(CHECKS_DOC.read_text(encoding="utf-8"))
+                      if i.startswith("D")}
+        emitted = set(re.findall(r'"(D\d+) ', CHECKER.read_text(encoding="utf-8")))
+        self.assertEqual(emitted, SCANNED_D_CHECKS, "checks D emitidos por tools/model_check.py")
+        self.assertLessEqual(emitted, documented, "check D emitido sin fila en integrity-checks")
 
 
 if __name__ == "__main__":

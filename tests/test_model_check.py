@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from copy import copy
+from datetime import date
 from pathlib import Path
 from typing import Callable
 
@@ -527,6 +528,132 @@ class CaptureCheckTests(_DemoCase):
             self.assertTrue(finding.detail.isascii(), finding.detail)
 
 
+class StalenessTests(unittest.TestCase):
+    """D3, D6 y D10: vigencia de comps, macro-view e industry-report a una fecha."""
+
+    TODAY = date(2026, 11, 25)
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.ticker = self.root / "TICK"
+        for folder in ("comps", "model", "research/industry"):
+            (self.ticker / folder).mkdir(parents=True)
+        (self.root / "macro").mkdir()
+        self.model = self.ticker / "model" / "tick-model_2026-11-20_v1.xlsx"
+        # Arbol vigente a TODAY; cada prueba envejece UNA pieza.
+        self._profile("industry_staleness_months: 6\n")
+        self._comp("MSFT.yaml", "2026-11-23")
+        self._macro('updated_at: "2026-10-01"\nstaleness_warn_months: 3\n')
+        self._report("2026-08-30")
+
+    def _profile(self, text: str) -> None:
+        (self.ticker / "issuer-profile.yaml").write_text(text, encoding="utf-8")
+
+    def _comp(self, name: str, as_of: str | None, stale_days: int | None = 5) -> None:
+        lines = ['ticker: "%s"' % name.split(".")[0].split("_")[0]]
+        if as_of is not None:
+            lines.append(f'as_of: "{as_of}"   # los precios envejecen')
+        if stale_days is not None:
+            lines.append(f"stale_days: {stale_days}")
+        (self.ticker / "comps" / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _macro(self, text: str) -> None:
+        (self.root / "macro" / "macro-view.yaml").write_text(text, encoding="utf-8")
+
+    def _report(self, day: str) -> None:
+        (self.ticker / "research" / "industry" / f"industry-report_{day}.md").write_text(
+            "# reporte\n", encoding="utf-8")
+
+    def _checks(self, today: date | None = None) -> dict[str, B.Finding]:
+        tree = M.coverage_tree(self.model, None)
+        return {f.check.split()[0]: f for f in M.audit_staleness(tree, today or self.TODAY)}
+
+    def assertWarns(self, finding: B.Finding, *fragments: str) -> None:
+        self.assertFalse(finding.ok, finding.detail)
+        self.assertTrue(finding.warning, finding.detail)
+        self.assertFalse(finding.blocking)            # la vigencia avisa, no bloquea
+        for fragment in fragments:
+            self.assertIn(fragment, finding.detail)
+
+    def test_fresh_coverage_is_green_on_the_three_checks(self) -> None:
+        found = self._checks()
+        self.assertEqual(sorted(found), ["D10", "D3", "D6"])
+        for check_id, finding in found.items():
+            with self.subTest(check=check_id):
+                self.assertTrue(finding.ok, finding.detail)
+                self.assertIn("2026-11-25", finding.detail)   # la fecha de referencia se nombra
+
+    def test_d3_snapshot_older_than_its_stale_days_warns(self) -> None:
+        self._comp("GOOGL.yaml", "2026-08-31 11:05 KST")       # fecha con hora y zona
+        self.assertWarns(self._checks()["D3"], "1 de 2", "GOOGL (86 dias, limite 5)")
+
+    def test_d3_honours_the_stale_days_of_each_snapshot(self) -> None:
+        self._comp("GOOGL.yaml", "2026-08-31", stale_days=120)
+        self.assertTrue(self._checks()["D3"].ok)
+        self._comp("META.yaml", "2026-11-15", stale_days=None)  # sin campo: default 5
+        self.assertWarns(self._checks()["D3"], "META (10 dias, limite 5)")
+
+    def test_d3_latest_snapshot_of_a_comparable_is_the_one_that_counts(self) -> None:
+        self._comp("GOOGL_2026-08-01.yaml", "2026-08-01")
+        self._comp("GOOGL_2026-11-24.yaml", "2026-11-24")
+        finding = self._checks()["D3"]
+        self.assertTrue(finding.ok, finding.detail)
+        self.assertIn("2 snapshots vigentes", finding.detail)   # MSFT y GOOGL, no tres
+
+    def test_d3_snapshot_without_a_readable_as_of_warns(self) -> None:
+        self._comp("SONY.yaml", None)
+        self.assertWarns(self._checks()["D3"], "SONY (sin as_of)")
+
+    def test_d3_without_snapshots_does_not_apply(self) -> None:
+        (self.ticker / "comps" / "MSFT.yaml").unlink()
+        finding = self._checks()["D3"]
+        self.assertTrue(finding.ok)
+        self.assertIn("n/a", finding.detail)
+
+    def test_d6_macro_view_goes_stale_the_day_after_its_window(self) -> None:
+        self._macro('updated_at: "2026-08-25"\nstaleness_warn_months: 3\n')
+        self.assertTrue(self._checks(date(2026, 11, 25))["D6"].ok)      # dia 0 del limite
+        self.assertWarns(self._checks(date(2026, 11, 26))["D6"], "2026-08-25", "3 meses")
+
+    def test_d6_missing_or_undated_macro_view_warns(self) -> None:
+        self._macro('updated_at: ""\nstaleness_warn_months: 3\n')
+        self.assertWarns(self._checks()["D6"], "updated_at")
+        (self.root / "macro" / "macro-view.yaml").unlink()
+        self.assertWarns(self._checks()["D6"], "macro-view.yaml")
+
+    def test_d10_uses_the_latest_report_and_the_profile_window(self) -> None:
+        self._report("2026-03-01")                               # uno viejo no cuenta
+        self.assertTrue(self._checks()["D10"].ok)
+        self._profile("industry_staleness_months: 2\n")
+        self.assertWarns(self._checks()["D10"], "2026-08-30", "2 meses", "/update-industry")
+
+    def test_d10_without_profile_field_uses_six_months(self) -> None:
+        self._profile("issuer: TICK\n")
+        self.assertTrue(self._checks(date(2027, 2, 28))["D10"].ok)       # 30-ago + 6m = 28-feb
+        self.assertWarns(self._checks(date(2027, 3, 1))["D10"], "6 meses")
+
+    def test_d10_without_any_report_warns(self) -> None:
+        (self.ticker / "research" / "industry" / "industry-report_2026-08-30.md").unlink()
+        self.assertWarns(self._checks()["D10"], "sin industry-report")
+
+    def test_model_outside_a_coverage_tree_does_not_apply(self) -> None:
+        loose = self.root / "suelto" / "modelo.xlsx"
+        self.assertIsNone(M.coverage_tree(loose, None))
+        found = M.audit_staleness(None, self.TODAY)
+        self.assertEqual(len(found), 3)
+        for finding in found:
+            self.assertTrue(finding.ok)
+            self.assertIn("n/a", finding.detail)
+
+    def test_details_are_ascii(self) -> None:
+        self._comp("GOOGL.yaml", "2026-08-31")
+        self._profile("industry_staleness_months: 1\n")
+        for finding in self._checks().values():
+            self.assertTrue(finding.detail.isascii(), finding.detail)
+
+
 class DriverMapTests(unittest.TestCase):
 
     def test_schedule_blocks_are_read_from_the_bloque_column(self) -> None:
@@ -609,6 +736,32 @@ class CliTests(_DemoCase):
         c9 = groups["Contables por escaneo (C)"][0]
         self.assertTrue(c9.check.startswith("C9 "))
         self.assertTrue(c9.ok, c9.detail)
+
+    def test_staleness_checks_run_in_the_single_report(self) -> None:
+        _, out = self._run(str(self.demo))                # el demo no vive en una cobertura
+        for check_id in ("D3", "D6", "D10"):
+            self.assertIn(f"[ok] {check_id} ", out)
+
+    def test_stale_coverage_is_a_warning_that_does_not_change_the_exit_code(self) -> None:
+        ticker = self.dir / "raiz" / "TICK"
+        model = ticker / "model" / VERSIONED
+        with contextlib.redirect_stdout(io.StringIO()):
+            B._demo(str(model))
+        (ticker / "issuer-profile.yaml").write_text("industry_staleness_months: 6\n",
+                                                    encoding="utf-8")
+        (ticker / "comps").mkdir()
+        (ticker / "comps" / "MSFT.yaml").write_text('as_of: "2026-08-28"\nstale_days: 5\n',
+                                                    encoding="utf-8")
+        code, out = self._run(str(model), "--as-of", "2026-11-25")
+        self.assertEqual(code, 3)                         # solo queda el pendiente de S10
+        self.assertIn("[aviso] D3", out)
+        self.assertIn("MSFT (89 dias, limite 5)", out)
+        self.assertIn("[aviso] D6", out)                  # sin macro-view en la raiz
+        self.assertIn("[aviso] D10", out)                 # sin industry-report
+
+    def test_invalid_as_of_date_is_rejected_by_the_cli(self) -> None:
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            M.main(["model_check.py", str(self.demo), "--as-of", "25/11/2026"])
 
     def test_missing_file_is_reported_without_traceback(self) -> None:
         code, out = self._run(str(self.dir / "no-existe.xlsx"))
