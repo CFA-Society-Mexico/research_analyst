@@ -286,6 +286,90 @@ class ProfileTests(_Coverage):
         self.assertTrue(finding.detail.isascii(), finding.detail)
 
 
+@unittest.skipIf(K.yaml is None, "PyYAML no instalado")
+class MacroTests(_Coverage):
+
+    def test_macro_view_without_date_fails(self) -> None:
+        self._write("macro/macro-view.yaml", MACRO_OK.replace('"2026-10-01"', '""'))
+        self.assertFails(self._checks()["K3"], "updated_at vacio o sin fecha")
+
+    def test_missing_macro_view_warns(self) -> None:
+        (self.root / "macro" / "macro-view.yaml").unlink()
+        self.assertWarns(self._checks()["K3"], "sin macro-view.yaml")
+
+    def test_unknown_field_and_bad_window(self) -> None:
+        self._write("macro/macro-view.yaml", MACRO_OK + 'gate_status: "propuesta"\n')
+        self.assertWarns(self._checks()["K3"], "campo desconocido: gate_status")
+        self._write("macro/macro-view.yaml",
+                    MACRO_OK.replace("staleness_warn_months: 3", "staleness_warn_months: 0"))
+        self.assertFails(self._checks()["K3"], "staleness_warn_months")
+
+
+@unittest.skipIf(K.yaml is None, "PyYAML no instalado")
+class CompTests(_Coverage):
+
+    def _k4(self, text: str | None = None, name: str = "MSFT.yaml") -> Finding:
+        if text is not None:
+            self._write(f"TICK/comps/{name}", text)
+        return self._checks()["K4"]
+
+    @staticmethod
+    def _without(text: str, *keys: str) -> str:
+        return "".join(line for line in text.splitlines(keepends=True)
+                       if not line.strip().startswith(tuple(f"{k}:" for k in keys)))
+
+    def test_missing_mandatory_market_fields_are_named(self) -> None:
+        text = self._without(COMP_OK, "price_currency", "shares_per_ads", "fx_to_reporting")
+        self.assertFails(self._k4(text), "MSFT.yaml",
+                         "market_data sin price_currency, shares_per_ads, fx_to_reporting")
+
+    def test_old_currency_key_is_reported_as_unknown(self) -> None:
+        text = COMP_OK.replace('  price_currency: "USD"',
+                               '  price_currency: "USD"\n  currency: "USD"')
+        self.assertWarns(self._k4(text), "campo desconocido: market_data.currency")
+
+    def test_price_currency_must_be_iso_4217(self) -> None:
+        self.assertFails(self._k4(COMP_OK.replace('price_currency: "USD"', 'price_currency: "usd"')),
+                         "price_currency no es ISO 4217")
+
+    def test_captured_datum_needs_value_and_source(self) -> None:
+        no_source = COMP_OK.replace('{value: 410.5, label: observado, source: "cierre 2026-11-23"}',
+                                    "{value: 410.5, label: observado}")
+        self.assertFails(self._k4(no_source), "market_data.price sin source")
+        no_value = COMP_OK.replace("{value: 60000, label: observado", "{value: n/d, label: observado")
+        self.assertFails(self._k4(no_value), "balance_items.total_debt sin value numerico")
+
+    def test_fx_needs_its_as_of(self) -> None:
+        text = COMP_OK.replace('{value: 1, source: "misma moneda", as_of: "2026-11-23"}',
+                               '{value: 1, source: "misma moneda"}')
+        self.assertFails(self._k4(text), "market_data.fx_to_reporting sin as_of")
+
+    def test_snapshot_needs_ticker_and_dated_as_of(self) -> None:
+        self.assertFails(self._k4(COMP_OK.replace('as_of: "2026-11-23 16:00 EST"', 'as_of: ""')),
+                         "as_of sin fecha")
+
+    def test_foreign_framework_warns(self) -> None:
+        self.assertWarns(self._k4(COMP_OK.replace('framework: "us_gaap"', 'framework: "k_ifrs"')),
+                         "framework", "k_ifrs")
+
+    def test_only_the_latest_snapshot_of_a_comparable_is_checked(self) -> None:
+        old = self._without(COMP_OK, "price_currency").replace("2026-11-23 16:00 EST", "2026-08-01")
+        self._write("TICK/comps/MSFT_2026-08-01.yaml", old)   # historia: incompleto, no cuenta
+        finding = self._k4()
+        self.assertTrue(finding.ok, finding.detail)
+        self.assertIn("1 snapshots vigentes", finding.detail)
+
+    def test_coverage_without_comps_does_not_apply(self) -> None:
+        (self.coverage / "comps" / "MSFT.yaml").unlink()
+        finding = self._k4()
+        self.assertTrue(finding.ok)
+        self.assertIn("n/a", finding.detail)
+
+    def test_empty_optional_datum_is_not_a_finding(self) -> None:
+        finding = self._k4()                                   # preferred_equity: {}
+        self.assertTrue(finding.ok, finding.detail)
+
+
 class WithoutPyYamlTests(_Coverage):
 
     def test_yaml_checks_are_pending_and_csv_still_runs(self) -> None:

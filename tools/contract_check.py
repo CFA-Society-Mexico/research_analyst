@@ -88,6 +88,23 @@ PROFILE_KEYS = frozenset(PROFILE_REQUIRED + PROFILE_CONFIRMATIONS + PROFILE_POSI
     "valuation_methods", "materiality", "retention_note", "sources"))
 
 
+MACRO_KEYS = frozenset({"updated_at", "owner", "staleness_warn_months", "rates", "fx",
+                        "inflation", "gdp", "commodity_decks", "equity_risk_premium", "notes"})
+
+COMP_KEYS = frozenset({"ticker", "name", "selected_because", "as_of", "stale_days",
+                       "market_data", "balance_items", "income_items", "framework",
+                       "comparability_notes"})
+COMP_MARKET_REQUIRED = ("price", "price_currency", "shares_per_ads", "fx_to_reporting",
+                        "shares_outstanding")
+COMP_MARKET_KEYS = frozenset(COMP_MARKET_REQUIRED + ("market_cap",))
+# Datos de mercado con forma {value, source}; price_currency es un texto.
+COMP_MARKET_DATA = ("price", "shares_per_ads", "fx_to_reporting", "shares_outstanding",
+                    "market_cap")
+COMP_FRAMEWORKS = ("ifrs", "us_gaap", "nif")
+_ISO_4217 = re.compile(r"[A-Z]{3}")
+_DATED_SUFFIX = re.compile(r"_\d{4}-\d{2}-\d{2}$")
+
+
 _ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 _EXAMPLES = 6
 
@@ -310,12 +327,108 @@ def check_profile(profile: Loaded | None) -> Finding:
 
 
 def check_macro(macro: Loaded | None) -> Finding:
-    if macro is not None and macro.data is None:
+    """K3: macro/macro-view.yaml cumple su contrato."""
+    if macro is None:
+        return Finding(K3, False, "sin macro-view.yaml en la carpeta macro/ del workspace",
+                       warning=True)
+    if macro.data is None:
         return _unparsed(K3)
-    return Finding(K3, True, "n/a (reglas en la Task 4)")
+    data, problems = macro.data, Problems()
+    if _date_of(data.get("updated_at")) is None:
+        problems.hard.append("updated_at vacio o sin fecha")
+    if "staleness_warn_months" in data and not _positive_int(data["staleness_warn_months"]):
+        problems.hard.append("staleness_warn_months debe ser un entero > 0")
+    problems.soft += _unknown_fields(data, MACRO_KEYS)
+    return problems.finding(K3, "updated_at y plazo en orden")
+
+
+def _empty_datum(value: object) -> bool:
+    """Dato no capturado: ausente, texto vacio o ``{}``."""
+    return _blank(value) or value == {}
+
+
+def _datum_problem(name: str, value: object) -> str | None:
+    """Un dato capturado lleva ``value`` numerico y ``source``."""
+    if not isinstance(value, dict):
+        return f"{name} no es {{value, source}}"
+    if not _is_number(value.get("value")):
+        return f"{name} sin value numerico"
+    if _blank(value.get("source")):
+        return f"{name} sin source"
+    return None
+
+
+def _snapshot_problems(data: dict[str, Any]) -> tuple[list[str], list[str]]:
+    hard: list[str] = []
+    soft: list[str] = []
+    if _blank(data.get("ticker")):
+        hard.append("ticker vacio")
+    if _date_of(data.get("as_of")) is None:
+        hard.append("as_of sin fecha")
+    if "stale_days" in data and not _positive_int(data["stale_days"]):
+        hard.append("stale_days debe ser un entero > 0")
+    market = data.get("market_data")
+    if not isinstance(market, dict):
+        hard.append("sin market_data")
+        market = {}
+    else:
+        missing = [key for key in COMP_MARKET_REQUIRED if _empty_datum(market.get(key))]
+        if missing:
+            hard.append("market_data sin " + ", ".join(missing))
+        currency = market.get("price_currency")
+        if not _blank(currency) and not _ISO_4217.fullmatch(str(currency)):
+            hard.append("price_currency no es ISO 4217 (tres letras mayusculas)")
+        for key in COMP_MARKET_DATA:
+            if not _empty_datum(market.get(key)):
+                problem = _datum_problem(f"market_data.{key}", market[key])
+                if problem:
+                    hard.append(problem)
+        fx = market.get("fx_to_reporting")
+        if isinstance(fx, dict) and fx and _blank(fx.get("as_of")):
+            hard.append("market_data.fx_to_reporting sin as_of")
+        soft += _unknown_fields(market, COMP_MARKET_KEYS, prefix="market_data.")
+    for section in ("balance_items", "income_items"):
+        for key, value in (data.get(section) or {}).items():
+            if key == "period" or _empty_datum(value):
+                continue
+            problem = _datum_problem(f"{section}.{key}", value)
+            if problem:
+                hard.append(problem)
+    framework = data.get("framework")
+    if not _blank(framework) and framework not in COMP_FRAMEWORKS:
+        soft.append(f"framework {framework!r} fuera de ({', '.join(COMP_FRAMEWORKS)})")
+    soft += _unknown_fields(data, COMP_KEYS)
+    return hard, soft
+
+
+def _current_snapshots(comps: Sequence[Loaded]) -> list[Loaded]:
+    """El snapshot vigente de cada comparable: el de ``as_of`` mas reciente
+    (mismo criterio que D3). Los anteriores son historia y no se validan."""
+    latest: dict[str, tuple[date, Loaded]] = {}
+    for item in comps:
+        if item.data is None:
+            continue
+        key = str(item.data.get("ticker") or _DATED_SUFFIX.sub("", item.path.stem))
+        as_of = _date_of(item.data.get("as_of")) or date.min
+        if key not in latest or as_of > latest[key][0]:
+            latest[key] = (as_of, item)
+    return [item for _, item in sorted(latest.values(), key=lambda pair: pair[1].path.name)]
 
 
 def check_comps(comps: Sequence[Loaded]) -> Finding:
-    return Finding(K4, True, "n/a (reglas en la Task 4)")
+    """K4: el snapshot vigente de cada comparable cumple su contrato."""
+    if not comps:
+        return Finding(K4, True, "n/a (sin snapshots en comps/)")
+    current = _current_snapshots(comps)
+    if not current:
+        return _unparsed(K4)
+    problems = Problems()
+    for item in current:
+        hard, soft = _snapshot_problems(item.data or {})
+        if hard:
+            problems.hard.append(f"{item.path.name}: " + ", ".join(hard))
+        if soft:
+            problems.soft.append(f"{item.path.name}: " + ", ".join(soft))
+    return problems.finding(K4, f"{len(current)} snapshots vigentes completos")
 
 
