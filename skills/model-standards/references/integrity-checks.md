@@ -10,7 +10,7 @@ alguna falla; exit 3 = sin fallas pero con checks `[pendiente]` (no se pudieron
 evaluar, p. ej. libro sin valores calculados). Un pendiente NUNCA se reporta
 como verde.
 
-Los checks S y el C10 corren con `python tools/model_check.py <modelo.xlsx>
+Los checks S, C9 y C10 corren con `python tools/model_check.py <modelo.xlsx>
 [--driver-map driver-map.md] [--brand brand/DESIGN.md]` — misma doctrina y
 mismos exit codes; esa corrida encadena además los F, así que es la única que
 hace falta. Con `--recalc` recalcula antes una copia con Excel o LibreOffice
@@ -46,7 +46,7 @@ doctrina y los evalúa la skill dueña.
 | C7 | CCC del forecast consistente con schedule de WC | Ratios (forecast) vs días DIO/DSO/DPO del bloque `Sch: WC` |
 | C8 | Agregado anual estructural (modo `quarterly`) | La hoja `Annual` es 100% fórmulas: cada FY del tramo trimestral agrega los 4 trimestres de `Operating` (flujos = Σ4Q; stocks = 4Q; ratios recalculados); pre-corte, links a canonical_annual. Un número tecleado en `Annual` = falla (F14 lo detecta por fill de input) |
 | C10 | **Desfase del roll de caja** | Escaneo de fórmulas (`tools/model_check.py`; (i) y (ii) por código, (iii) lo cubre F18 porque violarlo es un ciclo): (i) cada celda de "Efectivo al inicio" referencia la celda de CIERRE de la columna previa; (ii) cada celda de caja del BS referencia el cierre del CF de su misma columna; (iii) rendimientos/intereses referencian saldos de la columna PREVIA. Una referencia a cierre de la misma columna en (iii) = ciclo = falla |
-| C9 | Histórico del xlsx = capa de captura | Escaneo por código: celdas históricas de IS/BS/CF coinciden con `model/inputs/canonical_annual.csv` (y `canonical_quarterly.csv` si aplica), tolerancia de redondeo; discrepancia = falla de captura o edición manual del histórico. **Sin implementación única todavía**: falta el contrato `line_item` ↔ fila del modelo; hoy lo corre el script de build de cada cobertura |
+| C9 | Histórico del xlsx = capa de captura | Escaneo por código (`tools/model_check.py`). **Qué mira:** toda cifra histórica TECLEADA (número, no fórmula) en columnas `A` de `Operating`/`Annual`/`Model`, fuera de la sección Assumptions. **Contra qué:** `model/inputs/canonical_quarterly.csv` (hoja trimestral) o `canonical_annual.csv` (hoja anual). **Vínculo:** el builder lo declara con `link_capture(ws, fila, line_item, scale)` — nombre definido `CAPTURE.<line_item>` con alcance de hoja y la escala en su comentario (`valor_csv = valor_xlsx × scale`); Excel ajusta el rango si alguien inserta filas. **Divergencia** en una fila vinculada = falla SIEMPRE, sin umbral (tolerancia relativa 1e-6: el histórico se escribe sin redondear). **Sin respaldo** (fila sin vínculo, o periodo ausente en el CSV; `tag = guidance` no respalda) = falla si la cifra pesa más de `materiality.capture_unlinked_pct` (issuer-profile, default 0.5%) de la MENOR entre ventas (`is_ns_total`) y activos totales (`bs_ta`) del periodo; bajo el umbral = `[aviso]`, se lista siempre. Sin referencia para medir = falla. Sin carpeta de captura = falla (con `--external`: n/a) |
 
 ## De contenido (doctrina del plugin)
 

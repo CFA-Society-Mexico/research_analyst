@@ -56,7 +56,7 @@ Falta un contrato → detente y repórtalo; no construyas parcial ni inventes el
    perpetuado), la tab Sensitivity es una cuadrícula con fórmula por celda y
    el market cap de cada comparable convierte ADS y moneda: todo con los
    bloques del builder (xlsx-building 3d), no con fórmulas propias.
-6. Corre TODOS los checks de `references/integrity-checks.md`: los S, el C10 y
+6. Corre TODOS los checks de `references/integrity-checks.md`: los S, C9, C10 y
    los F por código, con recálculo real (`python tools/model_check.py <modelo>
    --driver-map driver-map.md --recalc`, exit 0 exigido — nunca con un script
    propio): eso agrega R1/R2 y evalúa los C de fórmula viva. Más los D.

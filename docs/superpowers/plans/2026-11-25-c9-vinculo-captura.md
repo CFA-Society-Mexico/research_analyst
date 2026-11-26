@@ -1234,6 +1234,22 @@ Si hay un intérprete 3.10–3.13 con `openpyxl`: correr la suite ahí. Si no lo
 
 ---
 
+## Desviaciones al ejecutar (2026-11-25)
+
+- **Rebase a media ejecución.** Entre las tareas 4 y 5, `main` recibió el PR 45
+  (check F21, `recalc_validate.py`, `--recalc`). La rama se rebasó ahí; los dos
+  conflictos fueron de imports.
+- **Tarea 4 absorbió el cambio de `SCANNED_C_CHECKS`.** El plan lo ponía en la
+  tarea 5, pero la prueba de contrato falla en cuanto C9 se emite: va en el
+  mismo commit, para que cada commit quede en verde.
+- **Tarea 5: `CaptureOptions`.** Con `--recalc`, `model_check.py` audita una
+  copia en un directorio temporal. C9 resuelve `inputs/` y el perfil sobre la
+  ruta ORIGINAL del modelo y los pasa a `audit_groups(..., capture=...)`. Sin
+  esto, todo modelo recalculado habría fallado por "sin capa de captura".
+- **Tarea 6.** Dos anclas de texto cambiaron con el PR 45
+  (`commands/model-check.md` y `skills/model-standards/SKILL.md`); el
+  contenido nuevo es el mismo.
+
 ## Fuera de este plan
 
 - **Migración de AAPL a v5** (spec D6): se hace en el workspace de la cobertura, después de fusionar, con decisión del analista fila por fila para las 4 filas de "Otros" y las 3 semillas de apertura.

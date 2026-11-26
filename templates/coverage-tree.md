@@ -104,10 +104,26 @@ decisión explícita en gate.
 Los CSV canónicos son el CONTRATO máquina entre statement-mapper y
 model-standards; los `extract_*.json` son papeles de trabajo (citas por cifra:
 documento, página/nota, fecha). Columnas mínimas de los CSV: `line_item`,
-`period`, `value`, `source_doc`, `source_ref`, `tag` (observado/guidance).
-El histórico del xlsx se puebla DESDE los canónicos — check C9 verifica que
-coincidan. Regenerables desde los JSON; los JSON, desde los filings. Nada se
-teclea dos veces.
+`period`, `value`, `source_doc`, `source_ref`, `tag` (observado / derivado /
+guidance). `period` es `3Q2016` en el trimestral y `FY2016` en el anual.
+El histórico del xlsx se puebla DESDE los canónicos — check C9 verifica por
+código que coincidan. Regenerables desde los JSON; los JSON, desde los
+filings. Nada se teclea dos veces.
+
+Reglas que C9 exige de esta capa:
+
+- **`derivado`**: un subtotal o residual que el modelo necesita como cifra
+  (el 4Q = FY − 3Q; "otros activos" = total − partidas) entra al CSV con
+  `tag = derivado` y su fórmula en `source_ref`. No se calcula en el script
+  de build: una cifra que no está en el CSV no tiene respaldo.
+- **`guidance`** no respalda una cifra histórica.
+- **Líneas reservadas**: `is_ns_total` (ventas) y `bs_ta` (activos totales).
+  Son la referencia de materialidad de C9; sin ellas en el CSV y vinculadas
+  en el modelo, toda cifra sin respaldo falla.
+- **Unidades**: el CSV guarda la unidad de la fuente. El modelo declara la
+  suya en cada vínculo (`link_capture(..., scale=1_000_000)`):
+  `valor_csv = valor_xlsx × scale`. El histórico se escribe sin redondear;
+  el formato de celda redondea la vista.
 
 ### Migración desde el árbol v1 (coberturas existentes)
 

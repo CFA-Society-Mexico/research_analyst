@@ -58,6 +58,10 @@ materiality:
   critical_pct_target_price: 10   # hallazgo mueve precio objetivo >= X% -> crítico
   relevant_pct_target_price: 3    # entre relevant y critical -> relevante
                                   # debajo -> cosmético; el analista puede reclasificar
+  capture_unlinked_pct: 0.5       # check C9: cifra histórica SIN respaldo en la capa de
+                                  # captura que pese más de X% de min(ventas, activos
+                                  # totales) del periodo -> falla; debajo -> aviso.
+                                  # Opcional: ausente = 0.5
 
 # --- Cumplimiento ------------------------------------------------------------
 mnpi_confirmed_public: false  # usuario confirmó que folders contienen solo info pública
