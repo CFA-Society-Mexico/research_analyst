@@ -101,6 +101,13 @@ COMP_MARKET_KEYS = frozenset(COMP_MARKET_REQUIRED + ("market_cap",))
 COMP_MARKET_DATA = ("price", "shares_per_ads", "fx_to_reporting", "shares_outstanding",
                     "market_cap")
 COMP_FRAMEWORKS = ("ifrs", "us_gaap", "nif")
+# Datos {value, source} de cada seccion, y sus campos de texto.
+COMP_SECTION_DATA = {
+    "balance_items": ("total_debt", "cash_and_equivalents", "minority_interest",
+                      "preferred_equity", "book_value_equity"),
+    "income_items": ("revenue", "ebitda", "ebit", "net_income", "eps_diluted"),
+}
+COMP_SECTION_TEXT = {"balance_items": (), "income_items": ("period",)}
 _ISO_4217 = re.compile(r"[A-Z]{3}")
 _DATED_SUFFIX = re.compile(r"_\d{4}-\d{2}-\d{2}$")
 
@@ -309,7 +316,9 @@ def check_profile(profile: Loaded | None) -> Finding:
         problems.hard.append("as_of sin fecha YYYY-MM-DD")
     fiscal_year_end = data.get("fiscal_year_end")
     if not _blank(fiscal_year_end) and not re.fullmatch(r"\d{2}-\d{2}", str(fiscal_year_end)):
-        problems.hard.append("fiscal_year_end no es MM-DD")
+        # Aviso y no falla: un anio fiscal de 52/53 semanas ("ultimo sabado de
+        # septiembre") es legitimo y no cabe en MM-DD.
+        problems.soft.append(f"fiscal_year_end no es MM-DD ({fiscal_year_end})")
     problems.hard += [f"{key} no esta en true (falta la confirmacion del analista)"
                       for key in PROFILE_CONFIRMATIONS if data.get(key) is not True]
     if "adr" in data and not isinstance(data["adr"], bool):
@@ -387,13 +396,20 @@ def _snapshot_problems(data: dict[str, Any]) -> tuple[list[str], list[str]]:
         if isinstance(fx, dict) and fx and _blank(fx.get("as_of")):
             hard.append("market_data.fx_to_reporting sin as_of")
         soft += _unknown_fields(market, COMP_MARKET_KEYS, prefix="market_data.")
-    for section in ("balance_items", "income_items"):
-        for key, value in (data.get(section) or {}).items():
-            if key == "period" or _empty_datum(value):
-                continue
-            problem = _datum_problem(f"{section}.{key}", value)
-            if problem:
-                hard.append(problem)
+    for section, data_keys in COMP_SECTION_DATA.items():
+        content = data.get(section) or {}
+        if not isinstance(content, dict):
+            hard.append(f"{section} no es un mapa de campos")
+            continue
+        for key in data_keys:
+            if not _empty_datum(content.get(key)):
+                problem = _datum_problem(f"{section}.{key}", content[key])
+                if problem:
+                    hard.append(problem)
+        # Un campo de texto que el contrato no conoce (p. ej. `currency`) no es
+        # un dato roto: se avisa como desconocido.
+        known = frozenset(data_keys + COMP_SECTION_TEXT[section])
+        soft += _unknown_fields(content, known, prefix=f"{section}.")
     framework = data.get("framework")
     if not _blank(framework) and framework not in COMP_FRAMEWORKS:
         soft.append(f"framework {framework!r} fuera de ({', '.join(COMP_FRAMEWORKS)})")

@@ -1428,6 +1428,24 @@ Expected: `OK` en todos.
 
 ---
 
+## Desviaciones al ejecutar (2026-11-26)
+
+El dogfood de la Task 7 sobre tres coberturas reales encontró dos falsos
+positivos del propio validador. Se corrigieron con prueba primero, en un
+commit aparte:
+
+- **K2, `fiscal_year_end`.** Una cobertura declara `"09-lastSat"` (año fiscal
+  de 52/53 semanas). No cabe en `MM-DD` y es legítimo: pasó de falla a aviso.
+- **K4, campos de texto dentro de `balance_items` / `income_items`.** El plan
+  validaba como dato `{value, source}` toda llave salvo `period`; los
+  snapshots reales traen `currency: "USD"` ahí. Ahora solo se validan como
+  dato las llaves que el template nombra (`COMP_SECTION_DATA`); las demás son
+  campo desconocido, aviso. La prueba de contrato del repo ata esas llaves al
+  template.
+
+El hallazgo que sí era real y se conserva como falla: datos `observado` sin
+`source` (el origen estaba en un comentario del YAML, no en el campo).
+
 ## Fuera de este plan
 
 - Corregir los contratos de las coberturas existentes.

@@ -67,7 +67,8 @@ No existe el archivo: falla (una cobertura sin perfil no es una cobertura).
 | Obligatorio, no vacío | `ticker`, `name`, `as_of`, `listing`, `issuer_type`, `framework_governing`, `currency_reporting`, `units`, `fiscal_year_end`, `model_periodicity` | falla |
 | Valor de su lista | `listing` (bmv, sec, dual, private) · `issuer_type` (non_financial, bank, insurer, fibra, private) · `framework_governing` (ifrs, us_gaap, nif, cnbv_criteria) · `model_periodicity` (annual, quarterly) · `life_cycle_stage` si no está vacío (embryonic, growth, mature, decline) | falla |
 | Valor deprecado | `model_periodicity: annual_plus_quarterly` (se trata como `quarterly`) | aviso |
-| Formato | `as_of` con fecha `YYYY-MM-DD`; `fiscal_year_end` `MM-DD` | falla |
+| Formato | `as_of` con fecha `YYYY-MM-DD` | falla |
+| Formato | `fiscal_year_end` `MM-DD` | aviso — un año fiscal de 52/53 semanas ("último sábado de septiembre") es legítimo y no cabe en `MM-DD` |
 | Confirmación del analista | `framework_confirmed_by_user`, `periodicity_confirmed_by_user`, `mnpi_confirmed_public` deben ser `true` | falla |
 | Tipo, si el campo está | `adr` booleano; `quarterly_history_years` e `industry_staleness_months` enteros > 0; cada valor de `materiality` número ≥ 0; cada valor de `valuation_methods` booleano | falla |
 | Campo de primer nivel que el contrato no conoce | — | aviso |
@@ -95,7 +96,7 @@ y el contrato dice que siguen legibles.
 | Cada dato capturado (`price`, `shares_per_ads`, `fx_to_reporting`, `shares_outstanding`, `market_cap`, y cada entrada no vacía de `balance_items` / `income_items`) trae `value` numérico y `source` no vacío | falla |
 | `fx_to_reporting` trae además `as_of` | falla |
 | `framework` fuera de (ifrs, us_gaap, nif) | aviso — un comparable extranjero puede reportar bajo otro marco; es una pista de comparabilidad, no estructura |
-| Campo desconocido, de primer nivel o dentro de `market_data` | aviso |
+| Campo desconocido, de primer nivel o dentro de `market_data`, `balance_items` o `income_items` | aviso. Solo los datos que el template nombra en esas secciones se validan como `{value, source}`; un campo de texto ajeno (p. ej. `currency`) no es un dato roto |
 
 ### K5 — `model/inputs/canonical_*.csv`
 

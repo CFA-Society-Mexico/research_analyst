@@ -181,6 +181,13 @@ class ContractCheckTests(unittest.TestCase):
         market = self._template("comp-snapshot.yaml")["market_data"]
         self.assertEqual(set(market), set(self.K.COMP_MARKET_KEYS))
 
+    def test_validator_knows_the_balance_and_income_fields(self) -> None:
+        template = self._template("comp-snapshot.yaml")
+        for section in ("balance_items", "income_items"):
+            with self.subTest(section=section):
+                known = self.K.COMP_SECTION_DATA[section] + self.K.COMP_SECTION_TEXT[section]
+                self.assertEqual(set(template[section]), set(known))
+
     def test_documented_k_checks_are_exactly_the_emitted_ones(self) -> None:
         documented = {i for i in _CHECK_ROW.findall(CHECKS_DOC.read_text(encoding="utf-8"))
                       if i.startswith("K")}

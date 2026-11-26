@@ -259,7 +259,10 @@ class ProfileTests(_Coverage):
     def test_dates_and_fiscal_year_end_have_a_format(self) -> None:
         self.assertFails(self._k2(PROFILE_OK.replace("as_of: 2026-11-20", 'as_of: "noviembre"')),
                          "as_of sin fecha YYYY-MM-DD")
-        self.assertFails(self._k2(PROFILE_OK.replace('"09-27"', '"septiembre"')),
+
+    def test_fiscal_year_end_that_is_not_a_calendar_date_warns(self) -> None:
+        # Un anio fiscal de 52/53 semanas no cabe en MM-DD: aviso, no falla.
+        self.assertWarns(self._k2(PROFILE_OK.replace('"09-27"', '"09-lastSat"')),
                          "fiscal_year_end no es MM-DD")
 
     def test_typed_fields_reject_the_wrong_type(self) -> None:
@@ -364,6 +367,10 @@ class CompTests(_Coverage):
         finding = self._k4()
         self.assertTrue(finding.ok)
         self.assertIn("n/a", finding.detail)
+
+    def test_text_field_inside_a_section_is_unknown_not_a_broken_datum(self) -> None:
+        text = COMP_OK.replace("balance_items:\n", 'balance_items:\n  currency: "USD"\n')
+        self.assertWarns(self._k4(text), "campo desconocido: balance_items.currency")
 
     def test_empty_optional_datum_is_not_a_finding(self) -> None:
         finding = self._k4()                                   # preferred_equity: {}
