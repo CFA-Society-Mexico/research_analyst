@@ -94,7 +94,8 @@ styler.save(path)  # luego: python tools/xlsx_builder.py audit <path>
    Exit 0 = formato verde. Exit 1 = FALLA: corrige y re-corre. Exit 3 =
    PENDIENTE (p. ej. F19 sin valores calculados): recalcula con Excel COM y
    re-audita; sin Excel disponible se reporta pendiente, nunca verde. Nunca
-   entregues con audit rojo. Luego corren S/C/D (integrity-checks.md).
+   entregues con audit rojo. Luego corren S/C/D (integrity-checks.md; los S y
+   el C10 con `python tools/model_check.py <modelo.xlsx>`, que re-corre los F).
 
 ## Modo rebuild (modelo existente → modelo al estándar)
 

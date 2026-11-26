@@ -19,6 +19,10 @@ SKILLS_DIR = ROOT / "skills"
 COMMANDS_DIR = ROOT / "commands"
 CHECKS_DOC = SKILLS_DIR / "model-standards" / "references" / "integrity-checks.md"
 BUILDER = ROOT / "tools" / "xlsx_builder.py"
+CHECKER = ROOT / "tools" / "model_check.py"
+# Checks C que son escaneo por codigo (el resto son formulas de la tab Checks).
+# C9 esta documentado como escaneo pero aun no tiene implementacion unica.
+SCANNED_C_CHECKS = {"C10"}
 
 # Documentos cuyas rutas citadas deben existir en el repo.
 ROUTED_DOCS = ("AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/architecture.md")
@@ -130,6 +134,14 @@ class IntegrityCheckTests(unittest.TestCase):
         implemented |= {i for i in documented if f'"{i} ' in source or f"'{i} " in source}
         self.assertEqual(documented - implemented, set(), "check F documentado sin implementar")
         self.assertEqual(implemented - documented, set(), "check F implementado sin documentar")
+
+    def test_documented_s_checks_are_exactly_the_implemented_ones(self) -> None:
+        documented = {i for i in _CHECK_ROW.findall(CHECKS_DOC.read_text(encoding="utf-8"))
+                      if i.startswith("S")}
+        emitted = set(re.findall(r'"([SC]\d+) ', CHECKER.read_text(encoding="utf-8")))
+        self.assertEqual(emitted - SCANNED_C_CHECKS, documented,
+                         "checks S documentados vs emitidos por tools/model_check.py")
+        self.assertLessEqual(SCANNED_C_CHECKS, emitted, "check C de escaneo sin implementar")
 
 
 if __name__ == "__main__":

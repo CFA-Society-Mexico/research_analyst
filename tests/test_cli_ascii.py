@@ -85,6 +85,16 @@ class RuntimeAsciiTests(unittest.TestCase):
                     self.assertNotIn(b"UnicodeEncodeError", done.stderr)
                     self.assertTrue(done.stdout.isascii())
 
+    def test_model_check_report_survives_ascii_console(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            book = str(Path(tmp) / "demo_2026-01-01_v1.xlsx")
+            self.assertEqual(_run_ascii(["tools/xlsx_builder.py", "demo", book]).returncode, 0)
+            done = _run_ascii(["tools/model_check.py", book])
+            # 3 = pendiente: el demo sale de openpyxl sin valores calculados (S10).
+            self.assertEqual(done.returncode, 3, done.stderr.decode("ascii", "replace"))
+            self.assertTrue(done.stdout.isascii())
+            self.assertEqual(_run_ascii(["tools/model_check.py", "--help"]).returncode, 0)
+
     def test_builder_usage_message_is_ascii(self) -> None:
         done = _run_ascii(["tools/xlsx_builder.py"])
         self.assertEqual(done.returncode, 2)

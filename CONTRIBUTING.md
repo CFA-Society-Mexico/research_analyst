@@ -90,8 +90,8 @@ Es la contribución más valiosa y la más regulada. Cuatro familias:
 
 | Familia | Dónde vive la lógica | Cómo se verifica |
 |---|---|---|
-| **S** (estructurales) | escaneo por código sobre el libro | debe ser detectable sin abrir Excel |
-| **C** (contables) | fórmulas en la tab `Checks` del modelo | la fórmula la escribe el builder, no el analista |
+| **S** (estructurales) | `tools/model_check.py` (`audit_structure`) | debe ser detectable sin abrir Excel |
+| **C** (contables) | fórmulas en la tab `Checks` del modelo; los de escaneo (C10) en `tools/model_check.py` | la fórmula la escribe el builder, no el analista |
 | **D** (doctrina) | reglas del plugin (drivers, staleness, reconciliación) | avisa o bloquea: declara cuál de los dos |
 | **F** (formato) | `tools/xlsx_builder.py audit` | debe fallar en un libro malo y pasar en el `demo` |
 

@@ -65,7 +65,9 @@ SKILL.md); las demás solo leen.
   `python tools/sec_fetch.py <TICKER> --ua "<nombre correo>"` (EDGAR público,
   gratis; SIEMPRE con gate del usuario antes de descargar).
 - xlsx solo vía `tools/xlsx_builder.py` (skill xlsx-building) — nunca openpyxl
-  crudo para estructura/formato; audit de formato: `python tools/xlsx_builder.py audit <modelo>`.
+  crudo para estructura/formato; audit de formato: `python tools/xlsx_builder.py audit <modelo>`;
+  checks S + C10 + F en una corrida: `python tools/model_check.py <modelo>` (nunca
+  reimplementes un check S a mano).
 - Historia financiera masiva de emisoras SEC: `python tools/xbrl_fetch.py <TICKER>`
   (companyfacts XBRL — décadas de anuales y trimestrales sin parsear HTML).
 - Nada se borra en la carpeta de cobertura; retención mínima 7 años.

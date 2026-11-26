@@ -10,17 +10,23 @@ alguna falla; exit 3 = sin fallas pero con checks `[pendiente]` (no se pudieron
 evaluar, p. ej. libro sin valores calculados). Un pendiente NUNCA se reporta
 como verde.
 
-## Estructurales (escaneo por código)
+Los checks S y el C10 corren con `python tools/model_check.py <modelo.xlsx>
+[--driver-map driver-map.md] [--brand brand/DESIGN.md]` — misma doctrina y
+mismos exit codes; esa corrida encadena además los F, así que es la única que
+hace falta. Los C de fórmula viva se leen de la tab `Checks`; los D son
+doctrina y los evalúa la skill dueña.
+
+## Estructurales (checks S — `tools/model_check.py`)
 
 | # | Check | Cómo |
 |---|---|---|
-| S1 | Todas las tabs del model-spec vigente presentes (Cover, Checks, `Operating` + `Annual` en modo quarterly o `Model` en modo annual, Macro, condicionales); en la sección Schedules de `Operating` (o `Model`), un bloque `Sch: <nombre>` por schedule del driver-map + cores (PPE, Debt, WC) | openpyxl: nombres de hoja vs contrato; escaneo de col. A por headers `Sch: ` vs driver-map |
+| S1 | Todas las tabs del model-spec vigente presentes (Cover, Checks, `Operating` + `Annual` en modo quarterly o `Model` en modo annual, Macro, condicionales); en la sección Schedules de `Operating` (o `Model`), un bloque `Sch: <nombre>` por schedule del driver-map + cores (PPE, Debt, WC) | openpyxl: nombres de hoja vs contrato; escaneo de headers `Sch: ` vs driver-map. Con `--driver-map` se exige un bloque por cada `Sch: <nombre>` de su columna Bloque; sin él solo se exigen los cores y el detalle del check lo dice |
 | S9 | Schedules como bloques, no como tabs: ninguna hoja con nombre `Sch_*` o `Sch *`; tampoco hojas `IS`/`BS`/`CF`/`Val_DCF` sueltas (viven como secciones de `Operating`/`Annual`, o de `Model` en modo annual) | escaneo de nombres de hoja |
-| S10 | Sin ciclos ni cadenas rotas: tras recalcular (Excel COM), ninguna celda de FÓRMULA queda sin valor cacheado | el síntoma del smoke #5: circularidad caja↔rendimiento↔utilidad dejó el forecast entero sin calcular; regla preventiva: rendimientos/intereses sobre saldo de APERTURA |
+| S10 | Sin ciclos ni cadenas rotas: tras recalcular (Excel COM), ninguna celda de FÓRMULA queda sin valor cacheado | el síntoma del smoke #5: circularidad caja↔rendimiento↔utilidad dejó el forecast entero sin calcular; regla preventiva: rendimientos/intereses sobre saldo de APERTURA. Detección: TODAS las fórmulas sin valor = libro sin recalcular ⇒ `[pendiente]`, jamás `[ok]`; ALGUNAS sin valor = falla con las celdas |
 | S2 | Cero links externos a otros libros | escaneo de fórmulas por `[` |
 | S3 | Sin funciones volátiles (OFFSET, INDIRECT, NOW, TODAY) | escaneo de fórmulas |
-| S4 | Sin números hard-coded dentro de fórmulas (fuera de Assumptions) | escaneo: constantes en fórmulas de tabs de cálculo |
-| S5 | Una fórmula por fila: fórmula idéntica (relativa) en todos los periodos | comparación de R1C1 por fila |
+| S4 | Sin números hard-coded dentro de fórmulas (fuera de Assumptions) | escaneo: todo literal numérico dentro de una fórmula que no sea 0 o 1. Exentas: la sección Assumptions, la fila de check por columna y las fórmulas de umbral (`"Error"`/`"OK"`); `Cover`, `Checks` y `Macro` no se escanean. Un 365 o un 4 tecleado FALLA: va a Assumptions o a constante con nombre (`define_constant`) |
+| S5 | Una fórmula por fila: fórmula idéntica (relativa) en todos los periodos | forma relativa de la fórmula, idéntica dentro de cada tramo: histórico y estimado; en `Annual`, además, los años previos al corte trimestral. La referencia de `Annual` a `Operating` se normaliza a "trimestre N del año de la columna" (la fila anual avanza una columna por año, sus referencias cuatro). Alcance: `Operating`, `Annual`, `Model`; las hojas auxiliares con header de años (`Val_Comps`, `Rev_Reconcile`) mezclan tablas de corte transversal y no se evalúan |
 | S6 | Inputs solo en la SECCIÓN Assumptions de `Operating` (o `Model` en modo annual); resto del libro — `Annual` incluida — sin celdas de input | escaneo: fill de input fuera del rango de la sección = falla |
 | S7 | Modo de cálculo automático, no manual | propiedad del libro |
 | S8 | Versionado del archivo cumple `_YYYY-MM-DD_v#` | nombre de archivo |
@@ -37,8 +43,8 @@ como verde.
 | C6 | ~~Identidad DuPont~~ **DEROGADO** (2026-09-25) | ROE directo − ROE DuPont 5 se cumple por álgebra: los factores se cancelan y la resta da cero aunque el modelo esté mal, así que no detectaba nada. El ID no se recicla |
 | C7 | CCC del forecast consistente con schedule de WC | Ratios (forecast) vs días DIO/DSO/DPO del bloque `Sch: WC` |
 | C8 | Agregado anual estructural (modo `quarterly`) | La hoja `Annual` es 100% fórmulas: cada FY del tramo trimestral agrega los 4 trimestres de `Operating` (flujos = Σ4Q; stocks = 4Q; ratios recalculados); pre-corte, links a canonical_annual. Un número tecleado en `Annual` = falla (F14 lo detecta por fill de input) |
-| C10 | **Desfase del roll de caja** | Escaneo de fórmulas: (i) cada celda de "Efectivo al inicio" referencia la celda de CIERRE de la columna previa; (ii) cada celda de caja del BS referencia el cierre del CF de su misma columna; (iii) rendimientos/intereses referencian saldos de la columna PREVIA. Una referencia a cierre de la misma columna en (iii) = ciclo = falla |
-| C9 | Histórico del xlsx = capa de captura | Escaneo por código: celdas históricas de IS/BS/CF coinciden con `model/inputs/canonical_annual.csv` (y `canonical_quarterly.csv` si aplica), tolerancia de redondeo; discrepancia = falla de captura o edición manual del histórico |
+| C10 | **Desfase del roll de caja** | Escaneo de fórmulas (`tools/model_check.py`; (i) y (ii) por código, (iii) lo cubre F18 porque violarlo es un ciclo): (i) cada celda de "Efectivo al inicio" referencia la celda de CIERRE de la columna previa; (ii) cada celda de caja del BS referencia el cierre del CF de su misma columna; (iii) rendimientos/intereses referencian saldos de la columna PREVIA. Una referencia a cierre de la misma columna en (iii) = ciclo = falla |
+| C9 | Histórico del xlsx = capa de captura | Escaneo por código: celdas históricas de IS/BS/CF coinciden con `model/inputs/canonical_annual.csv` (y `canonical_quarterly.csv` si aplica), tolerancia de redondeo; discrepancia = falla de captura o edición manual del histórico. **Sin implementación única todavía**: falta el contrato `line_item` ↔ fila del modelo; hoy lo corre el script de build de cada cobertura |
 
 ## De contenido (doctrina del plugin)
 
