@@ -1148,3 +1148,150 @@ def _y_axis(ticks: Sequence[float], y: Callable[[float], float], x0: float, x1: 
         out.append(f'<text class="auto" x="{x0 - 8:.1f}" y="{y(tick) + 4:.1f}" '
                    f'text-anchor="end">{tick:{fmt}}</text>')
     return out
+
+
+# ---------------------------------------------------------------------------
+# Auditoria: cada cifra del deck contra su origen
+# ---------------------------------------------------------------------------
+
+_SRC_TOKEN = re.compile(
+    r"(?:'(?P<quoted>[^']+)'|(?P<sheet>[A-Za-z_][A-Za-z0-9_.]*))!(?P<coord>[A-Z]{1,3}\d+)"
+    r"|fact:(?P<fact>[A-Za-z0-9_.\-]+)")
+_BINARY = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b,
+           ast.Mult: lambda a, b: a * b, ast.Div: lambda a, b: a / b,
+           ast.Pow: lambda a, b: a ** b}
+
+
+def evaluate(src: str, book: ModelBook, facts: dict[str, Fact]) -> float:
+    """Re-evalua la expresion de origen de una cifra. Solo admite referencias
+    a celdas, ``fact:clave``, constantes, + - * / ** y abs()."""
+    names: dict[str, float] = {}
+
+    def bind(match: re.Match[str]) -> str:
+        if match.group("fact") is not None:
+            key = match.group("fact")
+            if key not in facts:
+                raise DeckError(f"hecho '{_ascii(key)}' no esta en el registro")
+            value = facts[key].value
+        else:
+            value = book.num(match.group("quoted") or match.group("sheet"),
+                             match.group("coord")).value
+        names[f"_v{len(names)}"] = value
+        return f"_v{len(names) - 1}"
+
+    try:
+        tree = ast.parse(_SRC_TOKEN.sub(bind, src), mode="eval")
+    except SyntaxError as exc:
+        raise DeckError(f"origen ilegible: {_ascii(src)!r}") from exc
+
+    def walk(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return walk(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) \
+                and not isinstance(node.value, bool):
+            return float(node.value)
+        if isinstance(node, ast.Name) and node.id in names:
+            return names[node.id]
+        if isinstance(node, ast.BinOp) and type(node.op) in _BINARY:
+            return _BINARY[type(node.op)](walk(node.left), walk(node.right))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            value = walk(node.operand)
+            return -value if isinstance(node.op, ast.USub) else value
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id == "abs" and len(node.args) == 1 and not node.keywords:
+            return abs(walk(node.args[0]))
+        raise DeckError(f"origen con una operacion no admitida: {_ascii(src)!r}")
+
+    try:
+        return walk(tree)
+    except ZeroDivisionError as exc:
+        raise DeckError(f"origen con division entre cero: {_ascii(src)!r}") from exc
+
+
+def audit_deck(deck_html: Path, model: Path, facts_path: Optional[Path] = None,
+               root: Optional[Path] = None) -> tuple[list[Finding], DeckDocument, dict[str, Fact]]:
+    """P1 a P4: cifras atadas, sin numeros sueltos, literales y hechos manuales."""
+    doc = read_deck(deck_html.read_text(encoding="utf-8"))
+    book = ModelBook(model)
+    root = root or model.resolve().parent.parent
+    facts = load_facts(facts_path, root) if facts_path else {}
+    stale: list[str] = []
+    for number in doc.numbers:
+        try:
+            expected = format(evaluate(number.src, book, facts), number.fmt)
+        except DeckError as exc:
+            stale.append(f"lamina {number.slide}: {exc}")
+            continue
+        if expected != number.text:
+            stale.append(f"lamina {number.slide}: muestra {_ascii(number.text)!r}, "
+                         f"el origen da {_ascii(expected)!r} ({_ascii(number.src)})")
+    loose = unbound_numbers(doc, book.axis_years())
+    used = {m.group("fact") for n in doc.numbers for m in _SRC_TOKEN.finditer(n.src)
+            if m.group("fact")}
+    manual = sorted(key for key in used if key in facts and facts[key].manual)
+    findings = [
+        Finding("P1 cifras iguales a su origen", not stale,
+                f"{len(doc.numbers)} cifras verificadas" if not stale
+                else f"{len(stale)} de {len(doc.numbers)} no coinciden (deck desactualizado "
+                     f"o alterado): " + M._examples(stale)),
+        Finding("P2 sin numeros sueltos", not loose,
+                "todo numero visible tiene origen" if not loose
+                else f"{len(loose)} sin origen: " + M._examples(
+                    [f"lamina {s}: {_ascii(n)!r}" for s, n, _ in loose])),
+        Finding("P3 literales declarados con lit()", not doc.literals,
+                "ninguno" if not doc.literals
+                else f"{len(doc.literals)} a revisar en el gate: " + M._examples(
+                    [f"lamina {s}: {_ascii(t)!r} ({_ascii(w)})" for s, t, w in doc.literals]),
+                warning=bool(doc.literals)),
+        Finding("P4 hechos con verificacion manual", not manual,
+                "ninguno" if not manual
+                else "fuente no textual, cotejar a mano: " + ", ".join(_ascii(k) for k in manual),
+                warning=bool(manual)),
+    ]
+    return findings, doc, facts
+
+
+def claims(doc: DeckDocument) -> list[tuple[int, str]]:
+    """(lamina, frase) de todo el texto corrido del deck, en orden."""
+    out: list[tuple[int, str]] = []
+    for block in doc.blocks:
+        if block.in_svg or block.tag not in CLAIM_TAGS or not block.text:
+            continue
+        for sentence in re.split(r"(?<=[.!?])\s+", block.text):
+            if sentence.strip():
+                out.append((block.slide, sentence.strip()))
+    return out
+
+
+def _md_cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\n", " ")
+
+
+def claims_table(doc: DeckDocument) -> str:
+    lines = ["| Lámina | Frase | Evidencia |", "|---|---|---|"]
+    lines += [f"| {slide} | {_md_cell(sentence)} |  |" for slide, sentence in claims(doc)]
+    return "\n".join(lines) + "\n"
+
+
+def write_report(path: Path, deck_html: Path, groups: Sequence[tuple[str, Sequence[Finding]]],
+                 doc: DeckDocument, facts: dict[str, Fact]) -> None:
+    """Reporte de verificacion del gate 2 (partes deterministas). La columna
+    Evidencia de las afirmaciones la llena quien verifica."""
+    out = [f"# Verificación del deck — {deck_html.name}", ""]
+    for title, findings in groups:
+        out += [f"## {title}", "", "| Estado | Check | Detalle |", "|---|---|---|"]
+        out += [f"| {f.mark} | {f.check} | {_md_cell(f.detail)} |" for f in findings]
+        out.append("")
+    out += ["## Cifras y su origen", "", "| Lámina | Texto | Origen | Formato |", "|---|---|---|---|"]
+    out += [f"| {n.slide} | {_md_cell(n.text)} | `{_md_cell(n.src)}` | `{n.fmt}` |"
+            for n in doc.numbers]
+    out += ["", "## Literales declarados", "", "| Lámina | Texto | Porqué |", "|---|---|---|"]
+    out += [f"| {s} | {_md_cell(t)} | {_md_cell(w)} |" for s, t, w in doc.literals]
+    out += ["", "## Hechos citados", "",
+            "| Clave | Valor | Etiqueta | Documento | Localizador | Verificación |",
+            "|---|---|---|---|---|---|"]
+    out += [f"| {f.key} | {f.value:g} {f.unit} | {f.tag} | {f.doc} | {_md_cell(f.locator)} | "
+            f"{'manual' if f.manual else 'cita encontrada'} |" for f in facts.values()]
+    out += ["", "## Afirmaciones", "", claims_table(doc)]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out), encoding="utf-8", newline="\n")

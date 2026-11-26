@@ -538,3 +538,94 @@ class ChartTests(_Case):
         doc = self._bound(deck, heat + table)
         self.assertEqual(len(doc.numbers), 9 + 3 + 1)
         self.assertEqual(doc.numbers[-1].text, "9.0%")
+
+
+class AuditTests(_Case):
+
+    def _built(self, extra: str = "") -> Path:
+        deck = self.deck()
+        rev = deck.series("Annual", "Ingresos")
+        deck.cover("Emisora X")
+        deck.slide(title=f"Ventas crecen {rev.growth()[2027]:+.1%} en 2027",
+                   lede="Menos que antes. Sigue creciendo.",
+                   visual=deck.bars(rev, show=(2027,)),
+                   note=f"Participa con {deck.fact('share'):.1f}% del mercado.{extra}",
+                   source="Fuente: modelo y reporte de industria.")
+        return deck.build()
+
+    def _audit(self, html_path: Path) -> dict[str, B.Finding]:
+        findings, _, _ = D.audit_deck(html_path, self.root / MODEL_REL, self.root / FACTS_REL)
+        return {f.check.split()[0]: f for f in findings}
+
+    def test_fresh_deck_is_green(self) -> None:
+        result = self._audit(self._built())
+        self.assertTrue(all(f.ok for f in result.values()), [f.detail for f in result.values()])
+        self.assertIn("3 cifras verificadas", result["P1"].detail)
+
+    def test_altered_number_fails_p1(self) -> None:
+        path = self._built()
+        path.write_text(path.read_text(encoding="utf-8").replace(">+14.3%<", ">+18.0%<"),
+                        encoding="utf-8")
+        result = self._audit(path)
+        self.assertTrue(result["P1"].blocking)
+        self.assertIn("muestra '+18.0%', el origen da '+14.3%'", result["P1"].detail)
+
+    def test_model_changed_after_the_build_fails_p1(self) -> None:
+        path = self._built()
+        wb = load_workbook(self.root / MODEL_REL)
+        wb["Annual"]["H6"] = 300.0
+        wb.save(self.root / MODEL_REL)
+        result = self._audit(path)
+        self.assertTrue(result["P1"].blocking)
+        self.assertIn("2 de 3 no coinciden", result["P1"].detail)
+
+    def test_number_typed_into_the_html_fails_p2(self) -> None:
+        path = self._built()
+        path.write_text(path.read_text(encoding="utf-8").replace(
+            "Menos que antes.", "Menos que el 22% anterior."), encoding="utf-8")
+        result = self._audit(path)
+        self.assertTrue(result["P2"].blocking)
+        self.assertIn("lamina 2: '22%'", result["P2"].detail)
+
+    def test_literals_and_manual_facts_are_warnings(self) -> None:
+        deck = self.deck()
+        deck.raw(f"<p>{D.lit('3', why='condiciones')} condiciones en "
+                 f"{deck.fact('plants'):.0f} plantas.</p>", source="Fuente: informe anual.")
+        result = self._audit(deck.build())
+        self.assertTrue(result["P3"].warning and not result["P3"].blocking)
+        self.assertTrue(result["P4"].warning and not result["P4"].blocking)
+        self.assertIn("plants", result["P4"].detail)
+
+    def test_evaluate_only_accepts_the_origin_grammar(self) -> None:
+        book = D.ModelBook(self.root / MODEL_REL)
+        facts = D.load_facts(self.root / FACTS_REL, self.root)
+        self.assertAlmostEqual(D.evaluate("((Annual!D6/Annual!C6)-1)", book, facts), 0.2)
+        self.assertEqual(D.evaluate("abs((-'Val Sens'!C6))", book, facts), 100.0)
+        self.assertEqual(D.evaluate("(fact:share*2)", book, facts), 63.0)
+        for src in ("__import__('os')", "Annual!C6 if 1 else 2", "max(Annual!C6)", "x+1",
+                    "Annual!C6 +", "fact:nope"):
+            with self.subTest(src=src), self.assertRaises(D.DeckError):
+                D.evaluate(src, book, facts)
+
+    def test_claims_list_every_sentence_in_order(self) -> None:
+        doc = D.read_deck(self._built().read_text(encoding="utf-8"))
+        self.assertEqual(D.claims(doc), [
+            (1, "Emisora X"),
+            (2, "Ventas crecen +14.3% en 2027"),
+            (2, "Menos que antes."),
+            (2, "Sigue creciendo."),
+            (2, "Participa con 31.5% del mercado."),
+        ])
+        self.assertIn("| 2 | Sigue creciendo. |  |", D.claims_table(doc))
+
+    def test_report_holds_the_deterministic_sections(self) -> None:
+        path = self._built()
+        findings, doc, facts = D.audit_deck(path, self.root / MODEL_REL, self.root / FACTS_REL)
+        report = self.root / "research" / "notes" / f"x-deck-verify_{AS_OF}.md"
+        D.write_report(report, path, [("Cifras", findings)], doc, facts)
+        text = report.read_text(encoding="utf-8")
+        for expected in ("| [ok] | P1 cifras iguales a su origen |",
+                         "| 2 | +14.3% | `((Annual!H6/Annual!G6)-1)` | `+.1%` |",
+                         "| share | 31.5 % | observado |", "## Afirmaciones",
+                         "| 2 | Participa con 31.5% del mercado. |  |"):
+            self.assertIn(expected, text)
