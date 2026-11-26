@@ -36,9 +36,9 @@ guion la incluye y la celda no existe, el tool falla al leerla.
 |---|---|---|
 | 1 | `research-note` | Guion: lista de láminas, cada una con su hallazgo, tipo de visual y las series, celdas y hechos que necesita; actos adaptados a la emisora. Si hay un outline anterior, sirve de base. Escribe `research/notes/<ticker>-deck-outline_<YYYY-MM-DD>.md` |
 | Gate 1 | — | El analista aprueba, recorta o reordena el guion. Debate per `templates/debate-protocol.md`; entrada en thesis-journal |
-| 2 | `research-note` | Registra cada dato externo del guion en `<ticker>-facts_<YYYY-MM-DD>.json`, con documento, localizador y cita. Sin fuente: sale del guion o el analista aporta el documento |
-| 3 | `research-note` | Si existe `build_deck.py`, guarda la copia fechada. Escribe el script sobre `tools/deck_builder.py` y lo corre; el bloqueo de cifras aplica aquí. Ajusta con la medición hasta que no haya lámina vacía ni encimada. Un visual o un hallazgo que el guion no tenía se anota en el outline; si cambia el argumento, vuelve al analista |
-| 4 | `research-note` | Verificación: `audit --report`, `measure --shots`, evidencia frase por frase, tablas y rótulos incluidos (lo que no la tenga se elimina y se regenera), y pasada de texto. Con subagentes en el runtime, la evidencia la revisa uno que no redactó el deck |
+| 2 | `research-note` | Registra cada dato externo del guion en `<ticker>-facts_<YYYY-MM-DD>.json`, con documento, localizador y cita, y lo valida con `deck_builder.py facts` (la cita se copia del volcado de `--text`). Sin fuente: sale del guion o el analista aporta el documento |
+| 3 | `research-note` | Si existe `build_deck.py`, guarda la copia fechada. Vuelca las etiquetas del modelo con `deck_builder.py labels`, escribe el script sobre `tools/deck_builder.py` y lo corre; el bloqueo de cifras aplica aquí. Ajusta con la medición hasta que no haya lámina vacía ni encimada. Un visual o un hallazgo que el guion no tenía se anota en el outline; si cambia el argumento, vuelve al analista |
+| 4 | `research-note` | Verificación: `audit --design brand/DESIGN.md --report` y después `measure --shots --report` sobre el mismo reporte, evidencia fila por fila de la sección "Afirmaciones" (prosa, tablas, portada y rótulos de gráfica; lo que no la tenga se elimina y se regenera), y pasada de texto. Con subagentes en el runtime, la evidencia la revisa uno que no redactó el deck |
 | Gate 2 | — | El analista revisa las capturas **una por una** y el reporte: excepciones (`lit()`, hechos con verificación manual, frases eliminadas, cambios posteriores al gate 1, lo que quedó sin documento primario) y estado de P1 a P10. Aprueba la entrega o devuelve al paso 3. Entrada en thesis-journal |
 
 El orden 1→gate→2 es doctrina: primero el argumento, después las cifras. Un
@@ -51,9 +51,11 @@ rellena.
   verificación y carpeta de capturas; `build_deck.py` vigente (y la copia del
   anterior, si lo había). Nada previo se borra.
 - `audit` en verde. `measure` en verde, o `[pendiente]` reportado como tal. El
-  reporte de verificación lleva la salida de ambos (la de `measure` se agrega a
-  mano: el tool no la escribe). P9 y P10 solo aplican con `brand/DESIGN.md`;
-  sin él se reportan `[n/a]`.
+  reporte de verificación lleva la salida de ambos: `audit --report` lo escribe
+  y `measure --report` le agrega la sección "Espacio" (si el deck cambió
+  después de medir, esa sección queda `[pendiente]` hasta medir otra vez). P9 y
+  P10 salen siempre con `audit --design brand/DESIGN.md`: sin el archivo
+  evalúan la paleta neutra del tool.
 - Dos entradas en `journal/thesis-journal.md` (gate 1 y gate 2).
 - Check `[x]` sin resolver = **FALLA**: el deck no se entrega.
 - Este comando no escribe en el modelo, el driver-map, el industry report ni el
