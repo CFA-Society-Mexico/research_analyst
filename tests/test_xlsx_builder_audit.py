@@ -11,11 +11,127 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Callable
 from unittest import mock
+
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.workbook.workbook import Workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import xlsx_builder as B  # noqa: E402
+
+Mutation = Callable[[Workbook], None]
+
+# Colores y formatos FUERA de las whitelists del builder.
+ALIEN_FONT_COLOR = "FF7030A0"
+ALIEN_NUMFMT = "0.000"
+LEGACY_FILL = B.Color.ORANGE.value  # paleta CFI que salio de la whitelist
+
+
+def _set(sheet: str, coord: str, value: object) -> Mutation:
+    def mutate(wb: Workbook) -> None:
+        wb[sheet][coord] = value
+    return mutate
+
+
+def _gridlines_on(wb: Workbook) -> None:
+    wb["Annual"].sheet_view.showGridLines = True
+
+
+def _alien_font(wb: Workbook) -> None:
+    wb["Operating"]["B12"].font = Font(name="Calibri", size=11)
+
+
+def _alien_font_color(wb: Workbook) -> None:
+    wb["Operating"]["B12"].font = Font(name=B.FONT_NAME, size=11, color=ALIEN_FONT_COLOR)
+
+
+def _legacy_fill(wb: Workbook) -> None:
+    wb["Operating"]["C12"].fill = PatternFill("solid", fgColor=LEGACY_FILL)
+
+
+def _alien_number_format(wb: Workbook) -> None:
+    wb["Operating"]["C12"].number_format = ALIEN_NUMFMT
+
+
+def _no_freeze(wb: Workbook) -> None:
+    wb["Operating"].freeze_panes = None
+
+
+def _ungroup_balance_section(wb: Workbook) -> None:
+    ws = wb["Operating"]
+    for row in range(23, 33):  # filas de la seccion Balance del demo
+        ws.row_dimensions[row].outlineLevel = 0
+
+
+def _junk_sheet(wb: Workbook) -> None:
+    wb.create_sheet("Hoja1").sheet_view.showGridLines = False
+
+
+def _no_period_formats(wb: Workbook) -> None:
+    for cell in wb["Annual"][3]:
+        cell.number_format = "General"
+
+
+def _no_stamp(wb: Workbook) -> None:
+    wb.properties.keywords = ""
+
+
+def _split_series_row(wb: Workbook) -> None:
+    ws = wb["Annual"]
+    ws["B12"] = "Ventas forecast"   # solo las columnas E (2025, 2026) pobladas
+    ws["E12"] = 1
+    ws["F12"] = 2
+
+
+def _rename_roic(wb: Workbook) -> None:
+    ws = wb["Operating"]
+    for row in range(1, ws.max_row + 1):
+        cell = ws.cell(row=row, column=2)
+        # La fila de la razon ("ROIC [UDM]"), no la banda "ROIC y economic profit".
+        if isinstance(cell.value, str) and cell.value.startswith("ROIC") and not cell.font.bold:
+            cell.value = "Retorno sobre el capital"
+            return
+    raise AssertionError("el demo ya no trae la fila ROIC")
+
+
+def _input_in_annual(wb: Workbook) -> None:
+    wb["Annual"]["C6"].fill = PatternFill("solid", fgColor=B.Color.INPUT_FILL.value)
+
+
+def _cycle(wb: Workbook) -> None:
+    ws = wb["Operating"]
+    ws["T50"] = "=T51"
+    ws["T51"] = "=T50"
+
+
+# Un libro roto por check: (mutacion sobre el demo, texto que el detalle debe nombrar).
+# CONTRIBUTING 4.2: "un libro que debe fallarlo y el demo que debe pasarlo".
+BREAKING_MUTATIONS: dict[str, tuple[Mutation, str]] = {
+    "F1": (_gridlines_on, "Annual"),
+    "F2": (_alien_font, "Calibri"),
+    "F3": (_alien_font_color, ALIEN_FONT_COLOR),
+    "F4": (_legacy_fill, LEGACY_FILL),
+    "F5": (_alien_number_format, ALIEN_NUMFMT),
+    "F6": (_no_freeze, "Operating"),
+    "F7": (_ungroup_balance_section, "Balance"),
+    "F8": (_junk_sheet, "Hoja1"),
+    "F9": (_no_period_formats, "sin formato"),
+    "F10": (_no_stamp, "sin sello"),
+    "F11": (_set("Operating", "M9", None), "Operating!fila 9"),      # hueco en fila de input
+    "F12": (_split_series_row, "Annual!fila 12 (solo forecast)"),
+    "F13": (_rename_roic, "faltan: ROIC"),
+    "F14": (_input_in_annual, "celdas de INPUT"),
+    "F15": (_set("Operating", "L13", "n/d"), "TEXTO"),               # texto en una serie
+    "F16": (_set("Operating", "B10", "fila pegada al header"), "Operating!fila 11"),
+    "F17": (_set("Operating", "N15", None), "Operating!fila 15"),    # forecast incompleto
+    "F18": (_cycle, "CICLOS"),
+}
+# Checks cuya falla no se puede provocar mutando el demo; tienen su propia prueba
+# en AuditTests (F19 necesita valores calculados; F20, bajar el limite de escaneo).
+TESTED_OUTSIDE_THE_TABLE = {"F19", "F20"}
 
 
 class AuditTests(unittest.TestCase):
@@ -78,6 +194,73 @@ class AuditTests(unittest.TestCase):
         f13 = self._audit(styler)["F13"]
         self.assertFalse(f13.ok)
         self.assertIn("sin formulas", f13.detail)
+
+
+class BrokenBookTests(unittest.TestCase):
+    """Cada check F falla sobre un libro roto a proposito (y solo por eso)."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.demo = self.dir / "demo.xlsx"
+        with contextlib.redirect_stdout(io.StringIO()):
+            B._demo(str(self.demo))
+
+    def _audit(self, mutate: Mutation | None = None,
+               brand: dict[str, str] | None = None) -> dict[str, B.Finding]:
+        wb = load_workbook(self.demo)
+        if mutate is not None:
+            mutate(wb)
+        path = str(self.dir / "caso.xlsx")
+        wb.save(path)
+        return {f.check.split()[0]: f for f in B.audit_format(path, brand=brand)}
+
+    def test_demo_reloaded_and_saved_untouched_stays_green(self) -> None:
+        # Linea base: si esto falla, las mutaciones de abajo no prueban nada.
+        broken = {k: f.detail for k, f in self._audit().items() if not f.ok}
+        self.assertEqual(broken, {})
+
+    def test_every_format_check_has_a_breaking_mutation(self) -> None:
+        emitted = set(self._audit())
+        self.assertEqual(set(BREAKING_MUTATIONS) | TESTED_OUTSIDE_THE_TABLE, emitted,
+                         "check F sin libro que lo falle (o mutacion de un check que ya no existe)")
+
+    def test_each_mutation_fails_its_check_and_names_the_culprit(self) -> None:
+        for check_id, (mutate, culprit) in BREAKING_MUTATIONS.items():
+            with self.subTest(check=check_id):
+                finding = self._audit(mutate)[check_id]
+                self.assertFalse(finding.ok, finding.detail)
+                self.assertFalse(finding.pending, finding.detail)
+                self.assertIn(culprit, finding.detail)
+
+    def test_f4_brand_slot_extends_the_fill_whitelist(self) -> None:
+        self.assertFalse(self._audit(_legacy_fill)["F4"].ok)
+        branded = self._audit(_legacy_fill, brand={"brand_accent": LEGACY_FILL})
+        self.assertTrue(branded["F4"].ok, branded["F4"].detail)
+
+    def test_f8_schedule_as_its_own_sheet_fails(self) -> None:
+        finding = self._audit(lambda wb: wb.create_sheet("Sch_WC") and None)["F8"]
+        self.assertFalse(finding.ok)
+        self.assertIn("Sch_WC", finding.detail)
+
+    def test_f14_quarter_column_in_annual_fails(self) -> None:
+        finding = self._audit(_set("Annual", "G3", "1Q2027E"))["F14"]
+        self.assertFalse(finding.ok)
+        self.assertIn("columnas #Q", finding.detail)
+
+    def test_f15_missing_formula_in_the_middle_of_a_series_fails(self) -> None:
+        finding = self._audit(_set("Operating", "L14", None))["F15"]
+        self.assertFalse(finding.ok)
+        self.assertIn("Operating!fila 14", finding.detail)
+
+    def test_f17_discontinued_series_is_exempt_from_full_forecast(self) -> None:
+        def discontinue(wb: Workbook) -> None:
+            ws = wb["Operating"]
+            ws["B15"] = "D&A (serie descontinuada por la emisora)"
+            for col in range(11, 19):  # tramo E del demo (K..R)
+                ws.cell(row=15, column=col).value = None
+        self.assertTrue(self._audit(discontinue)["F17"].ok)
 
 
 class BuilderTests(unittest.TestCase):
