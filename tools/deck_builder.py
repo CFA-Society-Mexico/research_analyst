@@ -523,3 +523,159 @@ def design_findings(design: Design) -> list[Finding]:
                 else "pares de series cercanos (deuteranopia): " + ", ".join(close),
                 warning=bool(close)),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Lectura del HTML generado: cifras atadas, literales y texto visible
+# ---------------------------------------------------------------------------
+
+_VOID = frozenset({"br", "hr", "img", "meta", "link", "input", "col", "wbr"})
+_BLOCK = frozenset({"h1", "h2", "h3", "h4", "p", "li", "td", "th", "figcaption",
+                    "div", "aside", "header", "footer", "text"})
+_EXEMPT_CLASSES = frozenset({"auto", "source"})
+CLAIM_TAGS = frozenset({"h1", "h2", "h3", "h4", "p", "li", "figcaption"})
+
+
+@dataclass
+class Block:
+    """Un bloque de texto visible: partes ('text' | 'num' | 'lit', contenido)."""
+
+    slide: int
+    tag: str
+    in_svg: bool
+    parts: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        return re.sub(r"\s+", " ", "".join(part for _, part in self.parts)).strip()
+
+
+@dataclass(frozen=True)
+class BoundNumber:
+    slide: int
+    text: str
+    src: str
+    fmt: str
+
+
+class DeckDocument(HTMLParser):
+    """Recorre el deck una vez y deja: cifras atadas, literales y bloques."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.numbers: list[BoundNumber] = []
+        self.literals: list[tuple[int, str, str]] = []   # (lamina, texto, porque)
+        self.blocks: list[Block] = []
+        self.gap_max: Optional[int] = None
+        self._stack: list[tuple[str, str, Optional[Block], dict[str, str]]] = []
+        self._slide = 0
+        self._svg = 0
+        self._capture: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        if tag in _VOID:
+            return
+        attr = {k: (v or "") for k, v in attrs}
+        classes = set(attr.get("class", "").split())
+        if tag == "html" and attr.get("data-gap-max", "").isdigit():
+            self.gap_max = int(attr["data-gap-max"])
+        if tag == "section" and "slide" in classes:
+            self._slide = int(attr.get("data-n", "0") or 0)
+        if tag == "svg":
+            self._svg += 1
+        if tag in ("style", "script", "title"):
+            kind = "skip"
+        elif "n" in classes and "data-src" in attr:
+            kind, self._capture = "num", []
+        elif "lit" in classes:
+            kind, self._capture = "lit", []
+        elif classes & _EXEMPT_CLASSES:
+            kind = "exempt"
+        else:
+            kind = ""
+        block = None
+        if tag in _BLOCK and kind == "":
+            block = Block(self._slide, tag, self._svg > 0)
+            self.blocks.append(block)
+        self._stack.append((tag, kind, block, attr))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        return   # autocerradas (rect, line, br): sin texto
+
+    def handle_endtag(self, tag: str) -> None:
+        index = next((i for i in range(len(self._stack) - 1, -1, -1)
+                      if self._stack[i][0] == tag), None)
+        if index is None:
+            return
+        _, kind, _, attr = self._stack[index]
+        del self._stack[index:]
+        if tag == "svg":
+            self._svg -= 1
+        if kind in ("num", "lit"):
+            text = "".join(self._capture)
+            if kind == "num":
+                self.numbers.append(BoundNumber(self._slide, text, attr["data-src"],
+                                                attr.get("data-fmt", "")))
+            else:
+                self.literals.append((self._slide, text, attr.get("data-why", "")))
+            owner = self._current_block()
+            if owner is not None:
+                owner.parts.append((kind, text))
+
+    def _current_block(self) -> Optional[Block]:
+        return next((b for _, _, b, _ in reversed(self._stack) if b is not None), None)
+
+    def handle_data(self, data: str) -> None:
+        kinds = [kind for _, kind, _, _ in self._stack]
+        if "skip" in kinds or "exempt" in kinds:
+            return
+        if kinds and kinds[-1] in ("num", "lit"):
+            self._capture.append(data)
+            return
+        owner = self._current_block()
+        if owner is not None:
+            owner.parts.append(("text", data))
+        elif data.strip():
+            loose = Block(self._slide, "", self._svg > 0, [("text", data)])
+            self.blocks.append(loose)
+
+
+def read_deck(document: str) -> DeckDocument:
+    parser = DeckDocument()
+    parser.feed(document)
+    parser.close()
+    return parser
+
+
+# Numero suelto = palabra que, sin puntuacion ni simbolo de moneda, es un
+# numero con sufijo de unidad opcional. 'N2', '20-F', '3nm' y '10-K' no lo
+# son; '38%', '11x', '2,150' y 'US$5' si.
+_WORD_SPLIT = re.compile(r"[\s/\u2013\u2014]+|(?<=\d)-(?=\d)")
+_EDGE_PUNCT = "()[]{}.,;:!?\u00bf\u00a1\"'\u201c\u201d\u2018\u2019\u00ab\u00bb"
+_CURRENCY = re.compile(r"^(?:[A-Za-z]{0,3}\$|\u20ac|\u00a3|\u00a5)")
+_NUMERIC_WORD = re.compile(r"[-+\u2212]?\d[\d.,]*(?:%|x|pp|pb|bps?|k|m|mm|mn|bn)?", re.IGNORECASE)
+
+
+def loose_numbers(text: str, years: set[int]) -> list[str]:
+    """Palabras numericas de ``text`` que no son un anio del eje del modelo."""
+    hits: list[str] = []
+    for word in _WORD_SPLIT.split(text):
+        core = _CURRENCY.sub("", word.strip(_EDGE_PUNCT)).strip(_EDGE_PUNCT)
+        if not core or not _NUMERIC_WORD.fullmatch(core):
+            continue
+        if re.fullmatch(r"\d{4}", core) and int(core) in years:
+            continue
+        hits.append(word.strip(_EDGE_PUNCT))
+    return hits
+
+
+def unbound_numbers(doc: DeckDocument, years: set[int]) -> list[tuple[int, str, str]]:
+    """(lamina, numero, contexto) de cada numero visible sin origen."""
+    hits: list[tuple[int, str, str]] = []
+    for block in doc.blocks:
+        for kind, part in block.parts:
+            if kind != "text":
+                continue
+            for number in loose_numbers(part, years):
+                hits.append((block.slide, number, block.text[:60]))
+    return hits

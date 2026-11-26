@@ -343,3 +343,44 @@ class DesignTests(_Case):
         self.assertTrue(text.warning and not text.blocking)
         self.assertTrue(cvd.warning and not cvd.blocking)
         self.assertIn("1-2", cvd.detail)
+
+
+class ScanTests(unittest.TestCase):
+
+    def test_loose_numbers_rule(self) -> None:
+        years = {2025, 2026}
+        cases = {
+            "crece 38% al anio": ["38%"],
+            "multiplo de 11x y 2.5x": ["11x", "2.5x"],
+            "precio de US$5 y NT$2,150": ["US$5", "NT$2,150"],
+            "nodo N2 de 3nm, forma 20-F y 10-K": [],
+            "en 2025 y 2026": [],
+            "en 2019": ["2019"],
+            "rango 10-15% (aprox.)": ["10", "15%"],
+            "de 2025-2026": [],
+            "1Q2026E fue mejor": [],
+            "tres plantas": [],
+            "cae -4.2 pp.": ["-4.2"],
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(D.loose_numbers(text, years), expected)
+
+    def test_document_separates_bound_literal_and_plain_text(self) -> None:
+        n = D.Num(0.38, "Annual!D6")
+        doc = D.read_deck(D.render_markers(
+            '<html data-gap-max="75"><head><title>X 2019</title><style>p{margin:8px}</style>'
+            '</head><body><section class="slide content" data-n="3">'
+            f"<h2>Crece {n:.0%} y vale 99</h2>"
+            f"<p>{D.lit('4', why='pasos')} pasos<br>segunda linea</p>"
+            '<p class="source">Fuente: 20-F 2019, p. 45</p>'
+            f'<svg><text class="auto">1,500</text><text>{n:.0%}</text><text>77</text>'
+            '<rect width="5"/></svg>'
+            "</section><script>var a=12;</script></body></html>"))
+        self.assertEqual(doc.gap_max, 75)
+        self.assertEqual([(b.slide, b.text, b.src, b.fmt) for b in doc.numbers],
+                         [(3, "38%", "Annual!D6", ".0%"), (3, "38%", "Annual!D6", ".0%")])
+        self.assertEqual(doc.literals, [(3, "4", "pasos")])
+        self.assertEqual([(s, n_) for s, n_, _ in D.unbound_numbers(doc, set())],
+                         [(3, "99"), (3, "77")])
+        self.assertEqual(doc.blocks[0].text, "Crece 38% y vale 99")
