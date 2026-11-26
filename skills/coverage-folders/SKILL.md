@@ -77,15 +77,27 @@ carpetas viejas vacías se eliminan al final; reportar cada movimiento.
 
 ## Procedimiento — renombrado desde sec_fetch
 
-`tools/sec_fetch.py` baja crudo (`<TICKER>_<form>_<reportDate>.htm`) + manifest
-CSV. Si dos filings comparten form y fecha (dos 8-K del mismo día de evento),
-el segundo lleva la accession al final del nombre. Las enmiendas solo bajan con
+`tools/sec_fetch.py` baja crudo + manifest CSV. El nombre crudo es determinista
+(sale solo del filing, no del orden de la corrida):
+`<TICKER>_<form>_<reportDate>_<filingDate>_<accn6>.<ext>` el documento
+principal y `…_<accn6>_ex_<stem>.<ext>` cada exhibit (8-K y 6-K), con `accn6` =
+últimos 6 dígitos de la accession — varios 8-K o 6-K del mismo periodo nunca
+comparten archivo. Sin `--forms` el tool detecta la emisora: doméstica ⇒ 10-K,
+10-Q, 8-K; extranjera ⇒ 20-F (o 40-F) y 6-K. Las enmiendas solo bajan con
 `--amendments` y llegan con form `10-K/A` en el manifest y `10-K-A` en el
 nombre: se archivan con sufijo `_amended`. El manifest se acumula entre
 corridas (una corrida con `--since` no borra filas previas). Esta skill
 convierte al naming de la convención usando el manifest y el
-`fiscal_year_end` del perfil: 10-K ⇒ `FYyyyy`; 10-Q ⇒ `#Qyyyy` (trimestre
-FISCAL derivado del reportDate vs cierre fiscal, no calendario); 8-K ⇒ fecha.
+`fiscal_year_end` del perfil: 10-K / 20-F / 40-F ⇒ `FYyyyy`; 10-Q ⇒ `#Qyyyy`
+(trimestre FISCAL derivado del reportDate vs cierre fiscal, no calendario);
+8-K y 6-K ⇒ **conservan el nombre crudo completo** (periodo, fecha de
+presentación, `accn6` y `_ex_<stem>` en exhibits) y solo se mueven a su carpeta
+— recortarlo a la sola fecha encimaría los filings del mismo periodo.
+Coberturas bajadas con una versión anterior traen el nombre legacy
+(`<TICKER>_<form>_<reportDate>.htm`): se convierten igual por su fila del
+manifest, y un 8-K/6-K legacy recibe el `_<accn6>` de esa fila al archivarse.
+Si un nombre legacy lo compartían dos accessions, `sec_fetch` baja ambos de
+nuevo con el nombre determinista y avisa; el archivo viejo se conserva.
 Sin perfil aún (init paso 1): dejar el nombre crudo y renombrar al confirmarse
 el perfil en el paso 2. El manifest se conserva junto a los filings.
 
