@@ -24,7 +24,8 @@ nunca como ok). JAMÁS reimplementar un check S con un script propio de la
 cobertura. Los C de fórmula viva se leen de la tab `Checks`; C9 y los D los
 evalúa el agente con la regla escrita. Solo lectura: este comando NUNCA
 modifica el modelo.
-En modelo externo, F10 (sello del builder) se reporta `[aviso]`, no falla.
+En modelo externo se agrega `--external`: F10 (sello del builder) se reporta
+`[aviso]`, no falla. Sin la bandera, la falta de sello es falla.
 
 ## Recalculo (detección de ciclos — S10)
 
