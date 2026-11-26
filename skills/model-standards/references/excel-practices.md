@@ -144,6 +144,12 @@ CFF = −recompras − dividendos + movimiento de deuda + otros de financiamient
 cambio neto = CFO + CFI + CFF
 ```
 
+**Signo:** los signos de esa estructura viven en la FÓRMULA, no en el dato. La
+capa de captura guarda cada pago bruto como magnitud positiva (contrato en
+`templates/coverage-tree.md`, check C11) y la fila del modelo lo enlaza tal
+cual; el subtotal lo resta. Un capex tecleado en negativo y restado otra vez
+se suma al flujo.
+
 **Línea de conciliación derivada** (el "otros …" de cada subtotal): cuando la
 captura no desglosa todas las partidas, una fila explícita absorbe la
 diferencia contra el observado — `otros = subtotal_observado − Σ componentes`.

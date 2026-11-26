@@ -23,13 +23,19 @@ por 1,246 NT$ mn sin que ninguna cifra estuviera mal.
 
 El tool NO invierte signos. `sign = salida(+)` marca un pago que XBRL reporta
 en positivo (capex, dividendos, recompras, impuestos pagados, amortización de
-deuda, compras de valores). Al mapear:
+deuda, compras de valores). **Convención de los canónicos** (contrato en
+`templates/coverage-tree.md`): el pago se guarda igual, como MAGNITUD POSITIVA,
+y quien resta es la fórmula del modelo. Al mapear:
 
-- aplica el signo de la estructura del flujo, que RESTA esas partidas
-  (`CFI = −capex − compras de valores + …`, `CFF = −recompras − dividendos + …`
-  — `skills/model-standards/references/excel-practices.md`);
-- **puentea contra el filing**: componentes con signo = subtotal observado
-  (`cf_cfi`, `cf_cff`). Sin ese puente el FCF sale inflado.
+- **no voltees el signo**: una fila `salida(+)` entra al canónico con el valor
+  de XBRL. Si capturas del filing y el estado muestra el pago entre paréntesis,
+  guarda la magnitud. Check C11 falla un pago reservado en negativo;
+- los subtotales (`cf_cfi`, `cf_cff`, cambio neto) y las líneas netas entran
+  con su signo natural;
+- **puentea contra el filing**: en el modelo, la suma de componentes con el
+  signo de la estructura (`CFI = −capex − compras de valores + …`, `CFF =
+  −recompras − dividendos + …` — `skills/model-standards/references/excel-practices.md`)
+  = subtotal observado. Sin ese puente el FCF sale inflado.
 
 ## 3. `_alt` e IFRS
 

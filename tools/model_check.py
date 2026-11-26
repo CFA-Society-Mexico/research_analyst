@@ -1,4 +1,4 @@
-"""Checks estructurales (S) y de escaneo contable (C9, C10) del modelo, por codigo.
+"""Checks estructurales (S) y de escaneo contable (C9, C10, C11) del modelo, por codigo.
 
 Doctrina: un check es determinista o no es un check. Los F ya vivian en
 ``xlsx_builder.py audit``; los S y el C10 se declaraban "escaneo por codigo"
@@ -13,7 +13,7 @@ Uso:
                                 [--brand brand/DESIGN.md] [--external] [--recalc]
                                 [--inputs DIR] [--profile issuer-profile.yaml]
 
-Corre S (estructurales) -> C por escaneo (C9, C10) -> F (formato, via
+Corre S (estructurales) -> C por escaneo (C9, C10, C11) -> F (formato, via
 ``xlsx_builder.audit_format``) -> estado de los checks de formula viva (tabs
 Checks y Cover). Los D (doctrina) no son escaneo de codigo y no se reportan
 aqui.
@@ -827,6 +827,58 @@ def audit_capture(path: str, inputs_dir: str | None = None,
                     f"con la captura ({rule})")]
 
 
+# ---------------------------------------------------------------------------
+# C11 - signo de los pagos en la capa de captura
+# ---------------------------------------------------------------------------
+
+# Lineas reservadas de PAGO BRUTO. Convencion del contrato (coverage-tree.md):
+# en los canonicos se guardan como MAGNITUD POSITIVA -asi las reporta XBRL
+# (sign = salida(+) en xbrl_facts)- y la formula del modelo las resta. Fuera
+# quedan los subtotales (cf_cfi, cf_cff, cambio neto) y las lineas NETAS, que
+# llevan su signo natural: otros de inversion, papel comercial neto, impuestos
+# pagados netos de devoluciones, adquisiciones netas de efectivo adquirido.
+PAYMENT_LINE_ITEMS = frozenset({
+    "cf_capex", "cf_capex_intangibles", "cf_buybacks", "cf_dividends",
+    "cf_dividends_common", "cf_buy_securities", "cf_debt_repaid",
+    "cf_bonds_repaid", "cf_tax_withholding", "cf_interest_paid", "cf_lease_payments",
+})
+
+
+def audit_payment_signs(inputs_dir: str) -> list[Finding]:
+    """C11: ningun pago bruto de la capa de captura esta en negativo.
+
+    Un pago en negativo es una captura hecha con la convencion contraria (el
+    signo del estado de flujo). Mezclada con el resto, la formula del modelo
+    -que resta el pago- lo SUMA: el FCF sale inflado y ni el balance ni el
+    tie-out de caja lo notan, porque ambos leen el efectivo observado.
+    """
+    name = "C11 pagos en positivo en la captura"
+    folder = Path(inputs_dir)
+    files = [folder / f for f in CAPTURE_FILES.values() if (folder / f).is_file()]
+    if not files:
+        return [Finding(name, True, "n/a (sin capa de captura; C9 lo reporta)")]
+    negatives: list[str] = []
+    payments = 0
+    for path in sorted(files):
+        try:
+            captured = load_capture(path)
+        except CaptureError as exc:
+            return [Finding(name, False, str(exc))]
+        for (line_item, period), value in sorted(captured.items()):
+            if line_item not in PAYMENT_LINE_ITEMS:
+                continue
+            payments += 1
+            if value < 0:
+                negatives.append(f"{path.name}: {line_item} {period} = {value:,.0f}")
+    if negatives:
+        return [Finding(name, False,
+                        "pagos en negativo (convencion: magnitud positiva; la formula "
+                        "del modelo resta): " + _examples(negatives))]
+    if not payments:
+        return [Finding(name, True, "n/a (sin lineas reservadas de pago en la captura)")]
+    return [Finding(name, True, f"{payments} pagos, todos en positivo")]
+
+
 @dataclass(frozen=True)
 class CaptureOptions:
     """De donde toma C9 la capa de captura y el umbral.
@@ -892,9 +944,11 @@ def audit_groups(model: str, schedules: Sequence[str] | None,
         c9 = audit_capture(model, inputs_dir=capture.inputs_dir,
                            materiality_pct=capture.materiality_pct, external=external,
                            threshold_source=capture.threshold_source)
+    inputs_dir = capture.inputs_dir if capture else str(Path(model).parent / "inputs")
     groups: list[tuple[str, Sequence[Finding]]] = [
         ("Estructurales (S)", audit_structure(model, schedules)),
-        ("Contables por escaneo (C)", [*c9, *audit_cash_roll_formulas(model)]),
+        ("Contables por escaneo (C)", [*c9, *audit_payment_signs(inputs_dir),
+                                       *audit_cash_roll_formulas(model)]),
         ("Formato (F)", B.audit_format(model, brand=brand, external=external)),
     ]
     if live:
@@ -904,7 +958,7 @@ def audit_groups(model: str, schedules: Sequence[str] | None,
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Checks S, C9, C10 y F del modelo por codigo (solo lectura).")
+        description="Checks S, C9, C10, C11 y F del modelo por codigo (solo lectura).")
     parser.add_argument("model", help="ruta del modelo .xlsx")
     parser.add_argument("--driver-map", help="driver-map.md: exige un bloque Sch por schedule (S1)")
     parser.add_argument("--brand", help="brand/DESIGN.md: colores de marca aceptados por F4")

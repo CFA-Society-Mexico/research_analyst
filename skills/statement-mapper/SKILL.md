@@ -26,7 +26,8 @@ trimestre. Preferir esta ruta a extraer trimestre por trimestre de 10-Qs; el
 filing HTML queda para lo que XBRL no trae (notas, segmentos, guidance).
 **Antes de mapear ese CSV lee `references/xbrl-csv-rules.md`** (obligatorio):
 un vintage por estado y periodo (tag `vintage distinto` = conciliar contra el
-filing), signo (`sign = salida(+)`: el tool no invierte; se puentea contra el
+filing), signo (`sign = salida(+)`: el pago entra al canónico en POSITIVO, sin
+voltearlo — check C11 —; la fórmula del modelo resta y se puentea contra el
 subtotal observado) y líneas `_alt` / IFRS.
 
 **Salida formal — `model/inputs/`** (dueña también de esta carpeta):

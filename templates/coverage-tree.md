@@ -117,6 +117,18 @@ Reglas que C9 exige de esta capa:
   `tag = derivado` y su fórmula en `source_ref`. No se calcula en el script
   de build: una cifra que no está en el CSV no tiene respaldo.
 - **`guidance`** no respalda una cifra histórica.
+- **Signo del flujo de efectivo**: un pago bruto se guarda como MAGNITUD
+  POSITIVA — así lo reporta XBRL (`sign = salida(+)` en `xbrl_facts`) — y la
+  fórmula del modelo lo resta (`CFI = −capex − …`). Líneas reservadas de pago:
+  `cf_capex`, `cf_capex_intangibles`, `cf_buybacks`, `cf_dividends`,
+  `cf_dividends_common`, `cf_buy_securities`, `cf_debt_repaid`,
+  `cf_bonds_repaid`, `cf_tax_withholding`, `cf_interest_paid`,
+  `cf_lease_payments`. Los subtotales (`cf_cfo`, `cf_cfi`, `cf_cff`,
+  `cf_net_change`) y las líneas NETAS (otros de inversión o financiamiento,
+  papel comercial neto, impuestos pagados netos de devoluciones) llevan su
+  signo natural. Check C11 falla un pago reservado en negativo: una captura
+  con signos mezclados infla el FCF sin que el balance lo note. Una línea
+  nueva de pago se agrega a `PAYMENT_LINE_ITEMS` (`tools/model_check.py`).
 - **Líneas reservadas**: `is_ns_total` (ventas) y `bs_ta` (activos totales).
   Son la referencia de materialidad de C9; sin ellas en el CSV y vinculadas
   en el modelo, toda cifra sin respaldo falla.
