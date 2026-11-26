@@ -415,6 +415,46 @@ class BuilderTests(unittest.TestCase):
             self.assertEqual(B._print_report([warn, pending]), 3)
             self.assertEqual(B._print_report([warn, fail]), 1)
 
+    def test_link_capture_writes_a_sheet_scoped_name_with_row_and_scale(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Operating")
+        styler.link_capture(ws, 91, "bs_ap", scale=1_000_000)
+        defined = ws.defined_names["CAPTURE.bs_ap"]
+        self.assertEqual(defined.attr_text, "'Operating'!$91:$91")
+        self.assertEqual(defined.comment, "scale=1000000.0")
+        # Alcance de hoja: el nombre no existe a nivel libro.
+        self.assertNotIn("CAPTURE.bs_ap", styler.wb.defined_names)
+
+    def test_link_capture_survives_save_and_load(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Operating")
+        styler.link_capture(ws, 91, "bs_ap", scale=1_000_000)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "t.xlsx")
+            styler.save(path)
+            reloaded = load_workbook(path)["Operating"].defined_names["CAPTURE.bs_ap"]
+        self.assertEqual(reloaded.attr_text, "'Operating'!$91:$91")
+        self.assertEqual(reloaded.comment, "scale=1000000.0")
+
+    def test_link_capture_allows_the_same_line_once_per_sheet(self) -> None:
+        styler = B.ModelStyler()
+        operating = styler.new_sheet("Operating")
+        annual = styler.new_sheet("Annual")
+        styler.link_capture(operating, 91, "bs_ap")
+        styler.link_capture(annual, 40, "bs_ap")        # otra hoja: permitido
+        with self.assertRaises(ValueError):
+            styler.link_capture(operating, 92, "bs_ap")  # misma hoja: rechazado
+
+    def test_link_capture_rejects_bad_line_item_and_scale(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Operating")
+        for line_item in ("bs ap", "1bs", "bs-ap", ""):
+            with self.subTest(line_item=line_item), self.assertRaises(ValueError):
+                styler.link_capture(ws, 10, line_item)
+        for scale in (0, -1, True, float("nan")):
+            with self.subTest(scale=scale), self.assertRaises(ValueError):
+                styler.link_capture(ws, 10, "bs_ap", scale=scale)
+
 
 if __name__ == "__main__":
     unittest.main()

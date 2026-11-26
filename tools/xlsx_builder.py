@@ -61,6 +61,14 @@ def transition_year_of(keywords: Optional[str]) -> Optional[int]:
 
 FONT_NAME = "Aptos Narrow"
 
+# Vinculo fila <-> capa de captura (check C9). Un nombre definido con alcance
+# de hoja por linea: Excel ajusta su rango al insertar o mover filas, asi que
+# el vinculo sobrevive a una edicion manual del libro.
+CAPTURE_NAME_PREFIX = "CAPTURE."
+# Lineas que C9 usa como referencia de materialidad: ventas y activos totales
+# (los nombres que emite xbrl_fetch.CONCEPT_MAP).
+CAPTURE_REFERENCE_LINES = ("is_ns_total", "bs_ta")
+
 
 class Color(str, Enum):
     """Palette (ARGB). Identidad propia del plugin (2026-08-31): azul oscuro +
@@ -451,6 +459,36 @@ class ModelStyler:
         quoted = sheet.replace("'", "''")
         ref = f"'{quoted}'!{absolute_coordinate(coord)}"
         self.wb.defined_names.add(DefinedName(name, attr_text=ref))
+
+    def link_capture(self, ws: Worksheet, row: int, line_item: str,
+                     scale: float = 1.0) -> None:
+        """Declara que la fila ``row`` trae el historico de ``line_item`` de
+        la capa de captura (model/inputs/canonical_*.csv) — contrato del C9.
+
+        Escribe el nombre definido ``CAPTURE.<line_item>`` con alcance de la
+        hoja, apuntando a la fila completa, y la escala en su comentario.
+        ``scale`` convierte la unidad del modelo a la de la fuente:
+        valor_csv = valor_xlsx * scale (1_000_000 si el modelo vive en
+        millones y el CSV en unidades). El historico se escribe SIN redondear;
+        el formato de celda redondea la vista.
+        """
+        import re
+        from openpyxl.workbook.defined_name import DefinedName
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", line_item):
+            raise ValueError(
+                f"link_capture: line_item invalido {line_item!r} "
+                "(letras, digitos y guion bajo; empieza con letra)")
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not scale > 0:
+            raise ValueError(f"link_capture: scale debe ser un numero > 0, no {scale!r}")
+        name = CAPTURE_NAME_PREFIX + line_item
+        if name in ws.defined_names:
+            raise ValueError(
+                f"link_capture: {line_item} ya esta vinculado en la hoja {ws.title} "
+                "(una fila, una linea)")
+        quoted = ws.title.replace("'", "''")
+        ws.defined_names.add(DefinedName(
+            name, attr_text=f"'{quoted}'!${row}:${row}",
+            comment=f"scale={float(scale)!r}"))
 
     def save(self, path: str) -> None:
         self.wb.save(path)
