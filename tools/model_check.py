@@ -12,11 +12,12 @@ Uso:
     python tools/model_check.py <modelo.xlsx> [--driver-map driver-map.md]
                                 [--brand brand/DESIGN.md] [--external] [--recalc]
                                 [--inputs DIR] [--profile issuer-profile.yaml]
+                                [--as-of YYYY-MM-DD]
 
 Corre S (estructurales) -> C por escaneo (C9, C10, C11) -> F (formato, via
 ``xlsx_builder.audit_format``) -> estado de los checks de formula viva (tabs
-Checks y Cover). Los D (doctrina) no son escaneo de codigo y no se reportan
-aqui.
+Checks y Cover) -> D de vigencia (D3, D6, D10). Los demas D son doctrina, no
+escaneo de codigo, y no se reportan aqui.
 
 ``--recalc``: antes de auditar, recalcula una COPIA del modelo con Excel o
 LibreOffice (``recalc_validate``) y audita esa copia ya calculada: R1 (el
@@ -27,6 +28,10 @@ checks vivos se reportan [pendiente]: SIN evaluar, nunca verdes.
 C9 busca la capa de captura en ``inputs/`` junto al modelo y el umbral de
 materialidad en el ``issuer-profile.yaml`` de la carpeta padre de ``model/``
 (arbol de cobertura). ``--inputs`` y ``--profile`` cambian esas rutas.
+
+D3, D6 y D10 (vigencia de comps, macro-view e industry-report) se evaluan a
+la fecha de la corrida (``--as-of`` la fija) leyendo el arbol de cobertura;
+un insumo vencido es [aviso]. Fuera de una cobertura no aplican.
 
 Exit codes (los mismos del audit F): 0 = verde; 1 = alguna falla; 3 = sin
 fallas pero con checks [pendiente] (libro sin valores calculados: recalcular
@@ -45,6 +50,7 @@ import re
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Iterator, Sequence
 
@@ -178,6 +184,8 @@ def _section_rows(ws: Worksheet, title: str) -> tuple[int, int] | None:
     """Filas (primera, ultima) de una seccion: de su banda a la siguiente banda.
 
     Banda de seccion = label en columna B, bold y de 16 pt o mas (``section_header``).
+    El titulo se reconoce por PREFIJO: 'Assumptions (unica zona de input)' es
+    la seccion Assumptions.
     """
     first: int | None = None
     last_row = min(ws.max_row, B._MAX_SCAN_ROWS)
@@ -189,7 +197,7 @@ def _section_rows(ws: Worksheet, title: str) -> tuple[int, int] | None:
             continue
         if first is not None:
             return first, r - 1
-        if cell.value.strip().lower() == title:
+        if cell.value.strip().lower().startswith(title):
             first = r
     return (first, last_row) if first is not None else None
 
@@ -516,28 +524,24 @@ def audit_structure(path: str, driver_schedules: Sequence[str] | None = None) ->
 # C10 - desfase del roll de caja (escaneo de formulas)
 # ---------------------------------------------------------------------------
 
-_CASH_WORDS = ("efectivo", "caja")
-_OPEN_WORDS = ("al inicio", "inicial", "apertura")
-_CLOSE_WORDS = ("al cierre", "final")
 
 
 def _cash_rows(ws: Worksheet) -> tuple[int, int, int | None] | None:
-    """Filas (inicio, cierre, caja del balance) del roll de caja, por label."""
-    opening = closing = balance = None
+    """Filas (inicio, cierre, caja del balance) del roll de caja, por label.
+    Inicio y cierre salen de ``xlsx_builder.cash_roll_bounds`` (la misma
+    regla que usa F19)."""
+    bounds = B.cash_roll_bounds(ws)
+    if bounds is None:
+        return None
+    opening, closing = bounds
+    balance = None
     for r in range(1, min(ws.max_row, B._MAX_SCAN_ROWS) + 1):
-        label = ws.cell(row=r, column=2).value
-        if not isinstance(label, str):
-            continue
-        low = label.strip().lower()
-        if not any(word in low for word in _CASH_WORDS):
-            continue
-        if opening is None and any(word in low for word in _OPEN_WORDS):
-            opening = r
-        elif closing is None and any(word in low for word in _CLOSE_WORDS):
-            closing = r
-        elif balance is None and low.startswith(_CASH_WORDS) and "cambio" not in low:
+        low = str(ws.cell(row=r, column=2).value or "").strip().lower()
+        if (r not in bounds and low.startswith(B.CASH_LABEL_PREFIXES)
+                and "cambio" not in low):
             balance = r
-    return (opening, closing, balance) if opening and closing else None
+            break
+    return opening, closing, balance
 
 
 def _references(formula: str, sheet: str, row: int, column: int) -> bool:
@@ -675,10 +679,11 @@ class _UnbackedRow:
     reason: str
     cells: int = 0
     material: int = 0
-    unmeasurable: bool = False
+    unmeasurable: str = ""    # por que no se pudo medir; vacio = medible
 
     def describe(self, where: str) -> str:
-        note = "; sin referencia de materialidad" if self.unmeasurable else ""
+        note = (f"; sin referencia de materialidad ({self.unmeasurable})"
+                if self.unmeasurable else "")
         return f"{where} ({self.label}): {self.cells} cifras {self.reason}{note}"
 
 
@@ -771,8 +776,17 @@ def _scan_capture_sheet(ws: Worksheet, book: Book, folder: Path,
             entry.cells += 1
             threshold = _materiality_threshold(captured, key, materiality_pct)
             scale = link.scale if link is not None else money
-            if threshold is None or scale is None:
-                entry.unmeasurable = True
+            if scale is None:
+                # Ventas y activos totales suelen ser FORMULAS (suma de partidas):
+                # igual se vinculan, para declarar la unidad monetaria de la hoja.
+                entry.unmeasurable = entry.unmeasurable or (
+                    "la hoja no vincula " + " ni ".join(B.CAPTURE_REFERENCE_LINES))
+                entry.material += 1
+            elif threshold is None:
+                # Se reporta el PRIMER periodo sin referencia de la fila.
+                entry.unmeasurable = entry.unmeasurable or (
+                    "la captura no trae " + " o ".join(B.CAPTURE_REFERENCE_LINES)
+                    + f" de {key}")
                 entry.material += 1
             elif abs(value) * scale > threshold:
                 entry.material += 1
@@ -903,6 +917,163 @@ def capture_options(model: Path, inputs: str | None, profile: str | None) -> Cap
 
 
 # ---------------------------------------------------------------------------
+# D3 / D6 / D10 - vigencia de comps, macro-view e industry-report
+# ---------------------------------------------------------------------------
+
+# Defaults de los contratos (templates/comp-snapshot.yaml, macro-view.yaml,
+# issuer-profile.yaml): aplican cuando el archivo no trae el campo.
+DEFAULT_COMP_STALE_DAYS = 5
+DEFAULT_MACRO_STALENESS_MONTHS = 3
+DEFAULT_INDUSTRY_STALENESS_MONTHS = 6
+
+_ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+_DATED_SUFFIX = re.compile(r"_\d{4}-\d{2}-\d{2}$")
+_INDUSTRY_REPORT = re.compile(r"^industry-report_(\d{4}-\d{2}-\d{2})\.md$")
+
+
+@dataclass(frozen=True)
+class CoverageTree:
+    """Artefactos del arbol de cobertura que consultan los checks de vigencia."""
+
+    comps_dir: Path
+    macro_view: Path
+    industry_dir: Path
+    profile: Path
+
+
+def coverage_tree(model: Path, profile: str | None) -> CoverageTree | None:
+    """Arbol de ``<raiz>/<TICKER>/model/<modelo>.xlsx``. None si el modelo no
+    vive en una cobertura (no hay ``issuer-profile.yaml`` en su carpeta padre):
+    ahi la vigencia no aplica. Se resuelve sobre la ruta ORIGINAL del modelo."""
+    ticker_dir = model.resolve().parent.parent
+    profile_path = Path(profile) if profile else ticker_dir / "issuer-profile.yaml"
+    if not profile_path.is_file():
+        return None
+    return CoverageTree(comps_dir=ticker_dir / "comps",
+                        macro_view=ticker_dir.parent / "macro" / "macro-view.yaml",
+                        industry_dir=ticker_dir / "research" / "industry",
+                        profile=profile_path)
+
+
+def _yaml_field(text: str, key: str) -> str | None:
+    """Valor de un campo de PRIMER NIVEL ``key: valor  # comentario``.
+
+    Lectura por linea, sin dependencia de YAML: basta para los escalares de
+    fecha y plazo que leen estos checks. None si el campo no esta.
+    """
+    found = re.search(rf"^{re.escape(key)}:[ \t]*(.*)$", text, re.MULTILINE)
+    if found is None:
+        return None
+    return found.group(1).split(" #", 1)[0].strip().strip("\"'")
+
+
+def _parse_date(text: str | None) -> date | None:
+    """Primera fecha YYYY-MM-DD del texto ('2026-08-31 11:05 KST' incluido)."""
+    found = _ISO_DATE.search(text or "")
+    if found is None:
+        return None
+    try:
+        return date(int(found.group(1)), int(found.group(2)), int(found.group(3)))
+    except ValueError:
+        return None
+
+
+def _int_field(text: str, key: str, default: int) -> int:
+    value = _yaml_field(text, key)
+    return int(value) if value is not None and value.isdigit() else default
+
+
+def _add_months(day: date, months: int) -> date:
+    """Mismo dia ``months`` meses despues; fin de mes si ese dia no existe."""
+    index = day.month - 1 + months
+    year, month = day.year + index // 12, index % 12 + 1
+    last = (date(year + month // 12, month % 12 + 1, 1) - date(year, month, 1)).days
+    return date(year, month, min(day.day, last))
+
+
+def _check_d3(tree: CoverageTree, today: date) -> Finding:
+    name = "D3 vigencia de comps"
+    files = sorted(tree.comps_dir.glob("*.yaml")) if tree.comps_dir.is_dir() else []
+    if not files:
+        return Finding(name, True, "n/a (sin snapshots en comps/)")
+    # Por comparable cuenta el snapshot MAS RECIENTE (vigente = fecha mas reciente).
+    latest: dict[str, tuple[date | None, int]] = {}
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        comp = _yaml_field(text, "ticker") or _DATED_SUFFIX.sub("", path.stem)
+        as_of = _parse_date(_yaml_field(text, "as_of"))
+        limit = _int_field(text, "stale_days", DEFAULT_COMP_STALE_DAYS)
+        known = latest.get(comp)
+        if known is None or (as_of is not None and (known[0] is None or as_of > known[0])):
+            latest[comp] = (as_of, limit)
+    stale: list[str] = []
+    for comp, (as_of, limit) in sorted(latest.items()):
+        if as_of is None:
+            stale.append(f"{comp} (sin as_of)")
+        elif (today - as_of).days > limit:
+            stale.append(f"{comp} ({(today - as_of).days} dias, limite {limit})")
+    if stale:
+        return Finding(name, False,
+                       f"{len(stale)} de {len(latest)} snapshots vencidos al {today}: "
+                       + _examples(stale, limit=10), warning=True)
+    return Finding(name, True, f"{len(latest)} snapshots vigentes al {today}")
+
+
+def _check_d6(tree: CoverageTree, today: date) -> Finding:
+    name = "D6 vigencia de macro-view"
+    if not tree.macro_view.is_file():
+        return Finding(name, False, "sin macro/macro-view.yaml en la raiz del workspace",
+                       warning=True)
+    text = tree.macro_view.read_text(encoding="utf-8")
+    updated = _parse_date(_yaml_field(text, "updated_at"))
+    if updated is None:
+        return Finding(name, False, "macro-view.yaml sin updated_at (vacio o ilegible)",
+                       warning=True)
+    months = _int_field(text, "staleness_warn_months", DEFAULT_MACRO_STALENESS_MONTHS)
+    if today > _add_months(updated, months):
+        return Finding(name, False,
+                       f"updated_at {updated}: mas de {months} meses al {today}", warning=True)
+    return Finding(name, True, f"updated_at {updated}, dentro de {months} meses al {today}")
+
+
+def _check_d10(tree: CoverageTree, today: date) -> Finding:
+    name = "D10 vigencia de industry-report"
+    days = []
+    if tree.industry_dir.is_dir():
+        for path in tree.industry_dir.iterdir():
+            found = _INDUSTRY_REPORT.match(path.name)
+            parsed = _parse_date(found.group(1)) if found else None
+            if parsed is not None:
+                days.append(parsed)
+    if not days:
+        return Finding(name, False, "sin industry-report en research/industry/", warning=True)
+    latest = max(days)
+    months = _int_field(tree.profile.read_text(encoding="utf-8"),
+                        "industry_staleness_months", DEFAULT_INDUSTRY_STALENESS_MONTHS)
+    if today > _add_months(latest, months):
+        return Finding(name, False,
+                       f"reporte vigente del {latest}: mas de {months} meses al {today}; "
+                       "corre /update-industry", warning=True)
+    return Finding(name, True, f"reporte del {latest}, dentro de {months} meses al {today}")
+
+
+def audit_staleness(tree: CoverageTree | None, today: date) -> list[Finding]:
+    """D3, D6 y D10: vigencia de los insumos de la cobertura a la fecha ``today``.
+
+    Se evaluan en cada corrida, no al construir: un resultado estampado en el
+    libro queda verde aunque el insumo envejezca (bug de la auditoria AAPL
+    2026-09-02: D3 decia OK con snapshots vencidos). Un insumo vencido AVISA,
+    nunca bloquea: la decision de actualizarlo es del analista.
+    """
+    if tree is None:
+        reason = "n/a (el modelo no vive en un arbol de cobertura)"
+        return [Finding(name, True, reason) for name in (
+            "D3 vigencia de comps", "D6 vigencia de macro-view",
+            "D10 vigencia de industry-report")]
+    return [_check_d3(tree, today), _check_d6(tree, today), _check_d10(tree, today)]
+
+
+# ---------------------------------------------------------------------------
 # Reporte y CLI
 # ---------------------------------------------------------------------------
 
@@ -926,7 +1097,8 @@ def print_report(groups: Sequence[tuple[str, Sequence[Finding]]]) -> int:
     if pending:
         print("Veredicto: PENDIENTE - no es verde; resuelve los pendientes y re-audita")
         return 3
-    print("Veredicto: VERDE (checks por codigo y checks vivos; los D no se evaluan aqui)")
+    print("Veredicto: VERDE (checks por codigo, vivos y de vigencia; "
+          "los demas D no se evaluan aqui)")
     return 0
 
 
@@ -958,7 +1130,8 @@ def audit_groups(model: str, schedules: Sequence[str] | None,
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Checks S, C9, C10, C11 y F del modelo por codigo (solo lectura).")
+        description="Checks S, C9, C10, C11, F y vigencia (D3, D6, D10) del modelo por "
+                    "codigo (solo lectura).")
     parser.add_argument("model", help="ruta del modelo .xlsx")
     parser.add_argument("--driver-map", help="driver-map.md: exige un bloque Sch por schedule (S1)")
     parser.add_argument("--brand", help="brand/DESIGN.md: colores de marca aceptados por F4")
@@ -973,6 +1146,9 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--profile",
                         help="issuer-profile.yaml con el umbral de C9 "
                              "(default: el de la cobertura)")
+    parser.add_argument("--as-of", type=date.fromisoformat, default=None, metavar="YYYY-MM-DD",
+                        help="fecha contra la que se mide la vigencia de comps, macro-view "
+                             "e industry-report (default: hoy)")
     args = parser.parse_args(list(argv[1:]))
     if not Path(args.model).is_file():
         print(f"[x] no existe el modelo: {args.model}")
@@ -981,9 +1157,12 @@ def main(argv: Sequence[str]) -> int:
     brand = B.load_brand(args.brand) if args.brand else None
     # Sobre la ruta original: --recalc audita una copia en otro directorio.
     capture = capture_options(Path(args.model), args.inputs, args.profile)
+    # La fecha de hoy solo entra aqui, como default explicito de --as-of.
+    content = ("Contenido por escaneo (D)", audit_staleness(
+        coverage_tree(Path(args.model), args.profile), args.as_of or date.today()))
     if not args.recalc:
-        return print_report(audit_groups(args.model, schedules, brand, args.external,
-                                         capture=capture))
+        return print_report([*audit_groups(args.model, schedules, brand, args.external,
+                                           capture=capture), content])
     import recalc_validate  # import tardio: solo --recalc lanza un motor externo
     with tempfile.TemporaryDirectory(prefix="ra_recalc_") as tmp:
         recalc, recalculated = recalc_validate.validate(Path(args.model), Path(tmp))
@@ -992,7 +1171,7 @@ def main(argv: Sequence[str]) -> int:
         target = str(recalculated) if recalculated is not None else args.model
         groups = audit_groups(target, schedules, brand, args.external,
                               live=recalculated is None, capture=capture)
-        return print_report([("Recalculo (R)", recalc), *groups])
+        return print_report([("Recalculo (R)", recalc), *groups, content])
 
 
 if __name__ == "__main__":

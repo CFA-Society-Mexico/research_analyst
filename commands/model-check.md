@@ -23,7 +23,9 @@ exit 1 = falla, exit 3 = pendiente de recálculo (se reporta `[pendiente]`,
 nunca como ok). JAMÁS reimplementar un check S con un script propio de la
 cobertura. Los C de fórmula viva (tabs `Checks` y `Cover`) los lee la misma
 corrida: evaluados si el libro trae valores calculados, `[pendiente]: SIN
-evaluar` si no. Los D los evalúa el agente con la regla escrita. C9 toma la
+evaluar` si no. D3, D6 y D10 (vigencia de comps, macro-view e
+industry-report) salen de la misma corrida, medidos a hoy o a `--as-of`; los
+demás D los evalúa el agente con la regla escrita. C9 toma la
 capa de captura de `model/inputs/` junto al modelo y el umbral del
 `issuer-profile.yaml` de la cobertura (`--inputs` / `--profile` cambian esas
 rutas). Solo lectura: este comando NUNCA modifica el modelo.

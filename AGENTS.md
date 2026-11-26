@@ -67,7 +67,8 @@ SKILL.md); las demás solo leen.
   extranjera — 20-F/40-F + 6-K; SIEMPRE con gate del usuario antes de descargar).
 - xlsx solo vía `tools/xlsx_builder.py` (skill xlsx-building) — nunca openpyxl
   crudo para estructura/formato; audit de formato: `python tools/xlsx_builder.py audit <modelo>`;
-  checks S + C9 + C10 + F en una corrida: `python tools/model_check.py <modelo>` (nunca
+  checks S + C9 + C10 + C11 + F + vigencia (D3/D6/D10) en una corrida:
+  `python tools/model_check.py <modelo>` (nunca
   reimplementes un check S a mano); con `--recalc` recalcula una copia con
   Excel o LibreOffice y evalúa además R1/R2 y los checks de fórmula viva
   (`python tools/recalc_validate.py <modelo>` hace solo ese paso). Sin
