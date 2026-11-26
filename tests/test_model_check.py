@@ -617,6 +617,14 @@ class StalenessTests(unittest.TestCase):
         self.assertTrue(self._checks(date(2026, 11, 25))["D6"].ok)      # dia 0 del limite
         self.assertWarns(self._checks(date(2026, 11, 26))["D6"], "2026-08-25", "3 meses")
 
+    def test_d6_reads_the_top_level_date_not_a_country_block(self) -> None:
+        self._macro('updated_at: "2026-10-01"\nstaleness_warn_months: 3\n'
+                    'countries:\n  taiwan:\n    as_of: "2020-01-01"\n'
+                    '    updated_at: "2020-01-01"\n')
+        finding = self._checks()["D6"]
+        self.assertTrue(finding.ok, finding.detail)
+        self.assertIn("2026-10-01", finding.detail)
+
     def test_d6_missing_or_undated_macro_view_warns(self) -> None:
         self._macro('updated_at: ""\nstaleness_warn_months: 3\n')
         self.assertWarns(self._checks()["D6"], "updated_at")

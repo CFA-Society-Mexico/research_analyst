@@ -148,6 +148,35 @@ Solo movimientos, nada se borra (Standard V(C)):
 nunca resolver en silencio). Carpetas viejas vacías se eliminan al final
 (carpeta vacía no es dato).
 
+### Migración del macro-view a `countries:` (bloques por país)
+
+Aplica a un `macro/macro-view.yaml` con bloques de país sueltos en el primer
+nivel (`mexico:`, `taiwan:`). K3 los lee igual y valida sus datos, pero avisa
+`campo desconocido: <pais> (parece un bloque por pais ...)` hasta migrar: el
+archivo viejo nunca queda ilegible. La migración la propone `/update-macro`
+y la aplica el analista con gate; nada se borra.
+
+1. Snapshot primero: `macro/history/macro-view_<YYYY-MM-DD>_pre-countries.yaml`.
+2. Crear `countries:` en el primer nivel y mover CADA bloque de país debajo,
+   con la misma clave y dos espacios más de sangría (comentarios incluidos).
+   El contenido no cambia. `gate_status` de primer nivel se queda donde está:
+   ya es campo del contrato.
+3. Por bloque, completar lo que K3 avisa — cada valor lo confirma el analista:
+   - `as_of` del bloque, si no lo trae.
+   - `rates.risk_free_10y` `{value, label, source}`: si el bloque eligió otro
+     instrumento (p. ej. `rates.govt_long_term` con `selected_as_risk_free:
+     true`), se copia ese dato con su cita; el original se queda.
+   - Todo dato que K3 marque `sin source` (p. ej. un ERP total cuyo `source`
+     solo vive en sus componentes) recibe su cita.
+4. Correr `python tools/contract_check.py <raiz>/<TICKER>` y confirmar que
+   K3 ya no avisa `campo desconocido` por los países. Los avisos de
+   `value pendiente (null)` son pendientes declarados, no defectos.
+5. Registrar la migración en el `journal/decisions.md` de cada cobertura que
+   lee un bloque de país (el modelo cita "bloque <pais>"; la cita pasa a ser
+   `countries.<pais>`).
+
+D6 no cambia: lee el `updated_at` de primer nivel.
+
 ## Convención de nombres de filings
 
 Formato: `<TICKER>_<tipo>_<periodo>[_fecha].<ext>` — pensado para retrieval, no para humanos.

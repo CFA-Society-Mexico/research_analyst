@@ -10,9 +10,22 @@
 # o de la casa, etiqueta supuesto; si viene de research de terceros, cita el
 # documento (opinión de tercero se atribuye, no se vuelve supuesto sin gate).
 
+#
+# Forma de un DATO: todo mapa con `value` es un dato y lleva `value` numérico y
+# `source` (propio o del mapa que lo contiene: la cita de un ERP cubre sus
+# componentes; la de una ruta, sus puntos). `value: null` con source = pendiente
+# declarado (K3 avisa). `{}` y `[]` = no capturado todavía. Lo valida K3
+# (tools/contract_check.py).
+#
+# Los campos de primer nivel (rates, fx, inflation, gdp, equity_risk_premium)
+# son el país por defecto del workspace (Estados Unidos en la cobertura SEC).
+# Cada país adicional va en su bloque dentro de `countries:` (ver abajo).
+
 updated_at: ""                # YYYY-MM-DD — preflight avisa si stale (> staleness_warn_months)
 owner: ""                     # analista o casa
 staleness_warn_months: 3
+gate_status: ""               # opcional: estado del gate del analista sobre el archivo
+                              # (p. ej. "propuesta - SIN confirmar por el analista")
 
 rates:
   policy_rate_path:           # [{date, value, label: observado|supuesto, source}]
@@ -39,3 +52,31 @@ commodity_decks: []           # [{commodity, unit, path: [{date, value}], label,
 
 equity_risk_premium: {}       # {value, label, source} — CAPM
 notes: ""
+
+countries: {}                 # un bloque por país adicional, clave = país en minúsculas
+# Bloque ABIERTO: los campos de abajo son los que nombra el contrato; una
+# sección propia del país (labor, tax, ...) se permite. K3 avisa si el bloque no
+# trae as_of, rates.risk_free_10y o equity_risk_premium (insumos del CAPM).
+# Qué bloque usa cada emisora lo decide el analista (moneda y mercado de la
+# emisora); el plugin pregunta, jamás lo asume.
+# Workspace anterior a `countries:` (bloques `mexico:` / `taiwan:` sueltos en el
+# primer nivel): ruta de migración en templates/coverage-tree.md.
+#
+# countries:
+#   mexico:
+#     as_of: "YYYY-MM-DD"
+#     gate_status: ""
+#     rates:
+#       risk_free_10y: {value: , label: , source: }   # el instrumento que eligió el analista
+#     fx:
+#       usdmxn_spot: {value: , label: , source: }
+#     inflation:
+#       headline_yoy: {value: , label: , source: }
+#     gdp:
+#       forecast_path: []                              # [{date, value, label, source}]
+#     equity_risk_premium:
+#       value:
+#       label: atribuido
+#       source: ""
+#       components: {}                                 # p. ej. mature_erp, country_risk_premium
+#     notes: ""

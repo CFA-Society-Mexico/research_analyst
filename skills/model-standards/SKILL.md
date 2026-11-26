@@ -24,7 +24,7 @@ skill jamás genera un número.**
 | `model/inputs/canonical_*.csv` | `statement-mapper` | cifras `observado` por línea, con cita en los `extract_*.json`; el histórico del xlsx se puebla desde aquí (check C9) |
 | `driver-map.md` (raíz) | `driver-inventory` (design) | drivers clave + spec de schedules + doble ruta de revenue |
 | `issuer-profile.yaml` (raíz) | `framework-mapper` | marco, convenciones, métodos de valuación activos |
-| `macro/macro-view.yaml` (workspace) | analista | rf, ERP, FX, decks — para tab Macro |
+| `macro/macro-view.yaml` (workspace) | analista | rf, ERP, FX, decks — para tab Macro. Emisora fuera del país por defecto: el bloque `countries.<pais>` que el analista confirme (si no existe o le falta rf/ERP, detente y manda a `/update-macro`) |
 | `comps/*.yaml` | `statement-mapper` | snapshots para Val_Comps |
 
 Falta un contrato → detente y repórtalo; no construyas parcial ni inventes el insumo.

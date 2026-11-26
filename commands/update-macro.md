@@ -13,7 +13,10 @@ valor. El plugin jamás decide un supuesto macro.
    template y avisar — no hay nada que actualizar todavía). El archivo debe
    parsear: correr `python tools/contract_check.py <raiz>/<TICKER>` sobre una
    cobertura del workspace y resolver K1/K3 ANTES de proponer cambios — editar
-   un YAML roto lo rompe más.
+   un YAML roto lo rompe más. Si K3 avisa `campo desconocido: <pais> (parece
+   un bloque por pais ...)`, el archivo es anterior a `countries:`: proponer
+   la migración de `templates/coverage-tree.md` (gate del analista) antes que
+   cualquier otro cambio.
 2. **Series frescas:** correr `python tools/fred_fetch.py --dest macro/series`
    (gate: avisar antes). Sin key: pedirla en el chat (el registro es gratuito,
    link en el mensaje del tool) y guardarla en `macro/fred.key` — jamás
@@ -30,9 +33,9 @@ valor. El plugin jamás decide un supuesto macro.
 | Paso | Qué hace |
 |---|---|
 | 1 | Lee `macro/series/` (observados FRED: rf de la última obs de DGS10, FX de DEXMXUS, etc.) y `macro/sources/` completo. Regla de citado: serie ⇒ `observado` con serie y fecha de observación; dato duro de documento ⇒ `observado` con documento y página; opinión de tercero ⇒ atribuida, jamás supuesto sin gate |
-| 2 | **Propuesta campo por campo**: tabla valor vigente → valor propuesto → fuente exacta → etiqueta. Solo campos con evidencia en las fuentes; el resto no se toca |
+| 2 | **Propuesta campo por campo**: tabla valor vigente → valor propuesto → fuente exacta → etiqueta. Cada fila nombra su ruta (`rates.risk_free_10y` o `countries.<pais>.rates.risk_free_10y`). País nuevo ⇒ bloque nuevo en `countries:` con `as_of`, `rates.risk_free_10y` y `equity_risk_premium` — cuál país necesita una emisora lo decide el analista. Solo campos con evidencia en las fuentes; el resto no se toca |
 | 3 | **Gate POR CAMPO**: el analista confirma, corrige o rechaza cada propuesta. Sin confirmación, el campo queda como estaba |
-| 4 | Escribe el yaml con los campos confirmados + `updated_at` de hoy |
+| 4 | Escribe el yaml con los campos confirmados + `updated_at` de hoy (y `as_of` del bloque de país tocado). Cada dato `{value, label, source}`; pendiente = `value: null` con source que diga qué falta. Re-correr contract_check: K3 sin fallas |
 | 5 | `impact-triage` **transversal**: un cambio macro pega a TODAS las coberturas del workspace — triage por emisora (rf/ERP ⇒ valuación; FX ⇒ emisoras expuestas; inflación ⇒ monitor B-10 de emisoras NIF) |
 
 ## Post-run

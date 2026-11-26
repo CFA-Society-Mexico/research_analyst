@@ -28,7 +28,9 @@ etapa siguiente se DERIVAN de la economía de industria que esta skill establece
   md): **si está, se considera**. Dato duro ⇒ `observado` con documento y
   página; opinión de tercero ⇒ atribuida ("<fuente> estima X"), jamás supuesto
   del analista sin su gate.
-- `macro/macro-view.yaml` para el contraste industria vs ciclo macro.
+- `macro/macro-view.yaml` para el contraste industria vs ciclo macro (el
+  bloque del país donde compite la emisora: primer nivel o
+  `countries.<pais>`; si la industria es multi-país, se dice cuál se usó).
 - **Etiquetado estricto:** hecho con fuente = `observado`; interpretación del
   analista (FODA, posicionamiento) = `supuesto`; lo que diga el management de
   cualquier emisora = `guidance`.

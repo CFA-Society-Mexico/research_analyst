@@ -76,6 +76,32 @@ income_items:
 framework: "us_gaap"
 """
 
+# Bloques por pais (countries:), con la forma de un workspace real: secciones
+# propias del pais (labor), componentes que heredan el source del mapa que
+# los contiene y una ruta con values[] citada en su mapa.
+COUNTRIES_OK = """\
+gate_status: "propuesta - SIN confirmar"
+countries:
+  mexico:
+    as_of: "2026-09-07"
+    rates:
+      risk_free_10y: {value: 9.45, label: observado, source: "FRED IRLTLT01MXM156N"}
+    equity_risk_premium:
+      value: 6.74
+      label: atribuido
+      source: "Damodaran, tabla de paises"
+      components:
+        country_risk_premium: {value: 2.46, label: atribuido}
+    labor:
+      minimum_wage_daily_mxn: {value: 315.04, label: observado, source: "CONASAMI"}
+    gdp:
+      real_yoy_recent_path:
+        label: observado
+        source: "FRED NGDPRSAXDCMXQ"
+        values:
+          - {date: "2026-Q2", value: 1.93}
+"""
+
 CSV_HEADER = "line_item,period,value,source_doc,source_ref,tag\n"
 QUARTERLY_OK = CSV_HEADER + (
     "is_ns_total,1Q2026,100.0,10-Q acc 1,p.3,observado\n"
@@ -300,12 +326,109 @@ class MacroTests(_Coverage):
         (self.root / "macro" / "macro-view.yaml").unlink()
         self.assertWarns(self._checks()["K3"], "sin macro-view.yaml")
 
+    def _k3(self, text: str) -> Finding:
+        self._write("macro/macro-view.yaml", text)
+        return self._checks()["K3"]
+
     def test_unknown_field_and_bad_window(self) -> None:
-        self._write("macro/macro-view.yaml", MACRO_OK + 'gate_status: "propuesta"\n')
-        self.assertWarns(self._checks()["K3"], "campo desconocido: gate_status")
+        self._write("macro/macro-view.yaml", MACRO_OK + 'house_view: "x"\n')
+        self.assertWarns(self._checks()["K3"], "campo desconocido: house_view")
         self._write("macro/macro-view.yaml",
                     MACRO_OK.replace("staleness_warn_months: 3", "staleness_warn_months: 0"))
         self.assertFails(self._checks()["K3"], "staleness_warn_months")
+
+
+    # --- datos {value, source} y bloques por pais ---------------------------
+
+    def test_country_blocks_are_green(self) -> None:
+        finding = self._k3(MACRO_OK + COUNTRIES_OK)
+        self.assertTrue(finding.ok, finding.detail)
+        self.assertFalse(finding.warning, finding.detail)
+        self.assertIn("1 pais", finding.detail)
+
+    def test_country_datum_without_source_fails(self) -> None:
+        text = MACRO_OK + COUNTRIES_OK.replace(', source: "CONASAMI"', "")
+        self.assertFails(self._k3(text),
+                         "countries.mexico.labor.minimum_wage_daily_mxn sin source")
+
+    def test_component_without_any_source_up_the_tree_fails(self) -> None:
+        text = MACRO_OK + COUNTRIES_OK.replace('      source: "Damodaran, tabla de paises"\n', "")
+        self.assertFails(
+            self._k3(text),
+            "countries.mexico.equity_risk_premium sin source",
+            "countries.mexico.equity_risk_premium.components.country_risk_premium sin source")
+
+    def test_path_item_without_source_up_the_tree_fails(self) -> None:
+        text = MACRO_OK + COUNTRIES_OK.replace('        source: "FRED NGDPRSAXDCMXQ"\n', "")
+        self.assertFails(self._k3(text),
+                         "countries.mexico.gdp.real_yoy_recent_path.values[0] sin source")
+
+    def test_non_numeric_value_fails(self) -> None:
+        text = MACRO_OK + COUNTRIES_OK.replace("value: 9.45,", 'value: "9.45%",')
+        self.assertFails(self._k3(text),
+                         "countries.mexico.rates.risk_free_10y sin value numerico")
+
+    def test_null_value_with_source_warns_as_pending(self) -> None:
+        text = MACRO_OK + COUNTRIES_OK + (
+            "    fx:\n"
+            "      usdmxn_path:\n"
+            '        - {date: "2026-08-21", value: null, label: observado, source: "FRED"}\n')
+        self.assertWarns(self._k3(text),
+                         "countries.mexico.fx.usdmxn_path[0]: value pendiente (null)")
+
+    def test_null_value_without_source_fails(self) -> None:
+        text = MACRO_OK + COUNTRIES_OK + (
+            "    fx:\n"
+            "      usdmxn_spot: {value: null, label: observado}\n")
+        self.assertFails(self._k3(text), "countries.mexico.fx.usdmxn_spot sin source")
+
+    def test_top_level_data_follow_the_same_rule(self) -> None:
+        self.assertFails(self._k3(MACRO_OK.replace(', source: "FRED DGS10"', "")),
+                         "rates.risk_free_10y sin source")
+        deck = ("commodity_decks:\n"
+                '  - {commodity: cobre, unit: USD/lb, label: supuesto, source: "casa",\n'
+                '     path: [{date: "2027", value: 4.2}]}\n')
+        self.assertTrue(self._k3(MACRO_OK + deck).ok)
+        self.assertFails(self._k3(MACRO_OK + deck.replace(', source: "casa"', "")),
+                         "commodity_decks[0].path[0] sin source")
+
+    def test_empty_template_placeholders_are_not_data(self) -> None:
+        text = MACRO_OK + "equity_risk_premium: {}\ninflation:\n  mx_forecast_path: []\n"
+        self.assertTrue(self._k3(text).ok)
+
+    def test_country_block_without_capm_inputs_warns(self) -> None:
+        text = MACRO_OK + COUNTRIES_OK.replace(
+            '      risk_free_10y: {value: 9.45, label: observado, source: "FRED IRLTLT01MXM156N"}\n',
+            '      govt_long_term: {value: 9.45, label: observado, source: "FRED"}\n')
+        self.assertWarns(self._k3(text),
+                         "countries.mexico sin rates.risk_free_10y (insumo del CAPM)")
+
+    def test_country_as_of(self) -> None:
+        self.assertFails(self._k3(MACRO_OK + COUNTRIES_OK.replace('"2026-09-07"', '"septiembre"')),
+                         "countries.mexico.as_of sin fecha")
+        self.assertWarns(self._k3(MACRO_OK + COUNTRIES_OK.replace('    as_of: "2026-09-07"\n', "")),
+                         "countries.mexico sin as_of")
+
+    def test_countries_must_be_maps(self) -> None:
+        self.assertFails(self._k3(MACRO_OK + "countries: [mexico, taiwan]\n"),
+                         "countries no es un mapa")
+        self.assertFails(self._k3(MACRO_OK + 'countries:\n  taiwan: "pendiente"\n'),
+                         "countries.taiwan no es un mapa")
+
+    def test_empty_countries_is_valid(self) -> None:
+        self.assertTrue(self._k3(MACRO_OK + "countries: {}\n").ok)
+
+    def test_legacy_top_level_country_block_warns_with_migration_hint(self) -> None:
+        legacy = ("taiwan:\n  rates:\n    risk_free_10y: "
+                  '{value: 1.855, label: observado, source: "Investing.com"}\n')
+        self.assertWarns(self._k3(MACRO_OK + legacy), "campo desconocido: taiwan", "countries:")
+
+    def test_country_detail_stays_ascii(self) -> None:
+        text = MACRO_OK + COUNTRIES_OK.replace("  mexico:", "  m\u00e9xico:").replace(
+            ', source: "CONASAMI"', "")
+        finding = self._k3(text)
+        self.assertTrue(finding.blocking)
+        self.assertTrue(finding.detail.isascii(), finding.detail)
 
 
 @unittest.skipIf(K.yaml is None, "PyYAML no instalado")

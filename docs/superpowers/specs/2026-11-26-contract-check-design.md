@@ -81,6 +81,19 @@ No existe: aviso (igual que D6). `updated_at` vacío o sin fecha: falla.
 `staleness_warn_months`, si está, entero > 0: falla. Campo de primer nivel
 desconocido: aviso.
 
+Bloques por país (agregado 2026-11-26, decisión del analista: mapa
+`countries:`, bloque abierto, `null` avisa, `gate_status` en el contrato;
+componentes heredan el source; el primer nivel sigue la misma regla):
+
+| Regla | Severidad |
+|---|---|
+| `countries` no es mapa; un bloque no es mapa; `as_of` del bloque sin fecha | falla |
+| Todo mapa con `value` (primer nivel y bloques) sin `source` propio ni de un mapa que lo contenga, o con `value` no numérico | falla |
+| `value: null` con source (pendiente declarado) | aviso |
+| Bloque sin `as_of`, sin `rates.risk_free_10y` o sin `equity_risk_premium` | aviso |
+| Bloque de país suelto en el primer nivel (workspace anterior) | aviso con pista de migración; sus datos se validan igual |
+| Sección propia de un país (labor, tax) | sin hallazgo: el bloque es abierto |
+
 ### K4 — `comps/*.yaml`
 
 Sin snapshots: n/a. Se valida el snapshot **vigente** de cada comparable (el

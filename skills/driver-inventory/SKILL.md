@@ -24,7 +24,8 @@ Inputs: industry-report vigente en `research/industry/` (economía de la industr
    - bottom-up: Σ segmentos (driver físico × precio) — esto define los bloques
      `Sch: <driver>` de la tab `Schedules` (UNA sola tab, un bloque por schedule;
      nunca una tab por driver);
-   - top-down: PIB (macro-view) × crecimiento de industria vs PIB (industry-report)
+   - top-down: PIB (macro-view: `gdp` de primer nivel o `countries.<pais>.gdp`)
+     × crecimiento de industria vs PIB (industry-report)
      × participación de la emisora.
    Ambas van al modelo y se reconcilian por fórmula (`Rev_Reconcile`, check D2).
    La reconciliación aplica a años PLENAMENTE estimados: el año de transición

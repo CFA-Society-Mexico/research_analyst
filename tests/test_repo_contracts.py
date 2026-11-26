@@ -177,6 +177,14 @@ class ContractCheckTests(unittest.TestCase):
                 self.assertEqual(set(self._template(name)), set(known),
                                  "campos del template vs campos que conoce contract_check.py")
 
+    def test_template_documents_the_country_block_fields(self) -> None:
+        # El bloque por pais va comentado en el template (un ejemplo vivo seria
+        # leido como un pais): cada campo que conoce K3 debe estar escrito ahi.
+        text = _read("templates/macro-view.yaml")
+        for key in sorted(self.K.COUNTRY_KEYS):
+            with self.subTest(field=key):
+                self.assertRegex(text, rf"#\s+{key}:")
+
     def test_validator_knows_the_market_data_fields(self) -> None:
         market = self._template("comp-snapshot.yaml")["market_data"]
         self.assertEqual(set(market), set(self.K.COMP_MARKET_KEYS))
