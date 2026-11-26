@@ -68,6 +68,26 @@ CAPTURE_TAGS = ("observado", "derivado", "guidance")
 CAPTURE_PERIODS = {"canonical_annual.csv": re.compile(r"FY\d{4}"),
                    "canonical_quarterly.csv": re.compile(r"[1-4]Q\d{4}")}
 
+PROFILE_REQUIRED = ("ticker", "name", "as_of", "listing", "issuer_type",
+                    "framework_governing", "currency_reporting", "units",
+                    "fiscal_year_end", "model_periodicity")
+PROFILE_ENUMS = {
+    "listing": ("bmv", "sec", "dual", "private"),
+    "issuer_type": ("non_financial", "bank", "insurer", "fibra", "private"),
+    "framework_governing": ("ifrs", "us_gaap", "nif", "cnbv_criteria"),
+    "model_periodicity": ("annual", "quarterly"),
+    "life_cycle_stage": ("embryonic", "growth", "mature", "decline"),
+}
+# valor deprecado -> como se trata hoy
+PROFILE_DEPRECATED = {"model_periodicity": {"annual_plus_quarterly": "quarterly"}}
+PROFILE_CONFIRMATIONS = ("framework_confirmed_by_user", "periodicity_confirmed_by_user",
+                         "mnpi_confirmed_public")
+PROFILE_POSITIVE_INTS = ("quarterly_history_years", "industry_staleness_months")
+PROFILE_KEYS = frozenset(PROFILE_REQUIRED + PROFILE_CONFIRMATIONS + PROFILE_POSITIVE_INTS + (
+    "adr", "framework_notes", "currency_functional", "segments", "life_cycle_stage",
+    "valuation_methods", "materiality", "retention_note", "sources"))
+
+
 _ISO_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 _EXAMPLES = 6
 
@@ -84,6 +104,28 @@ def _blank(value: object) -> bool:
 def _is_number(value: object) -> bool:
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and not (isinstance(value, float) and math.isnan(value)))
+
+
+def _date_of(value: object) -> date | None:
+    """Fecha de un campo: PyYAML ya convierte ``2026-11-20`` sin comillas a
+    ``date``; entre comillas llega como texto ('2026-08-31 11:05 KST')."""
+    if isinstance(value, date):
+        return value
+    found = _ISO_DATE.search(value) if isinstance(value, str) else None
+    if found is None:
+        return None
+    try:
+        return date(int(found.group(1)), int(found.group(2)), int(found.group(3)))
+    except ValueError:
+        return None
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _unknown_fields(data: dict[str, Any], known: frozenset[str], prefix: str = "") -> list[str]:
+    return [f"campo desconocido: {prefix}{key}" for key in sorted(map(str, set(data) - known))]
 
 
 @dataclass
@@ -230,9 +272,41 @@ def audit_contracts(coverage: Path, macro_view: Path | None = None) -> list[Find
 
 
 def check_profile(profile: Loaded | None) -> Finding:
-    if profile is not None and profile.data is None:
+    """K2: issuer-profile.yaml cumple su contrato."""
+    if profile is None:
+        return Finding(K2, False, "no existe issuer-profile.yaml en la cobertura")
+    if profile.data is None:
         return _unparsed(K2)
-    return Finding(K2, True, "n/a (reglas en la Task 3)")
+    data, problems = profile.data, Problems()
+    problems.hard += [f"{key} vacio" for key in PROFILE_REQUIRED if _blank(data.get(key))]
+    for key, allowed in PROFILE_ENUMS.items():
+        value = data.get(key)
+        if _blank(value):
+            continue
+        replacement = PROFILE_DEPRECATED.get(key, {}).get(value)
+        if replacement:
+            problems.soft.append(f"{key}: {value} esta deprecado (se trata como {replacement})")
+        elif value not in allowed:
+            problems.hard.append(f"{key}: {value!r} no esta en ({', '.join(allowed)})")
+    if not _blank(data.get("as_of")) and _date_of(data["as_of"]) is None:
+        problems.hard.append("as_of sin fecha YYYY-MM-DD")
+    fiscal_year_end = data.get("fiscal_year_end")
+    if not _blank(fiscal_year_end) and not re.fullmatch(r"\d{2}-\d{2}", str(fiscal_year_end)):
+        problems.hard.append("fiscal_year_end no es MM-DD")
+    problems.hard += [f"{key} no esta en true (falta la confirmacion del analista)"
+                      for key in PROFILE_CONFIRMATIONS if data.get(key) is not True]
+    if "adr" in data and not isinstance(data["adr"], bool):
+        problems.hard.append("adr no es booleano")
+    problems.hard += [f"{key} debe ser un entero > 0" for key in PROFILE_POSITIVE_INTS
+                      if key in data and not _positive_int(data[key])]
+    for key, value in (data.get("materiality") or {}).items():
+        if not _is_number(value) or value < 0:
+            problems.hard.append(f"materiality.{key} debe ser un numero >= 0")
+    for key, value in (data.get("valuation_methods") or {}).items():
+        if not isinstance(value, bool):
+            problems.hard.append(f"valuation_methods.{key} no es booleano")
+    problems.soft += _unknown_fields(data, PROFILE_KEYS)
+    return problems.finding(K2, "obligatorios, listas y confirmaciones en orden")
 
 
 def check_macro(macro: Loaded | None) -> Finding:

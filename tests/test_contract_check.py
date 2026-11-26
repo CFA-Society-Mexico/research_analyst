@@ -222,6 +222,70 @@ class YamlParsingTests(_Coverage):
         self.assertFails(found["K1"], "macro-view.yaml")
 
 
+@unittest.skipIf(K.yaml is None, "PyYAML no instalado")
+class ProfileTests(_Coverage):
+
+    def _k2(self, text: str | None = None) -> Finding:
+        if text is not None:
+            self._write("TICK/issuer-profile.yaml", text)
+        return self._checks()["K2"]
+
+    def test_required_field_left_blank_fails(self) -> None:
+        self.assertFails(self._k2(PROFILE_OK.replace('units: "USD millones"', 'units: ""')),
+                         "units vacio")
+
+    def test_required_field_missing_fails(self) -> None:
+        self.assertFails(self._k2(PROFILE_OK.replace('listing: "sec"\n', "")), "listing vacio")
+
+    def test_value_outside_its_list_fails(self) -> None:
+        self.assertFails(self._k2(PROFILE_OK.replace('listing: "sec"', 'listing: "nyse"')),
+                         "listing: 'nyse' no esta en (bmv, sec, dual, private)")
+
+    def test_deprecated_periodicity_warns_with_its_equivalent(self) -> None:
+        text = PROFILE_OK.replace('model_periodicity: "quarterly"',
+                                  'model_periodicity: "annual_plus_quarterly"')
+        self.assertWarns(self._k2(text), "annual_plus_quarterly", "quarterly")
+
+    def test_unconfirmed_profile_fails(self) -> None:
+        for flag in K.PROFILE_CONFIRMATIONS:
+            with self.subTest(flag=flag):
+                self.assertFails(self._k2(PROFILE_OK.replace(f"{flag}: true", f"{flag}: false")),
+                                 f"{flag} no esta en true")
+
+    def test_unknown_field_warns(self) -> None:
+        self.assertWarns(self._k2(PROFILE_OK + 'listing_notes: "ADR nivel 3"\n'),
+                         "campo desconocido: listing_notes")
+
+    def test_dates_and_fiscal_year_end_have_a_format(self) -> None:
+        self.assertFails(self._k2(PROFILE_OK.replace("as_of: 2026-11-20", 'as_of: "noviembre"')),
+                         "as_of sin fecha YYYY-MM-DD")
+        self.assertFails(self._k2(PROFILE_OK.replace('"09-27"', '"septiembre"')),
+                         "fiscal_year_end no es MM-DD")
+
+    def test_typed_fields_reject_the_wrong_type(self) -> None:
+        cases = {
+            "quarterly_history_years: 10": ("quarterly_history_years: -1", "quarterly_history_years"),
+            "adr: false": ('adr: "no"', "adr no es booleano"),
+            "  comps: true": ('  comps: "si"', "valuation_methods.comps"),
+            "  capture_unlinked_pct: 0.5": ("  capture_unlinked_pct: -2", "materiality.capture_unlinked_pct"),
+        }
+        for good, (bad, fragment) in cases.items():
+            with self.subTest(field=fragment):
+                self.assertFails(self._k2(PROFILE_OK.replace(good, bad)), fragment)
+
+    def test_optional_field_absent_is_not_a_finding(self) -> None:
+        finding = self._k2(PROFILE_OK.replace("quarterly_history_years: 10\n", ""))
+        self.assertTrue(finding.ok, finding.detail)
+
+    def test_coverage_without_profile_fails(self) -> None:
+        (self.coverage / "issuer-profile.yaml").unlink()
+        self.assertFails(self._checks()["K2"], "no existe issuer-profile.yaml")
+
+    def test_detail_stays_ascii_with_accented_values(self) -> None:
+        finding = self._k2(PROFILE_OK.replace('listing: "sec"', 'listing: "bolsa de México"'))
+        self.assertTrue(finding.detail.isascii(), finding.detail)
+
+
 class WithoutPyYamlTests(_Coverage):
 
     def test_yaml_checks_are_pending_and_csv_still_runs(self) -> None:
