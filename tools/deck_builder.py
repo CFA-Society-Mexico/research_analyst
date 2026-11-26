@@ -271,6 +271,14 @@ class Series:
     def _derived(self, label: str, points: dict[PeriodKey, Num]) -> "Series":
         return Series(label, points, {k: self._actual[k] for k in points})
 
+    def apply(self, fn: Callable[[Num], Num], label: str) -> "Series":
+        """Serie derivada punto a punto: indice base 100, cambio de escala, etc."""
+        points = {key: fn(value) for key, value in self._points.items()}
+        if not all(isinstance(value, Num) for value in points.values()):
+            raise DeckError(f"apply('{label}'): la funcion debe devolver un Num, no un "
+                            f"numero suelto")
+        return self._derived(label, points)
+
     def growth(self) -> "Series":
         """Crecimiento contra el periodo anterior (desde el segundo)."""
         keys = self.keys
@@ -297,6 +305,29 @@ class Series:
 
 _COORD = re.compile(r"\$?([A-Za-z]{1,3})\$?([1-9]\d{0,6})")
 MAX_ROW = 1048576
+
+
+def _section_bounds(ws: Worksheet, title: str) -> Optional[tuple[int, int]]:
+    """Filas (primera, ultima) de la seccion cuya banda EMPIEZA con ``title``.
+
+    Banda = etiqueta en columna B, negrita y de 16 pt o mas (``section_header``
+    del builder). Por prefijo, sin distinguir mayusculas: en un modelo real la
+    banda dice 'Assumptions (unica zona de input del libro)'. Es una busqueda
+    propia a proposito: no depende de un helper privado de model_check."""
+    wanted = title.strip().lower()
+    first: Optional[int] = None
+    last_row = min(ws.max_row, B._MAX_SCAN_ROWS)
+    for r in range(1, last_row + 1):
+        cell = ws.cell(row=r, column=2)
+        font = cell.font
+        if not (isinstance(cell.value, str) and font is not None and font.bold
+                and (font.size or 0) >= 16):
+            continue
+        if first is not None:
+            return first, r - 1
+        if cell.value.strip().lower().startswith(wanted):
+            first = r
+    return (first, last_row) if first is not None else None
 
 
 def _coordinate(coord: str) -> str:
@@ -344,7 +375,7 @@ class ModelBook:
         ws = self._sheet(sheet)
         first, last = 1, min(ws.max_row, B._MAX_SCAN_ROWS)
         if section is not None:
-            bounds = M._section_rows(ws, section.strip().lower())
+            bounds = _section_bounds(ws, section)
             if bounds is None:
                 raise DeckError(f"{_ascii(sheet)}: no existe la seccion '{_ascii(section)}'")
             first, last = bounds
@@ -441,6 +472,21 @@ class Fact:
     manual: bool   # True: la fuente no es texto; la cita se verifica a mano
 
 
+def _flatten(text: str) -> str:
+    """Espacios y saltos de linea colapsados, sin espacio antes de la puntuacion:
+    'a 70% ,\\n 76%' y 'a 70%, 76%' son la misma cita."""
+    return re.sub(r"\s+([,.;:%)])", r"\1", re.sub(r"\s+", " ", text)).strip()
+
+
+def _visible_text(doc: Path) -> str:
+    """Lo que lee una persona en la fuente. Un filing en iXBRL parte cada cifra
+    con etiquetas; cotejar contra el HTML crudo rechazaria citas correctas."""
+    text = doc.read_text(encoding="utf-8", errors="replace")
+    if doc.suffix.lower() in (".htm", ".html"):
+        text = html.unescape(re.sub(r"<[^>]+>", " ", text))
+    return _flatten(text)
+
+
 def load_facts(path: Path, root: Path) -> dict[str, Fact]:
     """Lee y valida el registro de hechos. ``root`` = carpeta de la cobertura."""
     try:
@@ -450,6 +496,7 @@ def load_facts(path: Path, root: Path) -> dict[str, Fact]:
     if not isinstance(payload, dict) or not isinstance(payload.get("facts", []), list):
         raise DeckError(f"hechos ({path.name}): se espera un objeto con la lista 'facts'")
     facts: dict[str, Fact] = {}
+    sources: dict[Path, str] = {}      # texto visible por documento, leido una vez
     for raw in payload.get("facts", []):
         if not isinstance(raw, dict):
             raise DeckError(f"hechos ({path.name}): cada hecho debe ser un objeto, no {raw!r}")
@@ -474,8 +521,9 @@ def load_facts(path: Path, root: Path) -> dict[str, Fact]:
         if not doc.is_file():
             raise DeckError(f"hecho '{_ascii(key)}': no existe el documento {_ascii(raw['doc'])}")
         manual = doc.suffix.lower() not in TEXT_SOURCES
-        if not manual and str(raw["quote"]) not in doc.read_text(encoding="utf-8",
-                                                                  errors="replace"):
+        if not manual and doc not in sources:
+            sources[doc] = _visible_text(doc)
+        if not manual and _flatten(str(raw["quote"])) not in sources[doc]:
             raise DeckError(f"hecho '{_ascii(key)}': la cita {_ascii(raw['quote'])!r} no "
                             f"aparece en {_ascii(raw['doc'])}")
         facts[key] = Fact(key, float(raw["value"]), str(raw["unit"]), raw["tag"],
@@ -1093,7 +1141,7 @@ class Deck:
         ticks = _nice_ticks(min(0.0, *(float(v) for v in values)),
                             max(0.0, *(float(v) for v in values)))
         lo, hi = ticks[0], ticks[-1]
-        left, right, top, bottom = 64, 16, 26, 30
+        left, right, top, bottom = 64, 16, 34, 30
         plot_w, plot_h = w - left - right, h - top - bottom
         slot = plot_w / len(keys)
 
@@ -1108,7 +1156,8 @@ class Deck:
             x = left + slot * split
             out.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top + plot_h}" '
                        f'stroke="{self.design.muted}" stroke-dasharray="4 4"/>')
-            out.append(f'<text class="auto" x="{x + 6:.1f}" y="{top + 12}">Proyectado</text>')
+            # Sobre el area de la grafica: dentro chocaba con la etiqueta de la barra.
+            out.append(f'<text class="auto" x="{x + 6:.1f}" y="{top - 20}">Proyectado</text>')
         for i, (key, value) in enumerate(zip(keys, values)):
             v = float(value)
             color = (self.design.negative if v < 0
@@ -1138,7 +1187,7 @@ class Deck:
         flat = [float(s[k]) for _, s in named for k in keys]
         ticks = _nice_ticks(min(flat), max(flat))
         lo, hi = ticks[0], ticks[-1]
-        left, right, top, bottom = 64, 170, 26, 30
+        left, right, top, bottom = 64, 170, 34, 30
         plot_w, plot_h = w - left - right, h - top - bottom
         step = plot_w / max(len(keys) - 1, 1)
 
@@ -1154,7 +1203,7 @@ class Deck:
             x0 = x(split) - step / 2
             out.append(f'<rect x="{x0:.1f}" y="{top}" width="{left + plot_w - x0:.1f}" '
                        f'height="{plot_h}" fill="{self.design.muted}" opacity="0.10"/>')
-            out.append(f'<text class="auto" x="{x0 + 6:.1f}" y="{top + 12}">Proyectado</text>')
+            out.append(f'<text class="auto" x="{x0 + 6:.1f}" y="{top - 20}">Proyectado</text>')
         out += _y_axis(ticks, y, left, left + plot_w, tick_fmt or fmt)
         for i, key in enumerate(keys):
             if i % max(len(keys) // 8, 1) == 0 or i == len(keys) - 1:
@@ -1211,6 +1260,8 @@ class Deck:
             out.append(f'<circle cx="{x(float(mid)):.1f}" cy="{cy}" r="6" fill="{color}"/>')
             out.append(f'<text class="val" x="{x(float(mid)):.1f}" y="{cy - 18}" '
                        f'text-anchor="middle">{mid:{fmt}}</text>')
+            if float(low) == float(high):
+                continue        # metodo sin rango: el punto ya lleva su valor
             out.append(f'<text x="{x(float(low)) - 6:.1f}" y="{cy + 4}" '
                        f'text-anchor="end">{low:{fmt}}</text>')
             out.append(f'<text x="{x(float(high)) + 6:.1f}" y="{cy + 4}">{high:{fmt}}</text>')

@@ -208,6 +208,18 @@ class ModelBookTests(_Case):
         self.assertEqual(self.book.series("Annual", "Total", section="Flujos")[2022].value, 7.0)
         self.assertEqual(self.book.series("Annual", "Total", section="Balance")[2022].value, 1.0)
 
+    def test_section_is_matched_by_the_start_of_its_band_title(self) -> None:
+        # En un modelo real la banda dice 'Assumptions (unica zona de input del libro)'.
+        path = self.root / MODEL_REL
+        wb = load_workbook(path)
+        wb["Annual"]["B12"] = "Flujos (valores en TWD millones)"
+        wb.save(path)
+        book = D.ModelBook(path)
+        self.assertEqual(book.series("Annual", "Total", section="flujos")[2022].value, 7.0)
+        self.assertEqual(book.series("Annual", "Total", section="Balance")[2022].value, 1.0)
+        with self.assertRaisesRegex(D.DeckError, "no existe la seccion 'Caja'"):
+            book.series("Annual", "Total", section="Caja")
+
     def test_formula_without_cached_value_stops_with_the_recalc_hint(self) -> None:
         with self.assertRaisesRegex(D.DeckError, "recalc_validate"):
             self.book.series("Annual", "Sin calcular")
@@ -233,6 +245,16 @@ class ModelBookTests(_Case):
         self.assertAlmostEqual(rev.cagr(2022, 2024).value, (150.0 / 100.0) ** 0.5 - 1)
         with self.assertRaises(D.DeckError):
             rev.cagr(2024, 2022)
+
+    def test_apply_derives_a_series_point_by_point(self) -> None:
+        rev = self.book.series("Annual", "Ingresos")
+        index = rev.apply(lambda n: n / rev[2022] * 100, "Ingresos (indice)")
+        self.assertEqual(index.keys, list(YEARS))
+        self.assertAlmostEqual(index[2024].value, 150.0)
+        self.assertEqual(index[2024].src, "((Annual!E6/Annual!C6)*100)")
+        self.assertFalse(index.is_actual(2026))
+        with self.assertRaisesRegex(D.DeckError, "debe devolver un Num"):
+            rev.apply(lambda n: n.value, "mal")
 
     def test_cell_reads_the_only_numeric_cell_of_a_row(self) -> None:
         wacc = self.book.cell("DCF", "WACC")
@@ -271,6 +293,25 @@ class FactsTests(_Case):
 
     def test_non_text_source_is_accepted_as_manual(self) -> None:
         self.assertTrue(D.load_facts(self.root / FACTS_REL, self.root)["plants"].manual)
+
+    def test_html_source_is_matched_on_its_visible_text(self) -> None:
+        # Un 20-F en iXBRL parte cada cifra con etiquetas: la cita se coteja
+        # contra el texto que ve el lector, no contra el HTML crudo.
+        page = self.root / "filings" / "anual.htm"
+        page.write_text("<p>customers accounted for <ix:nonFraction>70</ix:nonFraction>% ,\n"
+                        " <span>76</span>% and <b>78</b>% of net revenue &amp; more</p>",
+                        encoding="utf-8")
+        facts = self._load([_fact("top10", 78, "filings/anual.htm",
+                                  "70%, 76% and 78% of net revenue & more")])
+        self.assertFalse(facts["top10"].manual)
+        with self.assertRaisesRegex(D.DeckError, "no aparece en"):
+            self._load([_fact("top10", 79, "filings/anual.htm", "70%, 76% and 79%")])
+
+    def test_quote_may_span_wrapped_lines(self) -> None:
+        (self.root / REPORT_REL).write_text("TSMC subio de 70.4% (4T25)\n   a 72.5% (2T26).\n",
+                                            encoding="utf-8")
+        facts = self._load([_fact("share", 72.5, REPORT_REL, "de 70.4% (4T25) a 72.5%")])
+        self.assertEqual(facts["share"].value, 72.5)
 
     def test_quote_absent_from_a_text_source_is_an_error(self) -> None:
         with self.assertRaisesRegex(D.DeckError, "no aparece en"):
@@ -565,6 +606,22 @@ class ChartTests(_Case):
                             marker=("Precio", deck.cell("DCF", "Precio")), fmt=",.1f")
         doc = self._bound(deck, svg)
         self.assertEqual(sorted(n.text for n in doc.numbers), ["100.0", "110.0", "120.5", "140.0"])
+
+    def test_football_row_without_a_range_shows_its_value_once(self) -> None:
+        deck = self.deck()
+        value = deck.cell("DCF", "Valor por accion")
+        doc = self._bound(deck, deck.football([("Un solo punto", value, value, value)],
+                                              fmt=",.1f"))
+        self.assertEqual([n.text for n in doc.numbers], ["120.5"])
+
+    def test_forecast_tag_sits_above_the_plot_clear_of_value_labels(self) -> None:
+        import re
+        deck = self.deck()
+        rev = deck.series("Annual", "Ingresos")
+        for svg in (deck.bars(rev, show=rev.keys), deck.lines([("Ventas", rev)], show=rev.keys)):
+            tag_y = float(re.search(r'y="([0-9.]+)">Proyectado', svg).group(1))
+            label_ys = [float(y) for y in re.findall(r'class="val" x="[0-9.]+" y="([0-9.]+)"', svg)]
+            self.assertTrue(all(tag_y < y - 6 for y in label_ys), (tag_y, label_ys))
 
     def test_waterfall_ends_in_the_total_read_from_the_model(self) -> None:
         deck = self.deck()
