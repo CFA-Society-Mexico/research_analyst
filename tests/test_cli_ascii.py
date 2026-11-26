@@ -64,6 +64,15 @@ class StaticAsciiTests(unittest.TestCase):
         hits = [hit for tool in TOOLS for hit in _non_ascii_console_literals(tool)]
         self.assertEqual(hits, [], "literal no-ASCII rumbo a la consola (rompe cp1252)")
 
+    def test_scan_covers_every_module_of_the_builder(self) -> None:
+        # xlsx_builder.py es fachada: el reporte a consola (_print_report) vive
+        # en xlsx_audit.py. Si los modulos salen de tools/ (p. ej. a un
+        # subpaquete), el glob de arriba dejaria de verlos.
+        sys.path.insert(0, str(ROOT / "tools"))
+        import xlsx_builder
+        parts = {Path(m.__file__).name for m in xlsx_builder._SUBMODULES} | {"xlsx_builder.py"}
+        self.assertLessEqual(parts, {tool.name for tool in TOOLS})
+
 
 class RuntimeAsciiTests(unittest.TestCase):
 
