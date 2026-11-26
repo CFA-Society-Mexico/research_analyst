@@ -1,4 +1,4 @@
-"""Checks estructurales (S) y de escaneo contable (C10) del modelo, por codigo.
+"""Checks estructurales (S) y de escaneo contable (C9, C10) del modelo, por codigo.
 
 Doctrina: un check es determinista o no es un check. Los F ya vivian en
 ``xlsx_builder.py audit``; los S y el C10 se declaraban "escaneo por codigo"
@@ -11,8 +11,9 @@ Solo lectura: jamas modifica el libro.
 Uso:
     python tools/model_check.py <modelo.xlsx> [--driver-map driver-map.md]
                                 [--brand brand/DESIGN.md] [--external] [--recalc]
+                                [--inputs DIR] [--profile issuer-profile.yaml]
 
-Corre S (estructurales) -> C por escaneo (C10) -> F (formato, via
+Corre S (estructurales) -> C por escaneo (C9, C10) -> F (formato, via
 ``xlsx_builder.audit_format``) -> estado de los checks de formula viva (tabs
 Checks y Cover). Los D (doctrina) no son escaneo de codigo y no se reportan
 aqui.
@@ -22,6 +23,10 @@ LibreOffice (``recalc_validate``) y audita esa copia ya calculada: R1 (el
 motor acepta el libro), R2 (sin celdas en error), S10/F19 y los checks vivos
 dejan de estar pendientes. Sin ``--recalc`` y sin valores calculados, los
 checks vivos se reportan [pendiente]: SIN evaluar, nunca verdes.
+
+C9 busca la capa de captura en ``inputs/`` junto al modelo y el umbral de
+materialidad en el ``issuer-profile.yaml`` de la carpeta padre de ``model/``
+(arbol de cobertura). ``--inputs`` y ``--profile`` cambian esas rutas.
 
 Exit codes (los mismos del audit F): 0 = verde; 1 = alguna falla; 3 = sin
 fallas pero con checks [pendiente] (libro sin valores calculados: recalcular
@@ -34,10 +39,12 @@ Consola ASCII-only.
 from __future__ import annotations
 
 import argparse
+import csv
+import math
 import re
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Sequence
 
@@ -109,6 +116,7 @@ class PeriodColumn:
     actual: bool
     year: int
     quarter: int | None
+    row: int = 0
 
 
 @dataclass(frozen=True)
@@ -198,12 +206,12 @@ def _period_axis(ws: Worksheet) -> list[PeriodColumn]:
             if cell.number_format in (B.NumFmt.YEAR_A.value, B.NumFmt.YEAR_E.value):
                 if isinstance(value, (int, float)):
                     axis.append(PeriodColumn(cell.column, cell.number_format == B.NumFmt.YEAR_A.value,
-                                             int(value), None))
+                                             int(value), None, cell.row))
             elif isinstance(value, str):
                 match = re.fullmatch(r"([1-4])Q(20\d\d)([AE])", value.strip())
                 if match:
                     axis.append(PeriodColumn(cell.column, match.group(3) == "A",
-                                             int(match.group(2)), int(match.group(1))))
+                                             int(match.group(2)), int(match.group(1)), cell.row))
         if len(axis) >= 4:
             break
     return axis if len(axis) >= 4 else []
@@ -579,6 +587,270 @@ def audit_cash_roll_formulas(path: str) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# C9 - historico del xlsx = capa de captura
+# ---------------------------------------------------------------------------
+
+# CSV canonico segun el header de la hoja: True = trimestral, False = anual.
+CAPTURE_FILES = {True: "canonical_quarterly.csv", False: "canonical_annual.csv"}
+REQUIRED_CAPTURE_COLUMNS = ("line_item", "period", "value", "tag")
+# Una fila guidance es una afirmacion de management: no respalda un historico.
+NON_BACKING_TAG = "guidance"
+DEFAULT_CAPTURE_MATERIALITY_PCT = 0.5
+# El historico se escribe sin redondear: la tolerancia solo absorbe el float.
+MATCH_RELATIVE_TOLERANCE = 1e-6
+
+_CAPTURE_ROW = re.compile(r"\$?(\d+):\$?\d+$")
+_CAPTURE_SCALE = re.compile(r"scale=([0-9.eE+-]+)")
+_PROFILE_PCT = re.compile(r"^\s*capture_unlinked_pct:\s*([0-9]+(?:\.[0-9]+)?)", re.MULTILINE)
+
+
+class CaptureError(Exception):
+    """Vinculo o capa de captura ilegible: C9 lo reporta como falla, sin traceback."""
+
+
+@dataclass(frozen=True)
+class CaptureLink:
+    """Vinculo de una fila del modelo con una linea de la capa de captura."""
+
+    line_item: str
+    scale: float
+
+
+def capture_links(ws: Worksheet) -> dict[int, CaptureLink]:
+    """Fila -> vinculo, leido de los nombres ``CAPTURE.<line_item>`` de la hoja."""
+    links: dict[int, CaptureLink] = {}
+    for name, defined in ws.defined_names.items():
+        if not name.startswith(B.CAPTURE_NAME_PREFIX):
+            continue
+        row = _CAPTURE_ROW.search(defined.attr_text or "")
+        scale = _CAPTURE_SCALE.search(defined.comment or "")
+        if row is None or scale is None:
+            raise CaptureError(f"{ws.title}: el nombre {name} no trae fila o escala "
+                               "(se escribe con ModelStyler.link_capture)")
+        links[int(row.group(1))] = CaptureLink(name[len(B.CAPTURE_NAME_PREFIX):],
+                                               float(scale.group(1)))
+    return links
+
+
+def load_capture(path: Path) -> dict[tuple[str, str], float]:
+    """(line_item, periodo) -> valor de un CSV canonico. Ignora filas guidance."""
+    values: dict[tuple[str, str], float] = {}
+    with path.open(encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        missing = [c for c in REQUIRED_CAPTURE_COLUMNS if c not in (reader.fieldnames or [])]
+        if missing:
+            raise CaptureError(f"{path.name}: faltan columnas {', '.join(missing)}")
+        for number, row in enumerate(reader, start=2):
+            if (row["tag"] or "").strip().lower() == NON_BACKING_TAG:
+                continue
+            try:
+                value = float(row["value"])
+            except (TypeError, ValueError):
+                value = math.nan
+            if math.isnan(value):
+                raise CaptureError(
+                    f"{path.name} linea {number}: value no numerico ({row['value']!r})")
+            values[((row["line_item"] or "").strip(), (row["period"] or "").strip())] = value
+    return values
+
+
+def materiality_pct_from_profile(path: Path | None) -> tuple[float, str]:
+    """(umbral en %, origen) de ``materiality.capture_unlinked_pct`` del perfil.
+
+    Lectura por linea, como load_brand lee DESIGN.md: sin dependencia de YAML.
+    Perfil o campo ausente = default (un perfil viejo sigue siendo valido).
+    """
+    if path is not None and path.is_file():
+        found = _PROFILE_PCT.search(path.read_text(encoding="utf-8"))
+        if found:
+            return float(found.group(1)), "perfil"
+    return DEFAULT_CAPTURE_MATERIALITY_PCT, "default"
+
+
+@dataclass
+class _UnbackedRow:
+    """Fila con cifras historicas que la capa de captura no respalda."""
+
+    label: str
+    reason: str
+    cells: int = 0
+    material: int = 0
+    unmeasurable: bool = False
+
+    def describe(self, where: str) -> str:
+        note = "; sin referencia de materialidad" if self.unmeasurable else ""
+        return f"{where} ({self.label}): {self.cells} cifras {self.reason}{note}"
+
+
+@dataclass
+class _CaptureScan:
+    """Acumulado del escaneo de C9 sobre todas las hojas de periodo."""
+
+    figures: int = 0
+    matched: int = 0
+    matched_rows: int = 0
+    mismatches: list[str] = field(default_factory=list)
+    unbacked: dict[str, _UnbackedRow] = field(default_factory=dict)
+
+
+def _period_key(period: PeriodColumn) -> str:
+    """Llave de periodo del CSV canonico: '3Q2016' o 'FY2016'."""
+    if period.quarter is not None:
+        return f"{period.quarter}Q{period.year}"
+    return f"FY{period.year}"
+
+
+def _matches(value: float, scale: float, captured: float) -> bool:
+    """valor_xlsx * scale = valor_csv, salvo error de punto flotante."""
+    if captured == 0:
+        return abs(value * scale) <= 1e-9 * scale
+    return abs(value * scale - captured) <= MATCH_RELATIVE_TOLERANCE * abs(captured)
+
+
+def _materiality_threshold(captured: dict[tuple[str, str], float], period: str,
+                           materiality_pct: float) -> float | None:
+    """X% de la MENOR entre ventas y activos totales del periodo, leidas del
+    CSV (no del libro: asi C9 no depende de que este recalculado). None si
+    falta cualquiera de las dos: la cifra no se puede medir."""
+    sales, assets = (captured.get((line, period)) for line in B.CAPTURE_REFERENCE_LINES)
+    if sales is None or assets is None:
+        return None
+    return materiality_pct / 100 * min(abs(sales), abs(assets))
+
+
+def _money_scale(links: dict[int, CaptureLink]) -> float | None:
+    """Escala monetaria de la hoja: la del vinculo de ventas (o activos).
+    Una fila sin vinculo no tiene escala propia y hereda esta."""
+    by_line = {link.line_item: link.scale for link in links.values()}
+    for line in B.CAPTURE_REFERENCE_LINES:
+        if line in by_line:
+            return by_line[line]
+    return None
+
+
+def _scan_capture_sheet(ws: Worksheet, book: Book, folder: Path,
+                        materiality_pct: float, scan: _CaptureScan) -> None:
+    axis = [period for period in _period_axis(ws) if period.actual]
+    if not axis:
+        return
+    source = folder / CAPTURE_FILES[any(period.quarter is not None for period in axis)]
+    captured = load_capture(source) if source.is_file() else {}
+    links = capture_links(ws)
+    money = _money_scale(links)
+    assumptions = _section_rows(ws, ASSUMPTIONS_TITLE) if ws is book.core_sheet else None
+    header_row = max(period.row for period in axis)
+    for r in range(header_row + 1, min(ws.max_row, B._MAX_SCAN_ROWS) + 1):
+        if assumptions and assumptions[0] <= r <= assumptions[1]:
+            continue  # Assumptions: supuestos del analista, no historico de filing
+        link = links.get(r)
+        row_matched = False
+        for period in axis:
+            cell = ws.cell(row=r, column=period.column)
+            value = cell.value
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue  # vacia, texto o formula: no es una cifra tecleada
+            scan.figures += 1
+            key = _period_key(period)
+            backing = captured.get((link.line_item, key)) if link is not None else None
+            if link is not None and backing is not None:
+                if _matches(value, link.scale, backing):
+                    scan.matched += 1
+                    row_matched = True
+                else:
+                    scan.mismatches.append(
+                        f"{ws.title}!{cell.coordinate} ({link.line_item} {key}): "
+                        f"libro {value * link.scale:,.2f} vs captura {backing:,.2f}")
+                continue
+            where = f"{ws.title}!fila {r}"
+            entry = scan.unbacked.get(where)
+            if entry is None:
+                label = str(ws.cell(row=r, column=2).value or "").strip()[:30]
+                reason = ("sin vinculo" if link is None else
+                          f"de {link.line_item} sin periodo en la captura (desde {key})")
+                entry = scan.unbacked[where] = _UnbackedRow(label, reason)
+            entry.cells += 1
+            threshold = _materiality_threshold(captured, key, materiality_pct)
+            scale = link.scale if link is not None else money
+            if threshold is None or scale is None:
+                entry.unmeasurable = True
+                entry.material += 1
+            elif abs(value) * scale > threshold:
+                entry.material += 1
+        if row_matched:
+            scan.matched_rows += 1
+
+
+def audit_capture(path: str, inputs_dir: str | None = None,
+                  materiality_pct: float = DEFAULT_CAPTURE_MATERIALITY_PCT,
+                  external: bool = False, threshold_source: str = "default") -> list[Finding]:
+    """C9: toda cifra historica tecleada del modelo coincide con la capa de
+    captura (model/inputs/canonical_*.csv). Lectura pura.
+
+    Divergencia en una fila vinculada = falla siempre. Cifra sin respaldo
+    (fila sin vinculo, o periodo ausente en el CSV) = falla si es material,
+    [aviso] si no. ``external``: modelo que no construyo el plugin; sin capa
+    de captura el check no aplica.
+    """
+    name = "C9 historico = capa de captura"
+    folder = Path(inputs_dir) if inputs_dir else Path(path).parent / "inputs"
+    if not folder.is_dir():
+        if external:
+            return [Finding(name, True, "n/a (modelo externo sin capa de captura)")]
+        return [Finding(name, False,
+                        f"sin capa de captura: no existe {folder} (usa --inputs)")]
+    book = load_book(path)
+    scan = _CaptureScan()
+    try:
+        for ws in book.formulas.worksheets:
+            if ws.title in PERIOD_GRID_SHEETS:
+                _scan_capture_sheet(ws, book, folder, materiality_pct, scan)
+    except CaptureError as exc:
+        return [Finding(name, False, str(exc))]
+    rule = f"umbral {materiality_pct:g}% de min(ventas, activos), {threshold_source}"
+    material = [row.describe(where) for where, row in scan.unbacked.items() if row.material]
+    minor = [row.describe(where) for where, row in scan.unbacked.items() if not row.material]
+    if scan.mismatches or material:
+        parts: list[str] = []
+        if scan.mismatches:
+            parts.append("DIVERGENCIAS: " + _examples(scan.mismatches))
+        if material:
+            parts.append("SIN RESPALDO sobre el umbral: " + _examples(material))
+        return [Finding(name, False, "; ".join(parts) + f" ({rule})")]
+    if minor:
+        return [Finding(name, False,
+                        f"{len(minor)} filas con cifras sin respaldo bajo el umbral ({rule}): "
+                        + _examples(minor), warning=True)]
+    if not scan.figures:
+        return [Finding(name, True, "n/a (sin cifras historicas tecleadas)")]
+    return [Finding(name, True,
+                    f"{scan.matched} cifras en {scan.matched_rows} filas coinciden "
+                    f"con la captura ({rule})")]
+
+
+@dataclass(frozen=True)
+class CaptureOptions:
+    """De donde toma C9 la capa de captura y el umbral.
+
+    Se resuelven sobre la ruta ORIGINAL del modelo: con ``--recalc`` se audita
+    una copia en un directorio temporal, que no tiene ``inputs/`` ni
+    ``issuer-profile.yaml`` a su lado.
+    """
+
+    inputs_dir: str
+    materiality_pct: float = DEFAULT_CAPTURE_MATERIALITY_PCT
+    threshold_source: str = "default"
+
+
+def capture_options(model: Path, inputs: str | None, profile: str | None) -> CaptureOptions:
+    """Rutas del arbol de cobertura (``<TICKER>/model/<modelo>.xlsx``), salvo
+    que ``--inputs`` / ``--profile`` digan otra cosa."""
+    resolved = model.resolve()
+    profile_path = Path(profile) if profile else resolved.parent.parent / "issuer-profile.yaml"
+    materiality_pct, source = materiality_pct_from_profile(profile_path)
+    return CaptureOptions(inputs or str(resolved.parent / "inputs"), materiality_pct, source)
+
+
+# ---------------------------------------------------------------------------
 # Reporte y CLI
 # ---------------------------------------------------------------------------
 
@@ -608,12 +880,21 @@ def print_report(groups: Sequence[tuple[str, Sequence[Finding]]]) -> int:
 
 def audit_groups(model: str, schedules: Sequence[str] | None,
                  brand: dict[str, str] | None, external: bool,
-                 live: bool = True) -> list[tuple[str, Sequence[Finding]]]:
+                 live: bool = True,
+                 capture: CaptureOptions | None = None) -> list[tuple[str, Sequence[Finding]]]:
     """Familias S, C por escaneo y F; ``live`` agrega los checks de formula
-    viva (con ``--recalc`` ya vienen en el grupo R, sobre el libro calculado)."""
+    viva (con ``--recalc`` ya vienen en el grupo R, sobre el libro calculado).
+    ``capture``: de donde lee C9; sin el, la carpeta ``inputs/`` junto a
+    ``model`` y el umbral default."""
+    if capture is None:
+        c9 = audit_capture(model, external=external)
+    else:
+        c9 = audit_capture(model, inputs_dir=capture.inputs_dir,
+                           materiality_pct=capture.materiality_pct, external=external,
+                           threshold_source=capture.threshold_source)
     groups: list[tuple[str, Sequence[Finding]]] = [
         ("Estructurales (S)", audit_structure(model, schedules)),
-        ("Contables por escaneo (C)", audit_cash_roll_formulas(model)),
+        ("Contables por escaneo (C)", [*c9, *audit_cash_roll_formulas(model)]),
         ("Formato (F)", B.audit_format(model, brand=brand, external=external)),
     ]
     if live:
@@ -623,7 +904,7 @@ def audit_groups(model: str, schedules: Sequence[str] | None,
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Checks S, C10 y F del modelo por codigo (solo lectura).")
+        description="Checks S, C9, C10 y F del modelo por codigo (solo lectura).")
     parser.add_argument("model", help="ruta del modelo .xlsx")
     parser.add_argument("--driver-map", help="driver-map.md: exige un bloque Sch por schedule (S1)")
     parser.add_argument("--brand", help="brand/DESIGN.md: colores de marca aceptados por F4")
@@ -632,14 +913,23 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--recalc", action="store_true",
                         help="recalcular una copia con Excel/LibreOffice y auditarla "
                              "(R1, R2 y checks vivos evaluados)")
+    parser.add_argument("--inputs",
+                        help="carpeta de la capa de captura para C9 "
+                             "(default: inputs/ junto al modelo)")
+    parser.add_argument("--profile",
+                        help="issuer-profile.yaml con el umbral de C9 "
+                             "(default: el de la cobertura)")
     args = parser.parse_args(list(argv[1:]))
     if not Path(args.model).is_file():
         print(f"[x] no existe el modelo: {args.model}")
         return 2
     schedules = schedules_from_driver_map(args.driver_map) if args.driver_map else None
     brand = B.load_brand(args.brand) if args.brand else None
+    # Sobre la ruta original: --recalc audita una copia en otro directorio.
+    capture = capture_options(Path(args.model), args.inputs, args.profile)
     if not args.recalc:
-        return print_report(audit_groups(args.model, schedules, brand, args.external))
+        return print_report(audit_groups(args.model, schedules, brand, args.external,
+                                         capture=capture))
     import recalc_validate  # import tardio: solo --recalc lanza un motor externo
     with tempfile.TemporaryDirectory(prefix="ra_recalc_") as tmp:
         recalc, recalculated = recalc_validate.validate(Path(args.model), Path(tmp))
@@ -647,7 +937,7 @@ def main(argv: Sequence[str]) -> int:
         # sus checks vivos ya vienen dentro del grupo R.
         target = str(recalculated) if recalculated is not None else args.model
         groups = audit_groups(target, schedules, brand, args.external,
-                              live=recalculated is None)
+                              live=recalculated is None, capture=capture)
         return print_report([("Recalculo (R)", recalc), *groups])
 
 

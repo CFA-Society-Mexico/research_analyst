@@ -16,15 +16,17 @@ Uso: `/model-check [ruta del xlsx]` (default: el modelo vigente de la cobertura 
 
 Corre la lista completa de `skills/model-standards/references/integrity-checks.md`
 en orden S (estructurales) → C (contables) → D (contenido) → F (formato). Los S,
-el C10 y los F corren en UNA corrida con `python tools/model_check.py
+C9, C10 y los F corren en UNA corrida con `python tools/model_check.py
 <modelo.xlsx> --driver-map <raiz>/<TICKER>/driver-map.md [--brand
 brand/DESIGN.md]` — implementación única, cero interpretación del agente:
 exit 1 = falla, exit 3 = pendiente de recálculo (se reporta `[pendiente]`,
 nunca como ok). JAMÁS reimplementar un check S con un script propio de la
 cobertura. Los C de fórmula viva (tabs `Checks` y `Cover`) los lee la misma
 corrida: evaluados si el libro trae valores calculados, `[pendiente]: SIN
-evaluar` si no. C9 y los D los evalúa el agente con la regla escrita. Solo
-lectura: este comando NUNCA modifica el modelo.
+evaluar` si no. Los D los evalúa el agente con la regla escrita. C9 toma la
+capa de captura de `model/inputs/` junto al modelo y el umbral del
+`issuer-profile.yaml` de la cobertura (`--inputs` / `--profile` cambian esas
+rutas). Solo lectura: este comando NUNCA modifica el modelo.
 En modelo externo se agrega `--external`: F10 (sello del builder) se reporta
 `[aviso]`, no falla. Sin la bandera, la falta de sello es falla.
 

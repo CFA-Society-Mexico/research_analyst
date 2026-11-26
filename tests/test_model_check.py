@@ -10,15 +10,18 @@ Correr: python -m unittest discover -s tests -v
 from __future__ import annotations
 
 import contextlib
+import csv
 import io
 import sys
 import tempfile
 import unittest
+from copy import copy
 from pathlib import Path
 from typing import Callable
 
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.workbook.workbook import Workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -29,6 +32,19 @@ import xlsx_builder as B  # noqa: E402
 VERSIONED = "demo_2026-01-01_v1.xlsx"
 # Celda de forecast de "Ventas" en el demo (fila 12, primer trimestre E = col K).
 FORECAST_CELL = "L12"
+CAPTURE_COLUMNS = ("line_item", "period", "value", "source_doc", "source_ref", "tag")
+
+
+def _unlinked_row(value: float) -> Callable[[Workbook], None]:
+    """Mutacion: una fila sin vinculo con una cifra historica tecleada (1Q2023).
+    Copia la fuente de una celda del demo para no disparar F2."""
+    def mutate(wb: Workbook) -> None:
+        ws = wb["Operating"]
+        ws["B200"] = "Otros activos"
+        ws["B200"].font = copy(ws["B12"].font)
+        ws["C200"] = value
+        ws["C200"].font = copy(ws["C12"].font)
+    return mutate
 
 
 class _DemoCase(unittest.TestCase):
@@ -47,6 +63,15 @@ class _DemoCase(unittest.TestCase):
         mutate(wb)
         out = self.dir / "roto" / name
         out.parent.mkdir(exist_ok=True)
+        wb.save(out)
+        return str(out)
+
+    def _beside_demo(self, mutate: Callable[[Workbook], None] | None = None) -> str:
+        """Guarda el demo (mutado) JUNTO al original: comparte su inputs/."""
+        wb = load_workbook(self.demo)
+        if mutate is not None:
+            mutate(wb)
+        out = self.dir / "caso_2026-01-02_v1.xlsx"
         wb.save(out)
         return str(out)
 
@@ -268,6 +293,204 @@ class CashRollFormulaTests(unittest.TestCase):
         self.assertIn("caja del balance", finding.detail)
 
 
+class CaptureLayerTests(unittest.TestCase):
+    """Lectura de la capa de captura: vinculos del libro, CSV y umbral."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def _csv(self, text: str) -> Path:
+        path = self.dir / "canonical_quarterly.csv"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_links_are_read_in_builder_and_excel_reference_forms(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Operating")
+        styler.link_capture(ws, 91, "bs_ap", scale=1_000_000)
+        # Excel reescribe la referencia sin comillas al guardar.
+        ws.defined_names.add(DefinedName("CAPTURE.bs_ta", attr_text="Operating!$27:$27",
+                                         comment="scale=1000000"))
+        ws.defined_names.add(DefinedName("OTRO_NOMBRE", attr_text="Operating!$5:$5"))
+        self.assertEqual(M.capture_links(ws),
+                         {91: M.CaptureLink("bs_ap", 1_000_000.0),
+                          27: M.CaptureLink("bs_ta", 1_000_000.0)})
+
+    def test_link_without_scale_is_a_capture_error(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Operating")
+        ws.defined_names.add(DefinedName("CAPTURE.bs_ap", attr_text="Operating!$91:$91"))
+        with self.assertRaises(M.CaptureError) as caught:
+            M.capture_links(ws)
+        self.assertIn("CAPTURE.bs_ap", str(caught.exception))
+
+    def test_capture_values_are_keyed_by_line_and_period(self) -> None:
+        path = self._csv("line_item,period,value,source_doc,source_ref,tag\n"
+                         "bs_ap,3Q2016,26318000000.0,10-Q,\"XBRL, filed 2016-07-27\",observado\n"
+                         "is_ni,4Q2016,9014000000,10-K,FY menos 3Q,derivado\n"
+                         "is_ns_total,1Q2027,95000000000,call,p.3,guidance\n")
+        self.assertEqual(M.load_capture(path),
+                         {("bs_ap", "3Q2016"): 26318000000.0,
+                          ("is_ni", "4Q2016"): 9014000000.0})   # guidance no respalda
+
+    def test_capture_without_a_required_column_is_a_capture_error(self) -> None:
+        path = self._csv("line_item,period,value\nbs_ap,3Q2016,1\n")
+        with self.assertRaises(M.CaptureError) as caught:
+            M.load_capture(path)
+        self.assertIn("faltan columnas tag", str(caught.exception))
+
+    def test_non_numeric_capture_value_names_file_and_line(self) -> None:
+        for bad in ("abc", "", "nan"):
+            with self.subTest(value=bad):
+                path = self._csv("line_item,period,value,tag\n"
+                                 "bs_ap,3Q2016,1,observado\n"
+                                 f"bs_ar,3Q2016,{bad},observado\n")
+                with self.assertRaises(M.CaptureError) as caught:
+                    M.load_capture(path)
+                self.assertIn("canonical_quarterly.csv linea 3", str(caught.exception))
+
+    def test_threshold_comes_from_the_profile_or_the_default(self) -> None:
+        profile = self.dir / "issuer-profile.yaml"
+        profile.write_text("materiality:\n"
+                           "  critical_pct_target_price: 10\n"
+                           "  capture_unlinked_pct: 2.5   # C9\n", encoding="utf-8")
+        self.assertEqual(M.materiality_pct_from_profile(profile), (2.5, "perfil"))
+        profile.write_text("materiality:\n  critical_pct_target_price: 10\n", encoding="utf-8")
+        self.assertEqual(M.materiality_pct_from_profile(profile), (0.5, "default"))
+        self.assertEqual(M.materiality_pct_from_profile(self.dir / "no-existe.yaml"),
+                         (0.5, "default"))
+        self.assertEqual(M.materiality_pct_from_profile(None), (0.5, "default"))
+
+    def test_period_axis_reports_the_header_row(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Model")
+        styler.period_header(ws, 3, 3, B.PeriodHeader(2020, 2025, 2022))
+        self.assertEqual({period.row for period in M._period_axis(ws)}, {3})
+
+
+class CaptureCheckTests(_DemoCase):
+    """C9 en los dos sentidos: el demo lo pasa, cada libro roto lo falla."""
+
+    def _c9(self, mutate: Callable[[Workbook], None] | None = None,
+            **kwargs: object) -> B.Finding:
+        (finding,) = M.audit_capture(self._beside_demo(mutate), **kwargs)  # type: ignore[arg-type]
+        return finding
+
+    def _rewrite_capture(self, transform: Callable[[list[dict[str, str]]],
+                                                   list[dict[str, str]]]) -> None:
+        path = self.dir / "inputs" / "canonical_quarterly.csv"
+        with path.open(encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CAPTURE_COLUMNS)
+            writer.writeheader()
+            writer.writerows(transform(rows))
+
+    @staticmethod
+    def _is(row: dict[str, str], line_item: str, period: str | None = None) -> bool:
+        return row["line_item"] == line_item and period in (None, row["period"])
+
+    def test_demo_matches_its_capture_layer(self) -> None:
+        finding = self._c9()
+        self.assertTrue(finding.ok, finding.detail)
+        self.assertFalse(finding.warning)
+        self.assertIn("128 cifras en 16 filas coinciden", finding.detail)
+        self.assertIn("umbral 0.5%", finding.detail)
+
+    def test_linked_figure_that_differs_from_the_capture_always_fails(self) -> None:
+        def mutate(wb: Workbook) -> None:
+            wb["Operating"]["D12"] = 999
+        # Ni un umbral del 100% perdona una divergencia.
+        finding = self._c9(mutate, materiality_pct=100.0)
+        self.assertTrue(finding.blocking)
+        self.assertIn("DIVERGENCIAS", finding.detail)
+        self.assertIn("Operating!D12 (is_ns_total 2Q2023)", finding.detail)
+
+    def test_material_figure_without_a_link_fails(self) -> None:
+        finding = self._c9(_unlinked_row(50))
+        self.assertTrue(finding.blocking)
+        self.assertIn("SIN RESPALDO sobre el umbral", finding.detail)
+        self.assertIn("Operating!fila 200 (Otros activos): 1 cifras sin vinculo", finding.detail)
+
+    def test_immaterial_figure_without_a_link_is_a_warning(self) -> None:
+        finding = self._c9(_unlinked_row(0.2))
+        self.assertFalse(finding.ok)
+        self.assertTrue(finding.warning)
+        self.assertFalse(finding.blocking)
+        self.assertIn("bajo el umbral", finding.detail)
+        self.assertIn("Operating!fila 200", finding.detail)
+
+    def test_threshold_decides_between_failure_and_warning(self) -> None:
+        self.assertTrue(self._c9(_unlinked_row(50)).blocking)                       # 50 > 0.5
+        self.assertTrue(self._c9(_unlinked_row(50), materiality_pct=60.0).warning)  # 50 <= 60
+
+    def test_linked_row_missing_a_period_in_the_capture_fails(self) -> None:
+        self._rewrite_capture(lambda rows: [r for r in rows if not self._is(r, "bs_ar", "3Q2023")])
+        finding = self._c9()
+        self.assertTrue(finding.blocking)
+        self.assertIn("Operating!fila 24", finding.detail)
+        self.assertIn("bs_ar sin periodo en la captura (desde 3Q2023)", finding.detail)
+
+    def test_guidance_row_does_not_back_a_historical_figure(self) -> None:
+        def retag(tag: str) -> Callable[[list[dict[str, str]]], list[dict[str, str]]]:
+            return lambda rows: [dict(r, tag=tag) if self._is(r, "bs_ar", "3Q2023") else r
+                                 for r in rows]
+        self._rewrite_capture(retag("guidance"))
+        self.assertTrue(self._c9().blocking)
+        self._rewrite_capture(retag("derivado"))
+        self.assertTrue(self._c9().ok)
+
+    def test_scale_converts_model_units_to_source_units(self) -> None:
+        def rescale(wb: Workbook) -> None:
+            wb["Operating"].defined_names["CAPTURE.bs_cash"].comment = "scale=1000.0"
+        # Solo cambia la escala del vinculo: el libro ya no coincide con el CSV.
+        self.assertIn("DIVERGENCIAS", self._c9(rescale).detail)
+        # El CSV pasa a la unidad de la fuente (x1000): vuelve a coincidir.
+        self._rewrite_capture(lambda rows: [
+            dict(r, value=str(float(r["value"]) * 1000)) if self._is(r, "bs_cash") else r
+            for r in rows])
+        self.assertTrue(self._c9(rescale).ok)
+
+    def test_unbacked_figure_without_materiality_reference_fails(self) -> None:
+        self._rewrite_capture(lambda rows: [r for r in rows if not self._is(r, "bs_ta")])
+        finding = self._c9(materiality_pct=100.0)
+        self.assertTrue(finding.blocking)
+        self.assertIn("Operating!fila 27", finding.detail)
+        self.assertIn("sin referencia de materialidad", finding.detail)
+
+    def test_assumptions_section_is_out_of_scope(self) -> None:
+        def rename_section(wb: Workbook) -> None:
+            wb["Operating"]["B5"] = "Supuestos"
+        # Sin la banda "Assumptions", sus constantes tecleadas (365 dias) cuentan.
+        finding = self._c9(rename_section)
+        self.assertTrue(finding.blocking)
+        self.assertIn("Operating!fila 7", finding.detail)
+
+    def test_missing_capture_folder_fails_unless_the_model_is_external(self) -> None:
+        elsewhere = self._mutated(lambda wb: None)       # roto/ no tiene inputs/
+        (strict,) = M.audit_capture(elsewhere)
+        self.assertTrue(strict.blocking)
+        self.assertIn("sin capa de captura", strict.detail)
+        (external,) = M.audit_capture(elsewhere, external=True)
+        self.assertTrue(external.ok)
+        self.assertIn("n/a", external.detail)
+        (pointed,) = M.audit_capture(elsewhere, inputs_dir=str(self.dir / "inputs"))
+        self.assertTrue(pointed.ok, pointed.detail)
+
+    def test_unreadable_capture_is_reported_as_a_failure_not_a_traceback(self) -> None:
+        capture = self.dir / "inputs" / "canonical_quarterly.csv"
+        capture.write_text("line_item,period,value\nbs_ap,1Q2023,20\n", encoding="utf-8")
+        finding = self._c9()
+        self.assertTrue(finding.blocking)
+        self.assertIn("faltan columnas tag", finding.detail)
+
+    def test_detail_is_ascii(self) -> None:
+        for finding in (self._c9(), self._c9(_unlinked_row(50)), self._c9(_unlinked_row(0.2))):
+            self.assertTrue(finding.detail.isascii(), finding.detail)
+
+
 class DriverMapTests(unittest.TestCase):
 
     def test_schedule_blocks_are_read_from_the_bloque_column(self) -> None:
@@ -313,6 +536,43 @@ class CliTests(_DemoCase):
         self.assertEqual(code, 3)
         self.assertIn("[aviso] F10", out)
         self.assertIn("1 avisos", out)
+
+    def test_c9_is_part_of_the_single_report(self) -> None:
+        _, out = self._run(str(self.demo))
+        self.assertIn("[ok] C9 historico = capa de captura", out)
+
+    def test_inputs_flag_points_at_a_capture_layer_elsewhere(self) -> None:
+        elsewhere = self._mutated(lambda wb: None)       # roto/ no tiene inputs/
+        code, out = self._run(elsewhere)
+        self.assertEqual(code, 1)
+        self.assertIn("[x] C9", out)
+        _, out = self._run(elsewhere, "--inputs", str(self.dir / "inputs"))
+        self.assertIn("[ok] C9", out)
+
+    def test_profile_threshold_turns_a_material_row_into_a_warning(self) -> None:
+        book = self._beside_demo(_unlinked_row(50))
+        code, out = self._run(book)                       # sin perfil: default 0.5%
+        self.assertEqual(code, 1)
+        self.assertIn("[x] C9", out)
+        profile = self.dir / "issuer-profile.yaml"
+        profile.write_text("materiality:\n  capture_unlinked_pct: 60\n", encoding="utf-8")
+        code, out = self._run(book, "--profile", str(profile))
+        # 3 y no 1: el aviso no bloquea; queda el pendiente de recalculo (S10).
+        self.assertEqual(code, 3)
+        self.assertIn("[aviso] C9", out)
+        self.assertIn("umbral 60%", out)
+        self.assertIn("perfil", out)
+
+    def test_capture_layer_is_resolved_from_the_original_model_path(self) -> None:
+        # --recalc audita una COPIA en un directorio temporal: C9 debe seguir
+        # leyendo la capa de captura que vive junto al modelo ORIGINAL.
+        copied_elsewhere = self._mutated(lambda wb: None)    # roto/ no tiene inputs/
+        options = M.capture_options(self.demo, None, None)
+        self.assertEqual(Path(options.inputs_dir), (self.dir / "inputs").resolve())
+        groups = dict(M.audit_groups(copied_elsewhere, None, None, False, capture=options))
+        c9 = groups["Contables por escaneo (C)"][0]
+        self.assertTrue(c9.check.startswith("C9 "))
+        self.assertTrue(c9.ok, c9.detail)
 
     def test_missing_file_is_reported_without_traceback(self) -> None:
         code, out = self._run(str(self.dir / "no-existe.xlsx"))

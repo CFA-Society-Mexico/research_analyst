@@ -26,9 +26,11 @@ Un [aviso] se lista siempre y nunca cambia el exit code.
 # ``exec_module``) sin registrarlo antes. Con anotaciones evaluadas el builder
 # carga igual por ``import`` que por ruta (tests/test_formula_lint.py).
 
+import csv
 import sys
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from datetime import date
@@ -60,6 +62,14 @@ def transition_year_of(keywords: Optional[str]) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 FONT_NAME = "Aptos Narrow"
+
+# Vinculo fila <-> capa de captura (check C9). Un nombre definido con alcance
+# de hoja por linea: Excel ajusta su rango al insertar o mover filas, asi que
+# el vinculo sobrevive a una edicion manual del libro.
+CAPTURE_NAME_PREFIX = "CAPTURE."
+# Lineas que C9 usa como referencia de materialidad: ventas y activos totales
+# (los nombres que emite xbrl_fetch.CONCEPT_MAP).
+CAPTURE_REFERENCE_LINES = ("is_ns_total", "bs_ta")
 
 
 class Color(str, Enum):
@@ -451,6 +461,36 @@ class ModelStyler:
         quoted = sheet.replace("'", "''")
         ref = f"'{quoted}'!{absolute_coordinate(coord)}"
         self.wb.defined_names.add(DefinedName(name, attr_text=ref))
+
+    def link_capture(self, ws: Worksheet, row: int, line_item: str,
+                     scale: float = 1.0) -> None:
+        """Declara que la fila ``row`` trae el historico de ``line_item`` de
+        la capa de captura (model/inputs/canonical_*.csv) — contrato del C9.
+
+        Escribe el nombre definido ``CAPTURE.<line_item>`` con alcance de la
+        hoja, apuntando a la fila completa, y la escala en su comentario.
+        ``scale`` convierte la unidad del modelo a la de la fuente:
+        valor_csv = valor_xlsx * scale (1_000_000 si el modelo vive en
+        millones y el CSV en unidades). El historico se escribe SIN redondear;
+        el formato de celda redondea la vista.
+        """
+        import re
+        from openpyxl.workbook.defined_name import DefinedName
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", line_item):
+            raise ValueError(
+                f"link_capture: line_item invalido {line_item!r} "
+                "(letras, digitos y guion bajo; empieza con letra)")
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not scale > 0:
+            raise ValueError(f"link_capture: scale debe ser un numero > 0, no {scale!r}")
+        name = CAPTURE_NAME_PREFIX + line_item
+        if name in ws.defined_names:
+            raise ValueError(
+                f"link_capture: {line_item} ya esta vinculado en la hoja {ws.title} "
+                "(una fila, una linea)")
+        quoted = ws.title.replace("'", "''")
+        ws.defined_names.add(DefinedName(
+            name, attr_text=f"'{quoted}'!${row}:${row}",
+            comment=f"scale={float(scale)!r}"))
 
     def save(self, path: str) -> None:
         self.wb.save(path)
@@ -1961,6 +2001,17 @@ def _print_report(findings: Iterable[Finding],
     return 0
 
 
+def _write_demo_capture(folder: Path, rows: list[tuple[str, str, float]]) -> None:
+    """Capa de captura minima del demo (line_item, periodo, valor): el fixture
+    contra el que corre C9. No es un artefacto de cobertura."""
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / "canonical_quarterly.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(("line_item", "period", "value", "source_doc", "source_ref", "tag"))
+        for line_item, period, value in rows:
+            writer.writerow((line_item, period, value, "demo", "xlsx_builder._demo", "observado"))
+
+
 def _demo(path: str) -> None:
     """Self-test: libro v3 minimo construido SOLO con la API del builder.
 
@@ -2002,6 +2053,13 @@ def _demo(path: str) -> None:
             "interest": 17, "ebt": 18, "tax": 19, "ni": 20,
             "cash": 23, "ar": 24, "inv": 25, "ca": 26, "ta": 27, "ap": 28,
             "cl": 29, "debt": 30, "equity": 31, "re": 32, "cfo": 35}
+    # Linea de captura de cada fila OBSERVADA del demo (contrato del C9).
+    capture_lines = {"rev": "is_ns_total", "cogs": "is_cogs_total", "da": "cf_da",
+                     "interest": "is_interest", "tax": "is_tax", "cash": "bs_cash",
+                     "ar": "bs_ar", "inv": "bs_inv", "ca": "bs_ca", "ta": "bs_ta",
+                     "ap": "bs_ap", "cl": "bs_cl", "debt": "bs_debt",
+                     "equity": "bs_equity", "re": "bs_re", "cfo": "cf_cfo"}
+    captured: list[tuple[str, str, float]] = []
 
     styler.section_header(op, 5, "Assumptions")
     for key, text, value, fmt in (("days_q", "Dias por trimestre", 91.25, NumFmt.DEC2),
@@ -2024,6 +2082,11 @@ def _demo(path: str) -> None:
         """Una serie = una fila: observado en A, formula en E (o formula en todo)."""
         r = rows[key]
         label(op, r, text)
+        if not callable(hist):
+            # Fila con historico observado: se vincula y su serie va al CSV.
+            styler.link_capture(op, r, capture_lines[key])
+            captured.extend((capture_lines[key], quarters[i][:-1], float(hist[i]))
+                            for i in range(n_act))
         for i, c in enumerate(cols):
             prev = cols[i - 1] if i else c
             if i < n_act and not callable(hist):
@@ -2115,6 +2178,7 @@ def _demo(path: str) -> None:
         styler.brand_bar(ws, name)
         styler.label_col_width(ws)
     styler.save(path)
+    _write_demo_capture(Path(path).parent / "inputs", captured)
     print(f"[ok] demo escrito: {path}")
 
 

@@ -35,7 +35,10 @@ subtotal observado) y líneas `_alt` / IFRS.
 - `canonical_annual.csv` / `canonical_quarterly.csv` / `consolidated_long.csv`:
   el contrato máquina que consume model-standards (columnas mínimas en
   `templates/coverage-tree.md` §model/inputs). El histórico del xlsx se puebla
-  desde estos CSV — jamás re-tecleado (check C9 verifica coincidencia).
+  desde estos CSV — jamás re-tecleado (check C9 lo verifica por código, cifra
+  por cifra). Un subtotal o residual que el modelo necesite como cifra entra
+  aquí con `tag = derivado` y su fórmula en `source_ref`: si no está en el
+  CSV, C9 lo reporta sin respaldo.
 
 ## Cuándo corre
 

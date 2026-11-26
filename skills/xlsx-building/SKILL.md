@@ -62,6 +62,10 @@ las best practices escritas y entregó Calibri con gridlines).
    y fill — no elijas colores. Series (drivers, líneas de estados): vía
    `series_row` — histórico calculado y forecast en LA MISMA fila (check F11),
    jamás filas hist/forecast separadas ni columnas históricas vacías.
+   Toda fila con histórico OBSERVADO se vincula a su línea de la capa de
+   captura: `styler.link_capture(ws, fila, "bs_ap", scale=1_000_000)`
+   (`valor_csv = valor_xlsx × scale`; el histórico va sin redondear). Sin
+   vínculo, C9 trata sus cifras como no respaldadas.
 3b. **Año de transición** (modo `annual`, primer año del forecast con
    trimestres ya observados): `set_transition_year(<año>)` una vez y
    `series_row(..., transition_first="=<ancla>")` en las series ancladas
