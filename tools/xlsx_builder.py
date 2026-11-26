@@ -20,20 +20,27 @@ Exit codes: 0 = verde; 1 = alguna falla; 3 = sin fallas pero con checks
 Un [aviso] se lista siempre y nunca cambia el exit code.
 """
 
-from __future__ import annotations
+# SIN ``from __future__ import annotations`` a proposito: con anotaciones
+# como texto, ``@dataclass`` consulta ``sys.modules[cls.__module__]`` y truena
+# si el modulo se cargo por ruta (``importlib.util.spec_from_file_location`` +
+# ``exec_module``) sin registrarlo antes. Con anotaciones evaluadas el builder
+# carga igual por ``import`` que por ruta (tests/test_formula_lint.py).
 
 import sys
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from datetime import date
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
+from openpyxl.formula import Tokenizer
+from openpyxl.formula.tokenizer import Token, TokenizerError
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.workbook.properties import CalcProperties
+from openpyxl.worksheet.formula import ArrayFormula
 from openpyxl.worksheet.worksheet import Worksheet
 
 # ---------------------------------------------------------------------------
@@ -42,6 +49,15 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 BUILDER_STAMP_KEY = "research_analyst_builder"
 BUILDER_STAMP_VALUE = "xlsx_builder v1"
+TRANSITION_STAMP_KEY = "transition"
+_UNSET = object()   # centinela: None es un valor de celda valido
+
+
+def transition_year_of(keywords: Optional[str]) -> Optional[int]:
+    """Anio de transicion sellado en el libro (``set_transition_year``) o None."""
+    import re
+    match = re.search(rf"(?:^|;){TRANSITION_STAMP_KEY}=(\d{{4}})", keywords or "")
+    return int(match.group(1)) if match else None
 
 FONT_NAME = "Aptos Narrow"
 
@@ -168,6 +184,216 @@ def load_brand(path: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Lint de formulas (check F21): lo que Excel descarta o evalua mal
+# ---------------------------------------------------------------------------
+# openpyxl escribe cualquier texto que empiece con "=" sin validarlo. Excel si
+# valida al abrir: una funcion con aridad invalida manda el libro a modo
+# reparacion y BORRA la formula (cobertura TSMC: MAX(ABS(a,b,c)) borro siete
+# checks vivos y el audit F seguia 19/19 en verde). El lint corre sin Excel.
+
+# (minimo, maximo) de argumentos. Solo funciones de aridad cerrada o de uso
+# comun en modelos: una funcion ausente no se valida (no se adivina).
+_MANY = 255
+FUNCTION_ARITY: dict[str, tuple[int, int]] = {
+    "ABS": (1, 1), "SQRT": (1, 1), "LN": (1, 1), "EXP": (1, 1), "LOG10": (1, 1),
+    "INT": (1, 1), "SIGN": (1, 1), "NOT": (1, 1), "ISNUMBER": (1, 1),
+    "ISBLANK": (1, 1), "ISERROR": (1, 1), "ISERR": (1, 1), "ISNA": (1, 1),
+    "ISTEXT": (1, 1), "N": (1, 1), "YEAR": (1, 1), "MONTH": (1, 1), "DAY": (1, 1),
+    "LEN": (1, 1), "TRIM": (1, 1), "VALUE": (1, 1), "UPPER": (1, 1), "LOWER": (1, 1),
+    "NA": (0, 0), "PI": (0, 0), "TRUE": (0, 0), "FALSE": (0, 0),
+    "ROUND": (2, 2), "ROUNDUP": (2, 2), "ROUNDDOWN": (2, 2), "POWER": (2, 2),
+    "MOD": (2, 2), "IFERROR": (2, 2), "IFNA": (2, 2), "COUNTIF": (2, 2),
+    "EDATE": (2, 2), "EOMONTH": (2, 2), "TEXT": (2, 2), "SMALL": (2, 2),
+    "LARGE": (2, 2), "PERCENTILE": (2, 2), "QUARTILE": (2, 2),
+    "DATE": (3, 3), "MID": (3, 3), "XNPV": (3, 3),
+    "LOG": (1, 2), "LEFT": (1, 2), "RIGHT": (1, 2), "IRR": (1, 2),
+    "IF": (2, 3), "SUMIF": (2, 3), "AVERAGEIF": (2, 3), "MATCH": (2, 3),
+    "YEARFRAC": (2, 3), "XIRR": (2, 3), "RANK": (2, 3),
+    "VLOOKUP": (3, 4), "HLOOKUP": (3, 4), "INDEX": (2, 4),
+    "PMT": (3, 5), "PV": (3, 5), "FV": (3, 5), "NPER": (3, 5), "RATE": (3, 6),
+    "SUM": (1, _MANY), "AVERAGE": (1, _MANY), "MAX": (1, _MANY), "MIN": (1, _MANY),
+    "MEDIAN": (1, _MANY), "COUNT": (1, _MANY), "COUNTA": (1, _MANY),
+    "PRODUCT": (1, _MANY), "AND": (1, _MANY), "OR": (1, _MANY),
+    "HARMEAN": (1, _MANY), "GEOMEAN": (1, _MANY), "STDEV": (1, _MANY),
+    "VAR": (1, _MANY), "SUMPRODUCT": (1, _MANY), "CONCATENATE": (1, _MANY),
+    "NPV": (2, _MANY), "CHOOSE": (2, _MANY), "SUMIFS": (3, _MANY),
+    "COUNTIFS": (2, _MANY), "AVERAGEIFS": (3, _MANY),
+}
+
+# Funciones posteriores a Excel 2007: en el archivo deben llevar el prefijo
+# ``_xlfn.`` (doc. de openpyxl). Sin el, Excel las carga como #NAME?.
+XLFN_FUNCTIONS = frozenset({
+    "XLOOKUP", "XMATCH", "IFS", "SWITCH", "MAXIFS", "MINIFS", "CONCAT",
+    "TEXTJOIN", "LET", "LAMBDA", "FILTER", "SORT", "SORTBY", "UNIQUE",
+    "SEQUENCE", "STDEV.S", "STDEV.P", "VAR.S", "VAR.P", "PERCENTILE.INC",
+    "PERCENTILE.EXC", "QUARTILE.INC", "QUARTILE.EXC", "RANK.EQ", "RANK.AVG",
+})
+
+# Evaluan sus argumentos como arreglo sin necesitar formula de arreglo.
+_ARRAY_NATIVE = frozenset({"SUMPRODUCT"})
+_XL_PREFIXES = ("_XLFN._XLWS.", "_XLFN.")
+
+
+def _function_name(token_value: str) -> tuple[str, bool]:
+    """('ABS', prefijado) a partir del token 'ABS(' o '_xlfn.XLOOKUP('."""
+    name = token_value[:-1].upper()
+    for prefix in _XL_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):], True
+    return name, False
+
+
+def _is_multicell(operand: str) -> bool:
+    """True si el operando es un rango de varias celdas (A1:B9, A:A, Hoja!A1:A9)."""
+    ref = operand.rsplit("!", 1)[-1].replace("$", "")
+    return ":" in ref
+
+
+def lint_formula(formula: object, array: bool = False) -> list[str]:
+    """Problemas que harian a Excel descartar o evaluar mal la formula.
+
+    (a) aridad invalida en funciones comunes -> Excel repara el libro y BORRA
+        la formula; (b) parentesis desbalanceados; (c) funcion moderna sin
+        prefijo ``_xlfn.`` -> #NAME?; (d) operacion de arreglo (un rango de
+        varias celdas como operando de un operador) en una formula NORMAL ->
+        Excel aplica interseccion implicita y el resultado no es el del
+        arreglo (``MEDIAN(IF(rango=1,...))`` sale "n/a"). (d) no aplica dentro
+        de SUMPRODUCT ni cuando ``array=True`` (formula de arreglo declarada).
+    Devuelve [] si no es formula o si esta limpia.
+    """
+    if not isinstance(formula, str) or not formula.startswith("=") or len(formula) < 2:
+        return []
+    try:
+        tokens = [t for t in Tokenizer(formula).items if t.type != Token.WSPACE]
+    except (TokenizerError, IndexError):
+        # IndexError: el tokenizer de openpyxl saca de una pila vacia cuando
+        # sobra un parentesis de cierre.
+        return ["parentesis o comillas desbalanceados"]
+    problems: list[str] = []
+    # Pila de marcos abiertos: [nombre de funcion o None, separadores, hay contenido]
+    stack: list[list] = []
+    for i, token in enumerate(tokens):
+        opens = token.subtype == Token.OPEN
+        closes = token.subtype == Token.CLOSE
+        if token.type == Token.FUNC and opens:
+            name, prefixed = _function_name(token.value)
+            if name in XLFN_FUNCTIONS and not prefixed:
+                problems.append(f"{name}: funcion moderna sin prefijo _xlfn. (Excel la carga como #NAME?)")
+            if stack:
+                stack[-1][2] = True
+            stack.append([name, 0, False])
+            continue
+        if token.type in (Token.PAREN, Token.ARRAY) and opens:
+            if stack:
+                stack[-1][2] = True
+            stack.append([None, 0, False])
+            continue
+        if closes and token.type in (Token.FUNC, Token.PAREN, Token.ARRAY):
+            if not stack:
+                return problems + ["parentesis de cierre de mas"]
+            name, separators, has_content = stack.pop()
+            if token.type == Token.FUNC and name in FUNCTION_ARITY:
+                count = separators + 1 if (separators or has_content) else 0
+                low, high = FUNCTION_ARITY[name]
+                if not low <= count <= high:
+                    expected = str(low) if low == high else f"{low} a {high}"
+                    problems.append(f"{name} con {count} argumentos (admite {expected}): "
+                                    "Excel repara el libro y borra la formula")
+            continue
+        if stack:
+            stack[-1][2] = True
+            if token.type == Token.SEP and token.subtype == Token.ARG:
+                stack[-1][1] += 1
+        if (not array and token.type == Token.OPERAND and token.subtype == Token.RANGE
+                and _is_multicell(token.value)
+                and not any(frame[0] in _ARRAY_NATIVE for frame in stack)):
+            before = tokens[i - 1] if i else None
+            after = tokens[i + 1] if i + 1 < len(tokens) else None
+            operated = ((before is not None and before.type in (Token.OP_IN, Token.OP_PRE)
+                         and before.value != ",")
+                        or (after is not None and after.type in (Token.OP_IN, Token.OP_POST)
+                            and after.value != ","))
+            if operated:
+                problems.append(f"operacion de arreglo sobre {token.value} en formula normal "
+                                "(Excel aplica interseccion implicita): usa set_array_formula "
+                                "o SUMPRODUCT")
+    if stack:
+        problems.append("parentesis sin cerrar")
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# Formulas de valuacion (texto de formula; el builder las coloca)
+# ---------------------------------------------------------------------------
+# Viven aqui, y no en el script de cada cobertura, porque una formula de
+# valuacion mal despejada no la detecta ningun check de formato. Ninguna lleva
+# literales distintos de 0 y 1 fuera de un check (S4) ni operaciones de
+# arreglo fuera de SUMPRODUCT (F21). Las referencias llegan como texto A1 o
+# nombre definido.
+
+NO_GROWTH_BELOW_WACC = "ninguna g < WACC reproduce el TV"
+NO_REAL_SOLUTION = "sin solucion real"
+NOT_MEANINGFUL = "n/s"
+REVIEW_FLAG = "REVISAR"
+
+
+def dcf_per_share_formula(*, wacc: str, g: str, fcff_range: str, exponent_range: str,
+                          nopat_n: str, ronic: str, tv_exponent: str,
+                          net_debt: str, shares: str) -> str:
+    """Valor por accion del DCF en UNA celda, como funcion de (WACC, g).
+
+    Es la forma cerrada que sustituye al data table de Excel (openpyxl no
+    puede crearlo): ``(VP de los FCFF explicitos + VP del terminal normalizado
+    - deuda neta) / acciones``. Los exponentes vienen de la fila del DCF, asi
+    que respeta stub y mid-year. SUMPRODUCT evalua el arreglo sin CSE.
+    """
+    explicit = f"SUMPRODUCT({fcff_range}/(1+{wacc})^{exponent_range})"
+    terminal = (f"{nopat_n}*(1+{g})*(1-{g}/{ronic})/({wacc}-{g})"
+                f"/(1+{wacc})^{tv_exponent}")
+    return (f'=IF({wacc}<={g},"{NOT_MEANINGFUL}",'
+            f"({explicit}+{terminal}-{net_debt})/{shares})")
+
+
+def comps_market_cap_formula(*, price: str, shares_per_ads: str, shares: str,
+                             fx_to_reporting: str) -> str:
+    """Market cap de un comparable EN LA MONEDA DE REPORTE del modelo.
+
+    ``precio / acciones por ADS x acciones ordinarias x FX``. El precio de un
+    ADR viene por ADS y en la moneda de cotizacion; multiplicarlo directo por
+    las acciones ordinarias mezcla unidades y monedas (UMC en la cobertura de
+    TSMC: EV/EBITDA 1.0x en vez de 10.1x).
+    """
+    return f"={price}/{shares_per_ads}*{shares}*{fx_to_reporting}"
+
+
+def multiple_range_flag_formula(multiple: str, low: str, high: str) -> str:
+    """Marca ``REVISAR`` si un multiplo cae fuera de [low, high] (check D12).
+
+    Un EV/EBITDA de 1.0x casi nunca es una oportunidad: es un error de
+    unidades o de moneda. Los limites son constantes con nombre (defaults del
+    plugin 2x y 60x), no literales."""
+    return (f'=IF(NOT(ISNUMBER({multiple})),"n/a",'
+            f'IF(OR({multiple}<{low},{multiple}>{high}),"{REVIEW_FLAG}","OK"))')
+
+
+def terminal_multiple_alarm_formula(implied_multiple: str, comps_median: str,
+                                    floor_ratio: str) -> str:
+    """Check D11: multiplo implicito del terminal Gordon vs mediana de comps.
+
+    Por debajo de ``floor_ratio`` x la mediana (default 0.5) el terminal esta
+    perpetuando algo que no es de estado estable -tipicamente capex de
+    crecimiento- y se marca ``Error``; no es un dato informativo."""
+    return (f'=IF(OR(NOT(ISNUMBER({implied_multiple})),NOT(ISNUMBER({comps_median}))),"n/a",'
+            f'IF({implied_multiple}<{floor_ratio}*{comps_median},"Error","OK"))')
+
+
+def center_check_formula(center: str, model_value: str) -> str:
+    """La celda central de la cuadricula de sensibilidad reproduce el modelo."""
+    return (f'=IF(OR(NOT(ISNUMBER({center})),NOT(ISNUMBER({model_value}))),"Error",'
+            f'IF(ABS({center}-{model_value})>0.0001*MAX(1,ABS({model_value})),"Error","OK"))')
+
+
+# ---------------------------------------------------------------------------
 # Builder
 # ---------------------------------------------------------------------------
 
@@ -200,6 +426,21 @@ class ModelStyler:
         check F14 can verify quarter columns without external context."""
         self.wb.properties.keywords = (
             f"{self.wb.properties.keywords or ''};periodicity={mode}")
+
+    def set_transition_year(self, year: int) -> None:
+        """Declara el ANIO DE TRANSICION: el primer anio del forecast que ya
+        trae trimestres observados (9M reales + 4T guiado). Su columna lleva
+        una formula propia (ancla en lo observado) y S5 la trata como tramo
+        aparte. Sin este sello, ``series_row(transition_first=...)`` falla:
+        una formula distinta en la primera columna E seria una violacion de
+        S5 que nadie declaro."""
+        if not 1990 <= int(year) <= 2100:
+            raise ValueError(f"set_transition_year: anio fuera de rango: {year!r}")
+        self.wb.properties.keywords = (
+            f"{self.wb.properties.keywords or ''};{TRANSITION_STAMP_KEY}={int(year)}")
+
+    def transition_year(self) -> Optional[int]:
+        return transition_year_of(self.wb.properties.keywords)
 
     def define_constant(self, name: str, sheet: str, coord: str) -> None:
         """Named range for a labeled constant (e.g. DAYS_YEAR) — kills hardcodes."""
@@ -318,6 +559,29 @@ class ModelStyler:
     def set_cell(self, ws: Worksheet, coord: str, value: object, role: CellRole,
                  numfmt: NumFmt = NumFmt.NUM, size: int = 11,
                  bold: bool = False) -> None:
+        """Escribe una celda con su rol. F21 por construccion: una formula que
+        Excel descartaria o evaluaria mal (``lint_formula``) se rechaza AQUI,
+        con la celda, en vez de aparecer como libro reparado al abrirlo."""
+        problems = lint_formula(value)
+        if problems:
+            raise ValueError(f"F21: {ws.title}!{coord} {value!r}: " + "; ".join(problems))
+        self._write(ws, coord, value, role, numfmt, size, bold)
+
+    def set_array_formula(self, ws: Worksheet, coord: str, formula: str,
+                          role: CellRole = CellRole.FORMULA,
+                          numfmt: NumFmt = NumFmt.NUM) -> None:
+        """Formula de ARREGLO de una celda (CSE). Es la unica forma valida de
+        escribir una operacion sobre rangos fuera de SUMPRODUCT, p. ej.
+        ``=MEDIAN(IF(rango=1,valores))``: como formula normal Excel 365 aplica
+        interseccion implicita y devuelve otra cosa. La aridad se valida igual."""
+        problems = lint_formula(formula, array=True)
+        if problems or not formula.startswith("="):
+            raise ValueError(f"F21: {ws.title}!{coord} {formula!r}: "
+                             + ("; ".join(problems) or "no es formula"))
+        self._write(ws, coord, ArrayFormula(ref=coord, text=formula), role, numfmt, 11, False)
+
+    def _write(self, ws: Worksheet, coord: str, value: object, role: CellRole,
+               numfmt: NumFmt, size: int, bold: bool) -> None:
         cell = ws[coord]
         cell.value = value
         cell.font = Font(name=FONT_NAME, size=size, bold=bold,
@@ -357,20 +621,45 @@ class ModelStyler:
                    hist_values: list[object], forecast_values: list[object],
                    numfmt: NumFmt = NumFmt.NUM,
                    hist_role: CellRole = CellRole.FORMULA,
-                   forecast_role: CellRole = CellRole.INPUT) -> None:
+                   forecast_role: CellRole = CellRole.INPUT,
+                   transition_first: object = _UNSET,
+                   transition_role: CellRole = CellRole.FORMULA) -> None:
         """ONE continuous row across the whole horizon (contract F11).
 
         A series is never split into 'historical' and 'forecast' rows: the same
         line carries computed/observed history (black or blue-observed) and then
         forecast cells (blue input on yellow, or driver formula). The role
         switches at the boundary column; every horizon column gets a value.
+
+        ``transition_first``: valor/formula de la PRIMERA columna del forecast
+        cuando ese anio es de transicion (trimestres ya observados + resto
+        guiado). Sustituye a ``forecast_values[0]`` -la lista sigue cubriendo
+        todo el forecast- y se escribe con ``transition_role`` (default
+        FORMULA: en un anio anclado el driver es RESULTADO del ancla, no
+        input). Exige ``set_transition_year`` antes: asi S5 sabe que esa
+        columna es un tramo propio y no una formula inconsistente.
         """
+        if transition_first is not _UNSET:
+            if self.transition_year() is None:
+                raise ValueError(
+                    f"series_row {ws.title}!fila {row}: transition_first sin anio de "
+                    "transicion declarado. Llama antes a set_transition_year(<anio>).")
+            if not forecast_values:
+                raise ValueError(
+                    f"series_row {ws.title}!fila {row}: transition_first sin forecast")
+            forecast_values = list(forecast_values)
+            first_forecast, forecast_values = forecast_values[0], forecast_values[1:]
+            del first_forecast  # sustituido por transition_first
         lab = ws.cell(row=row, column=2, value=label)
         lab.font = Font(name=FONT_NAME, size=11, color=Color.BLACK.value)
         col = first_col
         for value in hist_values:
             self.set_cell(ws, f"{get_column_letter(col)}{row}", value,
                           hist_role, numfmt)
+            col += 1
+        if transition_first is not _UNSET:
+            self.set_cell(ws, f"{get_column_letter(col)}{row}", transition_first,
+                          transition_role, numfmt)
             col += 1
         for value in forecast_values:
             self.set_cell(ws, f"{get_column_letter(col)}{row}", value,
@@ -467,6 +756,140 @@ class ModelStyler:
             colmap[(year, "FY")] = col
             col += 1
         return colmap
+
+    # -- Valuacion: terminal normalizado, g implicita, sensibilidad ----------
+
+    def _value_row(self, ws: Worksheet, row: int, col: int, label: str,
+                   formula: str, numfmt: NumFmt) -> str:
+        """Fila de valor unico: label en B, valor en ``col`` (C por contrato)."""
+        ws.cell(row=row, column=2, value=label).font = Font(name=FONT_NAME, size=11)
+        self.set_cell(ws, f"{get_column_letter(col)}{row}", formula,
+                      CellRole.FORMULA, numfmt)
+        return f"${get_column_letter(col)}${row}"
+
+    def gordon_terminal_block(self, ws: Worksheet, row: int, *, nopat_ref: str,
+                              g_ref: str, wacc_ref: str, ronic_ref: str,
+                              col: int = 3) -> dict[str, str]:
+        """Terminal Gordon con FLUJO NORMALIZADO (tres filas, valores en C).
+
+        ``flujo terminal = NOPAT_n x (1+g) x (1 - g/RONIC)``: la reinversion
+        del terminal es la que el crecimiento g exige a un retorno RONIC, no
+        la del ultimo anio explicito. Perpetuar ``FCFF_n`` arrastra el capex
+        de una empresa que aun crece rapido sin darle ese crecimiento
+        (TSMC: 1,025 por accion contra 2,065 con el flujo normalizado). RONIC
+        es input etiquetado de Assumptions; con RONIC = WACC el crecimiento no
+        crea valor (default defendible).
+
+        Devuelve las referencias absolutas ``reinvestment``, ``flow``, ``tv``
+        y ``next_row``.
+        """
+        reinvestment = self._value_row(
+            ws, row, col, "Tasa de reinversion terminal (g / RONIC)",
+            f'=IF({ronic_ref}<=0,"{NOT_MEANINGFUL}",{g_ref}/{ronic_ref})', NumFmt.PCT1)
+        flow = self._value_row(
+            ws, row + 1, col, "Flujo terminal normalizado (NOPAT_n x (1+g) x (1 - g/RONIC))",
+            f'=IF({ronic_ref}<=0,"{NOT_MEANINGFUL}",'
+            f"{nopat_ref}*(1+{g_ref})*(1-{g_ref}/{ronic_ref}))", NumFmt.NUM)
+        tv = self._value_row(
+            ws, row + 2, col, "TV Gordon (flujo terminal / (WACC - g))",
+            f'=IF(OR({wacc_ref}<={g_ref},NOT(ISNUMBER({flow}))),"{NOT_MEANINGFUL}",'
+            f"{flow}/({wacc_ref}-{g_ref}))", NumFmt.NUM)
+        return {"reinvestment": reinvestment, "flow": flow, "tv": tv,
+                "next_row": str(row + 3)}
+
+    def implied_growth_block(self, ws: Worksheet, row: int, *, title: str,
+                             tv_ref: str, nopat_ref: str, wacc_ref: str,
+                             ronic_ref: str, col: int = 3) -> dict[str, str]:
+        """g implicita en un valor terminal, forma cerrada, linea por linea.
+
+        Despeje de ``TV = NOPAT_n (1+g)(1 - g/RONIC) / (WACC - g)``: la raiz
+        menor de ``A g^2 - B g + C = 0`` con ``A = N/R``, ``B = TV + N(1-1/R)``
+        y ``C = TV x W - N``. Se escribe sin literales (S4): ``m = B/(A+A)`` es
+        el punto medio de las raices y ``g = m - RAIZ(m x m - C/A)``.
+
+        Guarda obligatoria: con RONIC = WACC una raiz es exactamente g = WACC,
+        solucion espuria (el TV explota). Una raiz >= WACC se reporta como
+        texto (``NO_GROWTH_BELOW_WACC``), jamas como numero; igual si el
+        discriminante es negativo (``NO_REAL_SOLUTION``). Con RONIC = WACC la
+        cuadratica NO se usa: en punto flotante la raiz espuria sale
+        0.08999999999999947 y pasaria por valida (visto con Excel). Ahi el
+        despeje es lineal y exacto, ``g = TV x WACC / NOPAT_n - 1``.
+
+        Sirve para el cruce de terminales (TV del multiplo de salida) y para
+        el reverse DCF (TV implicita en el EV de mercado). Seis filas;
+        devuelve la referencia de ``g`` y ``next_row``.
+        """
+        a = self._value_row(ws, row, col, f"{title}: A = NOPAT_n / RONIC",
+                            f"={nopat_ref}/{ronic_ref}", NumFmt.NUM)
+        b = self._value_row(ws, row + 1, col, f"{title}: B = TV + NOPAT_n x (1 - 1/RONIC)",
+                            f"={tv_ref}+{nopat_ref}*(1-1/{ronic_ref})", NumFmt.NUM)
+        c = self._value_row(ws, row + 2, col, f"{title}: C = TV x WACC - NOPAT_n",
+                            f"={tv_ref}*{wacc_ref}-{nopat_ref}", NumFmt.NUM)
+        mid = self._value_row(ws, row + 3, col, f"{title}: punto medio de las raices (B / 2A)",
+                              f"={b}/({a}+{a})", NumFmt.PCT2)
+        disc = self._value_row(ws, row + 4, col, f"{title}: discriminante reducido (m^2 - C/A)",
+                               f"={mid}*{mid}-{c}/{a}", NumFmt.DEC2)
+        root = f"{mid}-SQRT({disc})"
+        linear = f"{tv_ref}*{wacc_ref}/{nopat_ref}-1"
+        g = self._value_row(
+            ws, row + 5, col, f"{title}: g implicita (raiz menor)",
+            f'=IF(OR(NOT(ISNUMBER({disc})),{nopat_ref}<=0,{ronic_ref}<=0),"{NOT_MEANINGFUL}",'
+            f'IF({ronic_ref}={wacc_ref},'
+            f'IF({linear}>={wacc_ref},"{NO_GROWTH_BELOW_WACC}",{linear}),'
+            f'IF({disc}<0,"{NO_REAL_SOLUTION}",'
+            f'IF({root}>={wacc_ref},"{NO_GROWTH_BELOW_WACC}",{root}))))', NumFmt.PCT2)
+        return {"g": g, "next_row": str(row + 6)}
+
+    def sensitivity_grid(self, ws: Worksheet, top_row: int, left_col: int, *,
+                         row_base_ref: str, col_base_ref: str,
+                         row_step_ref: str, col_step_ref: str,
+                         cell_formula: Callable[[str, str], str],
+                         n_side: int = 2, corner_label: str = "WACC / g",
+                         axis_fmt: NumFmt = NumFmt.PCT2,
+                         value_fmt: NumFmt = NumFmt.DEC2) -> str:
+        """Cuadricula de sensibilidad de 2 variables SIN data table.
+
+        openpyxl no puede escribir un data table de Excel (``TABLE()``), asi
+        que cada celda lleva la formula cerrada que devuelve
+        ``cell_formula(ref_fila, ref_columna)`` -p. ej.
+        ``dcf_per_share_formula``- con el encabezado de su fila y de su
+        columna como variables. Encabezados: el central enlaza al valor base
+        del modelo; los demas suman o restan el paso (constante con nombre en
+        Assumptions), sin literales. Tamano ``(2 x n_side + 1)`` por lado.
+
+        Devuelve la referencia absoluta de la celda CENTRAL, que debe
+        reproducir el valor del modelo (``center_check_formula``).
+        """
+        if n_side < 1:
+            raise ValueError(f"sensitivity_grid: n_side={n_side} invalido")
+        size = 2 * n_side + 1
+        corner = ws.cell(row=top_row, column=left_col, value=corner_label)
+        corner.font = Font(name=FONT_NAME, size=11, bold=True)
+
+        def axis(horizontal: bool, base_ref: str, step_ref: str) -> None:
+            coords = [(f"{get_column_letter(left_col + 1 + k)}{top_row}" if horizontal
+                       else f"{get_column_letter(left_col)}{top_row + 1 + k}")
+                      for k in range(size)]
+            for k, coord in enumerate(coords):
+                if k == n_side:
+                    formula = f"={base_ref}"
+                elif k > n_side:
+                    formula = f"={coords[k - 1]}+{step_ref}"
+                else:
+                    formula = f"={coords[k + 1]}-{step_ref}"
+                self.set_cell(ws, coord, formula, CellRole.FORMULA, axis_fmt, bold=True)
+
+        axis(True, col_base_ref, col_step_ref)
+        axis(False, row_base_ref, row_step_ref)
+        row_letter = get_column_letter(left_col)
+        for i in range(size):
+            for j in range(size):
+                col_letter = get_column_letter(left_col + 1 + j)
+                self.set_cell(ws, f"{col_letter}{top_row + 1 + i}",
+                              cell_formula(f"${row_letter}{top_row + 1 + i}",
+                                           f"{col_letter}${top_row}"),
+                              CellRole.FORMULA, value_fmt)
+        return f"${get_column_letter(left_col + 1 + n_side)}${top_row + 1 + n_side}"
 
     # -- Ratios section (deterministic; fixes the "lazy ratios" failure) -----
 
@@ -968,7 +1391,7 @@ def _series_continuity_violations(ws: Worksheet) -> list[str]:
 
 def audit_format(path: str, brand: Optional[dict[str, str]] = None,
                  external: bool = False) -> list[Finding]:
-    """Run checks F (F1-F20) on a workbook. Pure read; returns findings.
+    """Run checks F (F1-F21) on a workbook. Pure read; returns findings.
 
     ``brand``: output of load_brand(brand/DESIGN.md) — its values extend the
     fill whitelist (F4) so a branded model audits green with its own DESIGN.md.
@@ -1336,7 +1759,84 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None,
         findings.append(Finding("F18 sin referencias circulares", not cycles,
                                 ("CICLOS: " + " | ".join(cycles[:3]))
                                 if cycles else "grafo de formulas aciclico"))
+    # F21 formulas aceptables para Excel: aridad, parentesis, funciones sin
+    # prefijo _xlfn. y operaciones de arreglo en formula normal. Sin esto el
+    # audit daba verde sobre un libro que Excel abre en modo reparacion.
+    bad_formulas: list[str] = []
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(max_row=min(ws.max_row, _MAX_SCAN_ROWS),
+                                max_col=min(ws.max_column, _MAX_SCAN_COLS)):
+            for cell in row:
+                value = cell.value
+                is_array = isinstance(value, ArrayFormula)
+                text = value.text if is_array else value
+                for problem in lint_formula(text, array=is_array):
+                    bad_formulas.append(f"{ws.title}!{cell.coordinate}: {problem}")
+    findings.append(Finding(
+        "F21 formulas aceptables para Excel", not bad_formulas,
+        ("; ".join(bad_formulas[:6])
+         + (f" (+{len(bad_formulas) - 6} mas)" if len(bad_formulas) > 6 else ""))
+        if bad_formulas else "aridad, parentesis, prefijos y arreglos ok"))
     return findings
+
+
+# --- Checks vivos de la tab Checks (formulas) --------------------------------
+
+# Tabs con checks de formula viva: la lista (Checks) y la celda unica de
+# error que los agrega (Cover).
+LIVE_CHECK_SHEETS = ("Checks", "Cover")
+_EXCEL_ERRORS = ("#VALUE!", "#REF!", "#NAME?", "#DIV/0!", "#N/A", "#NUM!", "#NULL!")
+
+
+def live_checks_finding(path: str) -> Finding:
+    """Estado de los checks de FORMULA VIVA de la tab ``Checks`` (C1-C5, C7...).
+
+    Un check que nunca se evaluo no es un check verde. openpyxl guarda las
+    formulas SIN valor calculado: mientras el libro no se recalcule con un
+    motor real (``tools/recalc_validate.py``), estos checks estan SIN evaluar y
+    el resumen por codigo no los cubre -> [pendiente]. Con valores calculados:
+    cualquier ``Error`` o error de Excel (#VALUE!, #NAME?...) es falla.
+    """
+    name = "Checks vivos (tabs Checks y Cover)"
+    formulas = load_workbook(path, data_only=False)
+    sheets = [n for n in LIVE_CHECK_SHEETS if n in formulas.sheetnames]
+    if not sheets:
+        return Finding(name, True, "n/a (sin tab Checks ni Cover)")
+    cached_book = load_workbook(path, data_only=True)
+    total = 0
+    unevaluated: list[str] = []
+    failing: list[str] = []
+    for sheet in sheets:
+        ws, values = formulas[sheet], cached_book[sheet]
+        for row in ws.iter_rows(max_row=min(ws.max_row, _MAX_SCAN_ROWS),
+                                max_col=min(ws.max_column, _MAX_SCAN_COLS)):
+            for cell in row:
+                v = cell.value
+                if not (isinstance(v, ArrayFormula)
+                        or (isinstance(v, str) and v.startswith("="))):
+                    continue
+                total += 1
+                cached = values.cell(row=cell.row, column=cell.column).value
+                label = str(ws.cell(row=cell.row, column=2).value or "")[:40]
+                where = f"{sheet}!{cell.coordinate}" + (f" ({label})" if label else "")
+                if cached is None:
+                    unevaluated.append(where)
+                elif isinstance(cached, str) and (
+                        cached.strip().upper().startswith("ERROR")
+                        or cached.strip() in _EXCEL_ERRORS):
+                    failing.append(f"{where} = {cached}")
+    if total == 0:
+        return Finding(name, True, "n/a (tabs Checks y Cover sin formulas vivas)")
+    if failing:
+        return Finding(name, False, "; ".join(failing[:8])
+                       + (f" (+{len(failing) - 8} mas)" if len(failing) > 8 else ""))
+    if unevaluated:
+        return Finding(
+            name, False,
+            f"{len(unevaluated)} de {total} checks vivos SIN evaluar (formulas sin valor "
+            "calculado): este reporte NO los cubre. Recalcula y valida con "
+            "python tools/recalc_validate.py <modelo.xlsx>", pending=True)
+    return Finding(name, True, f"{total} checks vivos evaluados, ninguno en Error")
 
 
 def _cash_roll_violations(path: str) -> Optional[tuple[list[str], int, int]]:
@@ -1432,17 +1932,26 @@ def _split_series_violations(ws: Worksheet) -> list[str]:
     return hits
 
 
-def _print_report(findings: Iterable[Finding]) -> int:
+def _print_report(findings: Iterable[Finding],
+                  live: Optional[Finding] = None,
+                  label: str = "Resumen F") -> int:
     """Imprime el reporte. Exit: 1 si hay fallas; 3 si solo hay pendientes.
-    Los avisos se listan y se cuentan, pero no cambian el exit code."""
+    Los avisos se listan y se cuentan, pero no cambian el exit code.
+
+    ``live``: estado de los checks de formula viva (``live_checks_finding``).
+    No es un check F, pero entra al veredicto: un libro con checks vivos sin
+    evaluar no puede salir verde solo porque su formato esta bien."""
     findings = list(findings)
     for f in findings:
         print(f"{f.mark} {f.check}: {f.detail}")
+    if live is not None:
+        print(f"{live.mark} {live.check}: {live.detail}")
+        findings.append(live)
     failures = sum(1 for f in findings if f.blocking)
     pending = sum(1 for f in findings if f.pending)
     warnings = sum(1 for f in findings if f.warning and not f.pending)
     ok_count = sum(1 for f in findings if f.ok and not f.pending)
-    print(f"Resumen F: {ok_count} ok, {failures} fallas, {pending} pendientes, "
+    print(f"{label}: {ok_count} ok, {failures} fallas, {pending} pendientes, "
           f"{warnings} avisos")
     if failures:
         return 1
@@ -1614,7 +2123,8 @@ def main(argv: list[str]) -> int:
     args = [a for a in argv if a != "--external"]
     if args[1:2] == ["audit"] and len(args) in (3, 4):
         brand = load_brand(args[3]) if len(args) == 4 else None
-        return _print_report(audit_format(args[2], brand=brand, external=external))
+        return _print_report(audit_format(args[2], brand=brand, external=external),
+                             live=live_checks_finding(args[2]))
     if len(args) == 3 and args[1] == "demo" and not external:
         _demo(args[2])
         return _print_report(audit_format(args[2]))

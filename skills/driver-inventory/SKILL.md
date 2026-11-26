@@ -32,6 +32,9 @@ Inputs: industry-report vigente en `research/industry/` (economía de la industr
    crecimiento es hecho. Si el observado del año en curso supera con mucho la
    prima de industria supuesta, eso es INFORMACIÓN DE TESIS (la industria va
    más rápido que tu supuesto), no un error de modelo: llévalo al debate.
+   En modo `annual` ese año se ancla (observado YTD + resto guiado) con
+   `series_row(..., transition_first=...)` del builder: el driver de ese año
+   es RESULTADO del ancla, no input.
 3. Drivers de costo y capex también: el cobre es revenue para la minera y costo para
    el cablero. Cada línea material del modelo → su driver. **Working capital por
    días (DIO/DSO/DPO) es obligatorio** en esta sección — alimenta el bloque core

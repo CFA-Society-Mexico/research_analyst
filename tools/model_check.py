@@ -10,11 +10,18 @@ Solo lectura: jamas modifica el libro.
 
 Uso:
     python tools/model_check.py <modelo.xlsx> [--driver-map driver-map.md]
-                                [--brand brand/DESIGN.md] [--external]
+                                [--brand brand/DESIGN.md] [--external] [--recalc]
 
 Corre S (estructurales) -> C por escaneo (C10) -> F (formato, via
-``xlsx_builder.audit_format``). Los C de formula viva (tab Checks) y los D
-(doctrina) no son escaneo de codigo y no se reportan aqui.
+``xlsx_builder.audit_format``) -> estado de los checks de formula viva (tabs
+Checks y Cover). Los D (doctrina) no son escaneo de codigo y no se reportan
+aqui.
+
+``--recalc``: antes de auditar, recalcula una COPIA del modelo con Excel o
+LibreOffice (``recalc_validate``) y audita esa copia ya calculada: R1 (el
+motor acepta el libro), R2 (sin celdas en error), S10/F19 y los checks vivos
+dejan de estar pendientes. Sin ``--recalc`` y sin valores calculados, los
+checks vivos se reportan [pendiente]: SIN evaluar, nunca verdes.
 
 Exit codes (los mismos del audit F): 0 = verde; 1 = alguna falla; 3 = sin
 fallas pero con checks [pendiente] (libro sin valores calculados: recalcular
@@ -29,6 +36,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Sequence
@@ -339,16 +347,29 @@ def relative_form(formula: str, column: int, year: int | None,
     return _REF.sub(replace, _STRING_LITERAL.sub('""', formula))
 
 
-def _segments(axis: Sequence[PeriodColumn], first_quarterly_year: int | None) -> list[list[PeriodColumn]]:
+def _segments(axis: Sequence[PeriodColumn], first_quarterly_year: int | None,
+              transition_year: int | None = None) -> list[list[PeriodColumn]]:
     """Tramos del model-spec: historico, estimado y, en hoja anual con modelo
-    trimestral, los anios pre-corte (observados anuales, formula distinta)."""
+    trimestral, los anios pre-corte (observados anuales, formula distinta).
+
+    ``transition_year`` (sello ``set_transition_year`` del builder): en una
+    hoja ANUAL, la columna estimada de ese anio es un tramo propio - se ancla
+    en los trimestres ya observados y su formula difiere a proposito del resto
+    del forecast. Sin sello no hay excepcion: una formula distinta en la
+    primera columna E sigue siendo falla. En hoja trimestral no aplica (cada
+    trimestre es observado o estimado, no hay anclaje parcial).
+    """
     is_quarterly = any(p.quarter is not None for p in axis)
     actual = [p for p in axis if p.actual]
     estimate = [p for p in axis if not p.actual]
-    if is_quarterly or first_quarterly_year is None:
+    if is_quarterly:
         return [actual, estimate]
+    transition = [p for p in estimate if p.year == transition_year]
+    estimate = [p for p in estimate if p.year != transition_year]
+    if first_quarterly_year is None:
+        return [actual, transition, estimate]
     return [[p for p in actual if p.year < first_quarterly_year],
-            [p for p in actual if p.year >= first_quarterly_year], estimate]
+            [p for p in actual if p.year >= first_quarterly_year], transition, estimate]
 
 
 def _check_s5(book: Book) -> Finding:
@@ -360,6 +381,7 @@ def _check_s5(book: Book) -> Finding:
     quarterly_years = [p.year for cols in quarter_axes.values() for p in cols.values()]
     first_quarterly_year = min(quarterly_years) if quarterly_years else None
     defined = frozenset(wb.defined_names)
+    transition_year = B.transition_year_of(wb.properties.keywords)
     hits: list[str] = []
     scanned: list[str] = []
     for ws in wb.worksheets:
@@ -368,7 +390,7 @@ def _check_s5(book: Book) -> Finding:
             continue
         scanned.append(ws.title)
         is_annual = ws.title not in quarter_axes
-        for segment in _segments(axis, first_quarterly_year):
+        for segment in _segments(axis, first_quarterly_year, transition_year):
             if len(segment) < 2:
                 continue
             for r in range(1, min(ws.max_row, B._MAX_SCAN_ROWS) + 1):
@@ -386,8 +408,10 @@ def _check_s5(book: Book) -> Finding:
                     hits.append(f"{ws.title}!fila {r} ({label}): {len(forms)} formulas en {span}")
     if not scanned:
         return Finding(name, False, "sin hoja Operating/Annual/Model con header de periodos")
+    scope = ", ".join(scanned) + (f"; anio de transicion {transition_year} como tramo propio"
+                                  if transition_year else "")
     return Finding(name, not hits,
-                   _examples(hits) or f"formula identica dentro de cada tramo ({', '.join(scanned)})")
+                   _examples(hits) or f"formula identica dentro de cada tramo ({scope})")
 
 
 def _check_s6(book: Book) -> Finding:
@@ -578,8 +602,23 @@ def print_report(groups: Sequence[tuple[str, Sequence[Finding]]]) -> int:
     if pending:
         print("Veredicto: PENDIENTE - no es verde; resuelve los pendientes y re-audita")
         return 3
-    print("Veredicto: VERDE (checks por codigo; los C de formula y los D no se evaluan aqui)")
+    print("Veredicto: VERDE (checks por codigo y checks vivos; los D no se evaluan aqui)")
     return 0
+
+
+def audit_groups(model: str, schedules: Sequence[str] | None,
+                 brand: dict[str, str] | None, external: bool,
+                 live: bool = True) -> list[tuple[str, Sequence[Finding]]]:
+    """Familias S, C por escaneo y F; ``live`` agrega los checks de formula
+    viva (con ``--recalc`` ya vienen en el grupo R, sobre el libro calculado)."""
+    groups: list[tuple[str, Sequence[Finding]]] = [
+        ("Estructurales (S)", audit_structure(model, schedules)),
+        ("Contables por escaneo (C)", audit_cash_roll_formulas(model)),
+        ("Formato (F)", B.audit_format(model, brand=brand, external=external)),
+    ]
+    if live:
+        groups.append(("Contables de formula viva (C)", [B.live_checks_finding(model)]))
+    return groups
 
 
 def main(argv: Sequence[str]) -> int:
@@ -590,17 +629,26 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--brand", help="brand/DESIGN.md: colores de marca aceptados por F4")
     parser.add_argument("--external", action="store_true",
                         help="modelo que no construyo el plugin: la falta de sello (F10) es aviso")
+    parser.add_argument("--recalc", action="store_true",
+                        help="recalcular una copia con Excel/LibreOffice y auditarla "
+                             "(R1, R2 y checks vivos evaluados)")
     args = parser.parse_args(list(argv[1:]))
     if not Path(args.model).is_file():
         print(f"[x] no existe el modelo: {args.model}")
         return 2
     schedules = schedules_from_driver_map(args.driver_map) if args.driver_map else None
     brand = B.load_brand(args.brand) if args.brand else None
-    return print_report([
-        ("Estructurales (S)", audit_structure(args.model, schedules)),
-        ("Contables por escaneo (C)", audit_cash_roll_formulas(args.model)),
-        ("Formato (F)", B.audit_format(args.model, brand=brand, external=args.external)),
-    ])
+    if not args.recalc:
+        return print_report(audit_groups(args.model, schedules, brand, args.external))
+    import recalc_validate  # import tardio: solo --recalc lanza un motor externo
+    with tempfile.TemporaryDirectory(prefix="ra_recalc_") as tmp:
+        recalc, recalculated = recalc_validate.validate(Path(args.model), Path(tmp))
+        # La copia recalculada conserva el nombre (S8) y trae valores (S10, F19);
+        # sus checks vivos ya vienen dentro del grupo R.
+        target = str(recalculated) if recalculated is not None else args.model
+        groups = audit_groups(target, schedules, brand, args.external,
+                              live=recalculated is None)
+        return print_report([("Recalculo (R)", recalc), *groups])
 
 
 if __name__ == "__main__":

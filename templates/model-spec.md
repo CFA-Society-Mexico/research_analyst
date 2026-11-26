@@ -20,9 +20,9 @@ fórmula + valuación). Menos tabs, mejor; secciones colapsables en ambas.
 | 4 | `Annual` | **Agregados anuales + valuación** — misma estructura (sin Assumptions) + sección DCF | Ver §Annual. CERO números tecleados: fórmulas y links (C8/F14) |
 | 5 | `Macro` | Históricos observados de `macro/series/` (última obs + serie anual, con fuente y fecha) + valores de macro/macro-view.yaml | Sin inputs propios; yaml vacío = AVISO D6, la tab nunca queda muerta |
 | — | `Rev_Reconcile` | Doble ruta de revenue: bottom-up (bloques Sch) vs top-down (Macro × industria × participación) | Divergencia > umbral → flag en error check |
-| — | `Val_Comps` | Múltiplos POR FÓRMULA desde comps/*.yaml; media armónica; justificados + PVGO | Staleness de snapshots flaggeada |
+| — | `Val_Comps` | Múltiplos POR FÓRMULA desde comps/*.yaml; market cap = precio ÷ acciones por ADS × acciones × FX a la moneda de reporte; media armónica; justificados + PVGO | Staleness de snapshots flaggeada (D3); múltiplo fuera de rango marcado `REVISAR` (D12) |
 | — | `Val_<método>` | Solo métodos activos del perfil (DDM / FCFE / NAV_AFFO / SOTP) | RI: especificado, inactivo v1 |
-| — | `Sensitivity` | Data tables 2 variables, aisladas | Tab dedicada |
+| — | `Sensitivity` | Cuadrículas de 2 variables con **fórmula cerrada por celda** (`sensitivity_grid` del builder), aisladas. NO son data tables de Excel: openpyxl no puede crearlos y la cuadrícula quedaba vacía | Tab dedicada; la celda central reproduce el valor del modelo (check en `Checks`) |
 | — | `Summary` | Resumen ejecutivo completo (ver §Summary) | Una pantalla; solo fórmulas/links |
 
 Modo `annual`: una sola hoja `Model` anual (estructura del §Operating con
@@ -73,21 +73,34 @@ FCFF                                             [hist + forecast]  <- sanity: F
 Factor de descuento (mid-year opcional)          [solo forecast; año en curso = stub]
 PV de FCFF                                       [solo forecast]
 Suma PV explicitos
-TV Gordon = FCFF_n x (1+g) / (WACC - g)
+Tasa de reinversion terminal = g / RONIC
+Flujo terminal normalizado = NOPAT_n x (1+g) x (1 - g/RONIC)
+TV Gordon = Flujo terminal normalizado / (WACC - g)
 TV exit = EBITDA_n x multiplo
 PV del TV (Gordon) · PV del TV (exit)
 Deuda neta actual (desglose citado)
 EV (Gordon) · EV (exit) · Equity (Gordon) · Equity (exit)
 Acciones diluidas · Valor por accion — Gordon · Valor por accion — exit
-Cruce: multiplo implicito del TV Gordon · g implicita del exit (check D4)
+Cruce: multiplo implicito del TV Gordon (checks D4 y D11) · g implicita del exit (D4)
 Reverse DCF: EV de mercado · TV implicita · g implicita de mercado (D4b)
 Bloque Hamada (beta pure-play, mecanica visible)
 ```
 
-Las g implícitas (exit y reverse DCF) se despejan con `FCFF_n`, nunca con un
-FCFF proyectado con la g del analista, y el año en curso con trimestres ya
-observados entra como **stub** (solo trimestres E, fracción de año restante).
-Fórmulas y exponentes en `valuation-conventions.md`.
+**El terminal Gordon NO perpetúa `FCFF_n`.** El FCFF del último año explícito
+trae la reinversión de una empresa que todavía crece (capex de crecimiento);
+perpetuarlo a una g baja reinvierte como si se creciera rápido sin recibir ese
+crecimiento y hunde el valor. El flujo terminal se normaliza con la
+reinversión que la g terminal exige: `g / RONIC`. **RONIC** (retorno sobre el
+capital nuevo invertido) es un input etiquetado de Assumptions; su default es
+un link a WACC (el crecimiento terminal no crea valor) y el analista lo
+sobreescribe con su racional. Lo escribe `gordon_terminal_block` del builder.
+
+Las g implícitas (exit y reverse DCF) se despejan del mismo terminal
+normalizado con `implied_growth_block` (forma cerrada con guarda — ver
+`valuation-conventions.md`), nunca con un flujo proyectado con la g del
+analista, y el año en curso con trimestres ya observados entra como **stub**
+(solo trimestres E, fracción de año restante). Fórmulas y exponentes en
+`valuation-conventions.md`.
 
 **Layout de los bloques de valor único** (terminal, puente a equity, cruces,
 reverse DCF, Hamada): los VALORES se anclan en la **columna C** (pegados a los
@@ -114,9 +127,9 @@ periodos para ver el valor por acción.
 Secciones, todas por fórmula/link — cero tecleo:
 
 1. **Football field**: valor por acción de CADA método activo + precio de
-   mercado con fecha + **upside/downside %** por método. Si Sensitivity tiene
-   data tables: rango bull/bear por método (min-max de la tabla), no solo el
-   punto.
+   mercado con fecha + **upside/downside %** por método. Con la cuadrícula de
+   Sensitivity: rango bull/bear por método (min-max de la cuadrícula), no solo
+   el punto.
 2. **Lecturas clave** (~8): CAGR de ventas del forecast · margen EBIT terminal
    · FCF del último año proyectado · spread ROIC−WACC · deuda neta/EBITDA ·
    g terminal del analista · g implícita del mercado (reverse DCF) · brecha de
@@ -124,7 +137,7 @@ Secciones, todas por fórmula/link — cero tecleo:
 3. **Drivers vs guidance**: los 3 drivers más materiales del driver-map —
    supuesto del analista vs guidance citado (si existe) vs realizado UDM.
 4. **Sensibilidad clave**: valor/acción a WACC ±1pp y g ±0.5pp (links a la
-   data table de Sensitivity).
+   cuadrícula de Sensitivity).
 5. **Estado del modelo**: celda de error del Cover (link) · fecha del último
    trimestre capturado · fecha del industry-report vigente · fecha de
    macro-view (`updated_at`).
@@ -144,8 +157,8 @@ lectura expandida respira.
 
 - Periodos en columnas, líneas en filas; flujo top-to-bottom, left-to-right.
 - **Menos tabs, mejor**: el modelo vive en `Operating` + `Annual` (o en `Model`
-  en modo annual); solo lo que tiene estructura distinta (comps, data tables,
-  summary) gana tab propia.
+  en modo annual); solo lo que tiene estructura distinta (comps, cuadrículas
+  de sensibilidad, summary) gana tab propia.
 - **Formato por código**: el libro se construye vía `tools/xlsx_builder.py`
   (skill xlsx-building); los checks F auditan paleta, fuentes, formatos,
   gridlines, freeze, outline, series y completitud de Ratios.
@@ -157,8 +170,20 @@ lectura expandida respira.
   implícitos) se POBLAN por fórmula, no se dejan vacíos.
 - Una fórmula por fila POR TRAMO (S5): un tramo histórico, un tramo trimestral
   estimado (si aplica), un tramo anual estimado — idéntica dentro de cada tramo.
+  **Año de transición** (modo `annual`: el primer año del forecast ya trae
+  trimestres observados, p. ej. 9M reales + 4T guiado): su columna es un tramo
+  propio con fórmula anclada en lo observado. Se DECLARA con
+  `set_transition_year(<año>)` y se escribe con
+  `series_row(..., transition_first=...)`; sin la declaración, una fórmula
+  distinta en la primera columna E sigue siendo falla de S5. En ese año el
+  driver anclado es RESULTADO (fórmula negra), no input.
 - Un archivo por modelo; **cero links entre libros**.
 - Ninguna cifra nace de generación libre: fórmula o input etiquetado.
+- **Fórmulas que Excel acepta (F21)**: `set_cell` rechaza al construir una
+  función con aridad inválida (`ABS(a,b,c)`), un paréntesis sin cerrar, una
+  función moderna sin prefijo `_xlfn.` o una operación de arreglo en fórmula
+  normal. Una operación sobre rangos va dentro de `SUMPRODUCT` o se escribe
+  con `set_array_formula` (p. ej. `MEDIAN(IF(rango=1, valores))`).
 - Cada línea de forecast referencia un driver de la sección Assumptions —
   línea sin driver = flag de driver-inventory.
 - Etiquetas de trazabilidad: observado (azul con cita en comentario), guidance

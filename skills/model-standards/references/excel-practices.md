@@ -163,7 +163,10 @@ parte de lo que la línea derivada absorbe.
   carry-forward del último dato disponible (fórmula `=<celda previa>`, marcada
   supuesto), o exclusión documentada de la fila. Check F15(b) lo audita.
 - Sin volátiles (OFFSET, INDIRECT, NOW, TODAY — check S3). INDEX/MATCH sobre
-  VLOOKUP. Anclas `$` deliberadas (data tables).
+  VLOOKUP. Anclas `$` deliberadas (cuadrículas de sensibilidad). Sin data
+  tables de Excel (`TABLE()`): openpyxl no puede crearlos. Fórmulas que Excel
+  acepte (check F21): aridad correcta y operaciones sobre rangos solo en
+  `SUMPRODUCT` o como fórmula de arreglo declarada.
 
 ## Integridad y controles
 

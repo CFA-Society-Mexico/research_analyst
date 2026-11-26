@@ -13,7 +13,9 @@ como verde.
 Los checks S y el C10 corren con `python tools/model_check.py <modelo.xlsx>
 [--driver-map driver-map.md] [--brand brand/DESIGN.md]` — misma doctrina y
 mismos exit codes; esa corrida encadena además los F, así que es la única que
-hace falta. Los C de fórmula viva se leen de la tab `Checks`; los D son
+hace falta. Con `--recalc` recalcula antes una copia con Excel o LibreOffice
+(checks R) y entonces también evalúa los C de fórmula viva de la tab `Checks`;
+sin valores calculados los reporta `[pendiente]: SIN evaluar`. Los D son
 doctrina y los evalúa la skill dueña.
 
 ## Estructurales (checks S — `tools/model_check.py`)
@@ -26,7 +28,7 @@ doctrina y los evalúa la skill dueña.
 | S2 | Cero links externos a otros libros | escaneo de fórmulas por `[` |
 | S3 | Sin funciones volátiles (OFFSET, INDIRECT, NOW, TODAY) | escaneo de fórmulas |
 | S4 | Sin números hard-coded dentro de fórmulas (fuera de Assumptions) | escaneo: todo literal numérico dentro de una fórmula que no sea 0 o 1. Exentas: la sección Assumptions, la fila de check por columna y las fórmulas de umbral (`"Error"`/`"OK"`); `Cover`, `Checks` y `Macro` no se escanean. Un 365 o un 4 tecleado FALLA: va a Assumptions o a constante con nombre (`define_constant`) |
-| S5 | Una fórmula por fila: fórmula idéntica (relativa) en todos los periodos | forma relativa de la fórmula, idéntica dentro de cada tramo: histórico y estimado; en `Annual`, además, los años previos al corte trimestral. La referencia de `Annual` a `Operating` se normaliza a "trimestre N del año de la columna" (la fila anual avanza una columna por año, sus referencias cuatro). Alcance: `Operating`, `Annual`, `Model`; las hojas auxiliares con header de años (`Val_Comps`, `Rev_Reconcile`) mezclan tablas de corte transversal y no se evalúan |
+| S5 | Una fórmula por fila: fórmula idéntica (relativa) en todos los periodos | forma relativa de la fórmula, idéntica dentro de cada tramo: histórico y estimado; en `Annual`, además, los años previos al corte trimestral. La referencia de `Annual` a `Operating` se normaliza a "trimestre N del año de la columna" (la fila anual avanza una columna por año, sus referencias cuatro). Alcance: `Operating`, `Annual`, `Model`; las hojas auxiliares con header de años (`Val_Comps`, `Rev_Reconcile`) mezclan tablas de corte transversal y no se evalúan. **Excepción declarada — año de transición:** en una hoja anual, si el libro trae el sello `transition=<año>` (`ModelStyler.set_transition_year`), la columna estimada de ese año es un tramo propio (9M observados + resto guiado: su fórmula se ancla en lo observado). Sin sello no hay excepción |
 | S6 | Inputs solo en la SECCIÓN Assumptions de `Operating` (o `Model` en modo annual); resto del libro — `Annual` incluida — sin celdas de input | escaneo: fill de input fuera del rango de la sección = falla |
 | S7 | Modo de cálculo automático, no manual | propiedad del libro |
 | S8 | Versionado del archivo cumple `_YYYY-MM-DD_v#` | nombre de archivo |
@@ -37,7 +39,7 @@ doctrina y los evalúa la skill dueña.
 |---|---|---|
 | C1 | Balance cuadra cada periodo | A − (P + C) = 0, todos los periodos |
 | C2 | Tie-out de caja | caja final CF = caja BS, todos los periodos |
-| C3 | Roll de utilidades retenidas | RE₁ = RE₀ + NI − dividendos |
+| C3 | Roll de utilidades retenidas — **solo tramo forecast** | RE₁ = RE₀ + NI − dividendos, en las columnas estimadas (`E`). En el histórico NO se evalúa: las utilidades retenidas reportadas no ruedan con los dividendos *pagados* (desfase entre dividendo declarado y pagado, reclasificaciones de ORI, recompras contra RE) y la brecha es de la contabilidad de la emisora, no del modelo (TSMC: de −0.3k a −129k NT$ mn tras pasar a dividendo trimestral, con el forecast cerrando en 0.0). El histórico lo verifica C9 contra el filing. Opcional: una línea OBSERVADA "Otros movimientos de utilidades retenidas" (con cita) cierra también el roll histórico; con ella presente, C3 puede extenderse a las columnas `A` |
 | C4 | Depreciación acumulada consistente con schedule | BS vs bloque `Sch: PPE` de Schedules |
 | C5 | Interés consistente con schedule de deuda | IS vs bloque `Sch: Debt` (documentar switch si hay circularidad) |
 | C6 | ~~Identidad DuPont~~ **DEROGADO** (2026-09-25) | ROE directo − ROE DuPont 5 se cumple por álgebra: los factores se cancelan y la resta da cero aunque el modelo esté mal, así que no detectaba nada. El ID no se recicla |
@@ -60,7 +62,9 @@ doctrina y los evalúa la skill dueña.
 | D8 | Etiquetas de trazabilidad presentes: inputs con comentario de fuente (observado) o marca guidance/supuesto | muestreo por tab |
 | D9 | **Calidad de utilidades**: CFO/NI < 1 en ≥ 2 periodos consecutivos, o accruals ratio fuera de la banda histórica de la emisora | aviso, no bloqueo; material de entrevista |
 | D10 | **Staleness de industry-report**: fecha del reporte más reciente en `research/industry/` dentro de `industry_staleness_months` (issuer-profile, default 6) | aviso, no bloqueo — recomendar `/update-industry` |
-| D4b | **g implícita de mercado** (reverse DCF en Val_DCF) vs g terminal del analista | divergencia grande = pregunta obligada en entrevista de cierre; nunca bloquea |
+| D4b | **g implícita de mercado** (reverse DCF en Val_DCF) vs g terminal del analista | divergencia grande = pregunta obligada en entrevista de cierre; nunca bloquea. Si la g implícita sale como texto (`ninguna g < WACC reproduce el TV`), eso ES la lectura: el mercado paga más de lo que cualquier perpetuidad por debajo del WACC justifica con ese RONIC |
+| D11 | **Terminal Gordon vs comps**: múltiplo implícito del TV Gordon (TV ÷ EBITDA_n) contra la mediana de comps | **Bloquea** (fórmula viva en `Checks`, `terminal_multiple_alarm_formula`): por debajo de `TV_MULT_FLOOR` × mediana (constante con nombre en Assumptions, default 0.5) marca `Error`. Un terminal a la mitad del múltiplo de mercado casi siempre perpetúa capex de crecimiento (TSMC: 2.7x contra 20.6x) — usar el flujo terminal normalizado, no `FCFF_n`. Caso legítimo (emisora en declive estructural frente a comps en crecimiento): el analista baja `TV_MULT_FLOOR` y deja el racional en `journal/decisions.md`; sin comps numéricos el check da `n/a` |
+| D12 | **Rango de cordura de múltiplos de comps**: EV/EBITDA de cada comparable dentro de `COMP_MULT_MIN`–`COMP_MULT_MAX` (constantes con nombre, default 2x–60x) | **Aviso, no bloqueo** (`multiple_range_flag_formula`): fuera de rango marca `REVISAR` en la fila del comparable. Casi siempre es un error de unidades o de moneda (precio por ADS × acciones ordinarias; market cap en USD contra deuda en moneda local), no una oportunidad. El múltiplo no se excluye solo: el analista corrige el snapshot o confirma el dato |
 
 ## De formato (checks F — `tools/xlsx_builder.py audit`)
 
@@ -90,6 +94,26 @@ externo se audita igual.
 | F17 | **FORECAST COMPLETO** (mandato duro) | Toda fila con histórico (≥3 celdas en columnas A) tiene el tramo E COMPLETO — una sola celda de forecast vacía = FALLA con fila y conteo. "Los forecast deben tener todas las fórmulas completas" — regla de primera clase, no negociable |
 | F16 | **Respiro antes de headers** | Fila EN BLANCO antes de cada header/sub-header (salvo headers consecutivos y el tope de la hoja); tras un header el contenido empieza sin blanco. Elegancia auditada, no opcional. **Prevención en el builder:** `section_header`/`subsection` FALLAN al construir si la fila previa tiene contenido y no es header (v0.6.0) — el respiro deja de depender de que el agente se acuerde |
 | F15 | **Series sin huecos ni texto** (S5 hecho código) | Dos venenos: (a) fila con contenido en ≥ mitad de las columnas de periodo pero con celdas VACÍAS = fórmula faltante en un tramo (la NOPAT del smoke #4); (b) TEXTO literal (`n/d`, `n/a`) en columnas de periodo de una fila de serie = rompe la cadena de cálculo (#VALUE! aguas abajo). El hueco de dato es DECISIÓN del analista con gate: 0 explícito con comentario, carry-forward del último disponible (fórmula marcada supuesto), o exclusión documentada — jamás texto. Bloques de valor único no disparan; detección reconoce años A/E Y trimestres de texto |
+| F21 | **Fórmulas aceptables para Excel** | Lint sin Excel de TODA fórmula del libro (`lint_formula`): (a) aridad inválida en funciones comunes (`ABS(a,b,c)`, `ROUND(x)`, `IF(x)`) — Excel abre el libro en modo reparación y BORRA la fórmula; (b) paréntesis desbalanceados; (c) función posterior a Excel 2007 sin prefijo `_xlfn.` (`XLOOKUP`, `IFS`…) — carga como `#NAME?`; (d) operación de arreglo en fórmula normal (un rango de varias celdas como operando de un operador, p. ej. `MEDIAN(IF(rango=1,…))`) — Excel aplica intersección implícita y el resultado no es el del arreglo. (d) no aplica dentro de `SUMPRODUCT` ni en fórmulas de arreglo declaradas (`set_array_formula`). Bug de la cobertura TSMC: `MAX(ABS(a,b,c))` borró siete checks vivos con F 19/19 en verde. **Prevención en el builder:** `set_cell` rechaza la fórmula al construir. El lint cubre lo común, no la gramática completa de Excel: lo definitivo es R1 |
+
+## De recálculo (checks R — `tools/recalc_validate.py`)
+
+Los únicos que usan un motor de cálculo real (Excel por COM en Windows, o
+LibreOffice headless). Corren solos o dentro de `python tools/model_check.py
+<modelo> --recalc`, siempre sobre una COPIA: el modelo no se toca. Sin motor
+disponible reportan `[pendiente]` (exit 3) y los checks vivos quedan **SIN
+evaluar** — nunca verdes.
+
+| # | Check | Regla |
+|---|---|---|
+| R1 | **El libro abre sin reparación** | El motor abre y recalcula la copia; toda fórmula del original sigue siendo fórmula en el libro recalculado. Una fórmula que desaparece, o un libro que el motor no puede abrir, = Excel lo repararía borrando fórmulas ("encontramos un problema con el contenido"): FALLA con las celdas (o con las candidatas que señala F21) |
+| R2 | **Sin errores de cálculo** | Ninguna celda calculada vale `#NAME?`, `#VALUE!`, `#REF!`, `#DIV/0!`, `#N/A`, `#NUM!` o `#NULL!` |
+
+Con el libro recalculado se leen además los **checks vivos** (fórmulas de las
+tabs `Checks` y `Cover`): cualquier `Error` o error de Excel es falla y se
+nombra el check. Sobre un libro sin valores calculados el reporte dice
+`N de M checks vivos SIN evaluar` y queda `[pendiente]`: un check que nunca
+se evaluó no es un check verde.
 
 ## Reporte de /model-check
 
@@ -102,7 +126,7 @@ Falla => exit report "FALLA", lista de celdas/hojas afectadas, siguiente acción
 ## Resultados en la tab Checks: fórmula viva o escaneo FECHADO
 
 Un check de la tab `Checks` es una **fórmula viva** sobre el libro (C1–C5, C7, D2,
-D4, D9) o el **resultado de un escaneo por código** al construir (C8, C9, D3,
+D4, D9, D11, D12, celda central de Sensitivity) o el **resultado de un escaneo por código** al construir (C8, C9, D3,
 D6, D10, D1). Un literal `"OK"` sin fecha ni nota es un check congelado: queda
 verde aunque el hecho cambie (bug de la auditoría AAPL 2026-09-02: D3 decía
 `OK` con snapshots vencidos). Regla: todo resultado que no sea fórmula se

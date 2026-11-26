@@ -8,9 +8,9 @@ El football field agrega SOLO métodos activos en `issuer-profile.yaml`.
 
 | Activación | Método | Supuestos del analista |
 |---|---|---|
-| **Core — siempre** | DCF FCFF multi-stage, terminal DUAL | WACC (componentes), g terminal, múltiplo de salida, horizonte |
+| **Core — siempre** | DCF FCFF multi-stage, terminal DUAL | WACC (componentes), g terminal, RONIC terminal, múltiplo de salida, horizonte |
 | **Core — siempre** | Comps (EV/EBITDA, P/E, P/B, EV/Sales) | universo (viene de industry-analysis), múltiplo aplicable |
-| **Core — siempre** | Sensibilidades (data tables 2 vars) + football field | rangos de sensibilidad |
+| **Core — siempre** | Sensibilidades (cuadrícula de 2 variables, fórmula cerrada por celda) + football field | pasos de sensibilidad |
 | Dividendera estable | DDM: Gordon / two-stage / H-model | g por etapa, payout |
 | Apalancamiento estable | FCFE directo | r equity, trayectoria de deuda neta |
 | FIBRA / REIT | NAV + FFO/AFFO | cap rate, ajustes AFFO — convención local FIBRA [VERIFICAR] |
@@ -40,14 +40,41 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
   vuelve a ser baja y defendible. Antes de forzar la g o el múltiplo para que
   D4 pase, evaluar si extender el horizonte es la respuesta honesta. Señal de
   alarma: el valor terminal domina el valor total (regla práctica: >75%).
+- **Terminal Gordon con flujo NORMALIZADO** (`ModelStyler.gordon_terminal_block`):
+  `flujo terminal = NOPAT_n × (1+g) × (1 − g/RONIC)` y
+  `TV = flujo terminal / (WACC − g)`. `g/RONIC` es la tasa de reinversión que
+  esa g exige en estado estable. PROHIBIDO perpetuar `FCFF_n × (1+g)`: el FCFF
+  del último año explícito trae la reinversión de una empresa que todavía
+  crece, y perpetuarlo reinvierte como si se creciera a esa tasa sin recibir el
+  crecimiento (cobertura TSMC: capex de 45% de ventas en el último año
+  explícito ⇒ 1,025 por acción con `FCFF_n` contra 2,065 con el flujo
+  normalizado, y un múltiplo implícito de 2.7x EV/EBITDA contra 20.6x de
+  mercado). **RONIC** es input etiquetado de Assumptions (`supuesto`); default
+  = link a WACC: el crecimiento terminal no crea valor, el supuesto defendible
+  sin evidencia de un moat perpetuo. Con `RONIC > WACC` el crecimiento sí crea
+  valor y el analista lo justifica en el journal.
 - **Terminal dual obligatorio:** Gordon (g) Y exit multiple, lado a lado.
   Cruce: Gordon ⇒ múltiplo implícito; exit multiple ⇒ g implícita. Ambos visibles.
   Divergencia grande = check D4: revisar supuesto con el analista, no promediar.
-  La g implícita de CUALQUIER terminal (exit multiple o reverse DCF) se despeja
-  con el FCFF del último año explícito, nunca con uno proyectado con la g del
-  analista:
-  `g implícita = (TV × WACC − FCFF_n) / (TV + FCFF_n)`, que es el despeje de
-  `TV = FCFF_n × (1+g) / (WACC − g)`.
+  Además, un múltiplo implícito del Gordon por debajo de `TV_MULT_FLOOR` × la
+  mediana de comps (constante con nombre, default 0.5) es **alarma, no dato
+  informativo** — check D11 (`terminal_multiple_alarm_formula`): casi siempre
+  delata un terminal que perpetúa capex de crecimiento.
+- **g implícita de CUALQUIER terminal** (exit multiple o reverse DCF) —
+  `ModelStyler.implied_growth_block`, forma cerrada, sin Goal Seek. Con el
+  terminal normalizado el despeje deja de ser lineal: es la **raíz menor** de
+  `A·g² − B·g + C = 0`, con `A = N/R`, `B = TV + N·(1 − 1/R)` y
+  `C = TV·W − N` (N = NOPAT_n, R = RONIC, W = WACC). El bloque lo escribe línea
+  por línea y sin literales (S4): `m = B/(A+A)` y `g = m − √(m·m − C/A)`.
+  - **Guarda obligatoria:** con `R = W` una raíz es exactamente `g = WACC`,
+    solución espuria (el TV explota). Una raíz ≥ WACC se reporta como texto
+    — `ninguna g < WACC reproduce el TV` —, jamás como número; discriminante
+    negativo ⇒ `sin solucion real`.
+  - Con `R = W` el bloque NO usa la cuadrática sino el despeje lineal exacto
+    `g = TV·W/N − 1`: en punto flotante la raíz espuria sale `0.0899999…` y
+    pasaría la guarda como si fuera válida (verificado con Excel).
+  - Nunca se despeja con un flujo proyectado con la g del analista: N es el
+    NOPAT del último año explícito.
 - **Año en curso (stub).** En modo `quarterly`, si el último trimestre
   reportado no es 4Q, el primer año del DCF ya tiene trimestres observados
   cuya caja está dentro de la deuda neta del último balance. Descontar ese FY
@@ -73,16 +100,29 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
   - TV implícita = (EV − PV de FCFF explícitos) ÷ factor de descuento que el
     DCF aplica al TV (`(1+WACC)^n` si el TV se descuenta a fin del año n; con
     stub, el mismo exponente `f + n`).
-  - g implícita = (TV implícita × WACC − FCFF_n) / (TV implícita + FCFF_n).
-    La forma anterior, `WACC − FCFF_{n+1} / TV`, usaba `FCFF_{n+1} = FCFF_n ×
-    (1 + g del analista)`: la g "del mercado" salía contaminada por el mismo
-    supuesto que el bloque existe para contrastar.
+  - g implícita = `implied_growth_block` sobre la TV implícita (raíz menor de
+    la cuadrática del terminal normalizado, con su guarda). Las formas
+    anteriores quedan derogadas: `WACC − FCFF_{n+1} / TV` contaminaba la g "del
+    mercado" con la g del analista, y `(TV × WACC − FCFF_n) / (TV + FCFF_n)`
+    despejaba un terminal que perpetuaba `FCFF_n`.
   - Tercera columna junto al cruce de terminales: "el mercado descuenta g = X; tú
     supones g = Y" (check D4b — debate, nunca bloqueo).
 
 ### Val_Comps
 - Múltiplos calculados POR FÓRMULA desde `comps/*.yaml`: EV = mkt cap + deuda − caja
   + minoritarios + preferentes; cada componente del snapshot, con fuente.
+- **Market cap en la moneda de reporte** (`comps_market_cap_formula`):
+  `precio ÷ acciones por ADS × acciones ordinarias × FX`, con
+  `market_data.price_currency`, `shares_per_ads` y `fx_to_reporting` del
+  snapshot. El precio de un ADR viene por ADS y en su moneda de cotización;
+  multiplicarlo directo por las acciones ordinarias y sumarlo a deuda y EBITDA
+  en otra moneda dio EV/EBITDA 1.0x en vez de 10.1x para un comparable (UMC en
+  la cobertura de TSMC) y movió la mediana. Snapshot sin esos tres campos = no
+  entra a Val_Comps hasta completarlo (statement-mapper).
+- **Rango de cordura** (check D12, `multiple_range_flag_formula`): un EV/EBITDA
+  fuera de `COMP_MULT_MIN`–`COMP_MULT_MAX` (constantes con nombre, default
+  2x–60x) se marca `REVISAR` en su fila. Es aviso: el múltiplo no se excluye
+  solo; el analista confirma el dato o corrige el snapshot.
 - Promedio del grupo: **media armónica** (doctrina CFA para múltiplos), mediana como
   referencia; nunca media aritmética sola.
 - Múltiplos no significativos (denominador ≤ 0: utilidad, EBITDA o valor en
@@ -125,7 +165,18 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
   Anexo 33 (bancos) entre al alcance.
 
 ### Sensitivity + Summary
-- Data tables aisladas; variables típicas: WACC × g, cap rate × NOI, múltiplo × EBITDA.
+- **Cuadrículas con fórmula cerrada por celda, sin data table de Excel**
+  (`ModelStyler.sensitivity_grid`): openpyxl no puede escribir un data table y
+  la tab se entregaba con encabezados y celdas vacías. Cada celda calcula
+  `(VP de los FCFF explícitos + VP del terminal normalizado − deuda neta) /
+  acciones` como función del encabezado de su fila y de su columna
+  (`dcf_per_share_formula`; los exponentes salen de la fila del DCF, así que
+  respeta stub y mid-year). Encabezados: el central enlaza al valor base del
+  modelo y los demás suman o restan el paso (`SENS_WACC_STEP`, `SENS_G_STEP`:
+  constantes con nombre en Assumptions). Variables típicas: WACC × g, cap rate
+  × NOI, múltiplo × EBITDA.
+- **Verificación obligatoria:** la celda central reproduce el valor por acción
+  del modelo — check de fórmula viva en `Checks` (`center_check_formula`).
 - Football field: rango por método activo, precio actual como línea, precio objetivo
   del analista marcado — el precio objetivo es SUPUESTO del analista informado por
   los métodos, jamás un promedio automático.

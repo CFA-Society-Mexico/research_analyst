@@ -15,9 +15,21 @@ as_of: ""                     # YYYY-MM-DD HH:MM — CRÍTICO: los precios envej
 stale_days: 5
 
 market_data:                  # cada campo: {value, source, label: observado}
-  price: {}
-  shares_outstanding: {}
-  market_cap: {}              # opcional si price y shares presentes
+  price: {}                   # tal como cotiza: por acción o POR ADS, en price_currency
+  price_currency: ""          # ISO 4217 de la cotización (USD para un ADR). OBLIGATORIO
+  shares_per_ads: {}          # acciones ordinarias por ADS; 1 si el precio es por acción
+                              # ordinaria. OBLIGATORIO (un ADR casi nunca es 1:1)
+  fx_to_reporting: {}         # {value, source, as_of}: unidades de la moneda de REPORTE
+                              # de la emisora cubierta por 1 unidad de price_currency;
+                              # 1 si son la misma. OBLIGATORIO, con fuente y fecha
+  shares_outstanding: {}      # acciones ORDINARIAS en circulación (nunca número de ADS)
+  market_cap: {}              # opcional; si se captura, en price_currency y con fuente
+# Val_Comps calcula: market cap = price / shares_per_ads x shares_outstanding x
+# fx_to_reporting (moneda de reporte del modelo). balance_items e income_items
+# van en la moneda de reporte del comparable; si difiere de la del modelo,
+# indícalo en comparability_notes con su FX. Snapshots anteriores a v0.7.0 no
+# traen estos tres campos: siguen legibles, pero NO entran a Val_Comps hasta
+# completarlos (snapshot nuevo fechado; jamás se asume 1 ni la moneda).
 
 balance_items:                # del último filing del comparable, con cita de página
   total_debt: {}

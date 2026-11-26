@@ -55,6 +55,13 @@ class XbrlHttpTests(unittest.TestCase):
         self.assertIn("companyfacts", str(ctx.exception))
         self.assertNotIn("Sin acceso de red", str(ctx.exception))
 
+    def test_missing_companyfacts_message_does_not_blame_ifrs(self) -> None:
+        # Las emisoras IFRS (20-F/40-F) SI tienen companyfacts (ifrs-full): el
+        # 404 no debe mandar al analista a captura manual "por ser IFRS".
+        self.assertNotIn("US GAAP", X.NO_FACTS_MSG)
+        self.assertIn("ifrs-full", X.NO_FACTS_MSG)
+        self.assertTrue(X.NO_FACTS_MSG.isascii())
+
     def test_403_is_blocked_network(self) -> None:
         with mock.patch("urllib.request.urlopen", _raising(403)):
             with self.assertRaises(SystemExit) as ctx:

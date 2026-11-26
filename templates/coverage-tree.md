@@ -32,9 +32,9 @@ subcarpeta intermedia (`workspace/`, `coberturas/`, etc.).
     ├── driver-map.md             # contrato raíz (driver-inventory)
     ├── filings/                  # INPUTS
     │   ├── sec/
-    │   │   ├── 10-K/
+    │   │   ├── 10-K/             # emisora extranjera: 20-F/ (o 40-F/)
     │   │   ├── 10-Q/
-    │   │   └── 8-K/
+    │   │   └── 8-K/              # emisora extranjera: 6-K/
     │   ├── bmv/
     │   │   ├── annual/
     │   │   ├── quarterly/
@@ -129,6 +129,8 @@ Formato: `<TICKER>_<tipo>_<periodo>[_fecha].<ext>` — pensado para retrieval, n
 | 10-K FY2025 | `AMX_10-K_FY2025.pdf` |
 | 10-Q 2T2026 | `AMX_10-Q_2Q2026.pdf` |
 | 8-K | `AMX_8-K_2026-08-15.pdf` |
+| 8-K / 6-K bajado por `sec_fetch` | `TSM_6-K_2026-07-31_2026-08-15_000123.htm` — nombre crudo: periodo, fecha de presentación y `accn6` (últimos 6 dígitos de la accession); exhibits `…_000123_ex_<stem>.<ext>`. No se recorta: varios del mismo periodo quedan distintos |
+| 20-F / 40-F FY2025 | `TSM_20-F_FY2025.htm` |
 | Reporte anual BMV | `AMX_BMV-annual_FY2025.pdf` |
 | Trimestral BMV | `AMX_BMV-quarterly_2Q2026.pdf` |
 | Evento relevante | `AMX_evento-relevante_2026-08-15_<slug-corto>.pdf` |

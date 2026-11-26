@@ -17,7 +17,8 @@ Gates de usuario en cada transición + protocolo de debate
    colores de marca del modelo.
    **Filings faltantes + emisora SEC ⇒ ofrecer descarga** (gate — preguntar,
    nunca descargar solo). La propuesta default es la HISTORIA COMPLETA
-   (todos los 10-K + 10-Q + 8-K disponibles; `sec_fetch` ya arranca en 1994 y
+   (todos los 10-K + 10-Q + 8-K disponibles — emisora extranjera: 20-F/40-F +
+   6-K con sus exhibits, `sec_fetch` la detecta solo; ya arranca en 1994 y
    `xbrl_fetch` trae todo) — perspectiva de largo plazo del plugin. JAMÁS
    proponer subconjuntos arbitrarios ("10 años", "solo el último año"): el
    gate del analista existe para recortar si ÉL quiere. ANTES de ofrecer, probar conectividad: en entornos
@@ -27,8 +28,12 @@ Gates de usuario en cada transición + protocolo de debate
    íntegro por contenido procesado de un lector web (el pipeline cita por
    documento y página): `python tools/sec_fetch.py <TICKER> --dest
    <raiz>/<TICKER>/filings/sec --ua "<nombre correo>"` (o env `SEC_EDGAR_UA`;
-   `--dry-run` para listar primero). El tool baja crudo por fecha de periodo +
-   manifest CSV; coverage-folders renombra a la convención FY/#Q. Emisoras BMV:
+   `--dry-run` para listar primero; en historias largas, `--log <archivo>`
+   deja la bitácora y `--throttle <segundos>` espacia las solicitudes — los
+   errores transitorios se reintentan solos y una corrida cortada se retoma
+   con el mismo comando). El tool baja crudo (periodo + fecha de presentación
+   + últimos 6 dígitos de la accession) + manifest CSV; coverage-folders
+   renombra a la convención FY/#Q. Emisoras BMV:
    sin API pública — filings los trae el usuario.
 3. Marco contable inferible del filing — si ambiguo, preguntar antes de crear perfil.
 4. Herramienta determinista para xlsx disponible (openpyxl o equivalente) — sin
