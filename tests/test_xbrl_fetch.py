@@ -717,7 +717,7 @@ class CliTests(unittest.TestCase):
     def _main(self, *args: str) -> dict:
         seen: dict = {}
 
-        def fake_fetch(ticker, dest, ua, taxonomy="auto", currency="auto"):
+        def fake_fetch(ticker, dest, ua, taxonomy="auto", currency="auto", unmapped=False):
             seen.update(ticker=ticker, taxonomy=taxonomy, currency=currency)
             return Path("x.csv")
 

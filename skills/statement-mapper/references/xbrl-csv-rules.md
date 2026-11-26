@@ -44,3 +44,20 @@ deuda, compras de valores). Al mapear:
   moneda.
 - Los 6-K de una emisora extranjera normalmente no traen XBRL: la historia
   IFRS que sale de companyfacts es anual; los trimestres se capturan del filing.
+
+## 4. Captura incompleta: conceptos sin mapear
+
+Cada emisora elige sus conceptos, y uno que no está en el mapa no emite filas.
+El tool lo reporta en dos líneas de consola — no las ignores:
+
+- `[i] N conceptos con datos sin mapear` — siempre. Con `--unmapped` escribe
+  `xbrl_unmapped_<TICKER>.csv` (concepto, etiqueta, unidades, número de hechos,
+  primer y último cierre), lo vigente primero.
+- `[aviso] el payload trae cierres anuales posteriores al último capturado` —
+  el CSV termina antes que los filings de la emisora: falta un año entero.
+
+Prueba en vivo con TSM (2026-11-25): la captura salió sin D&A, sin impuestos
+pagados y sin FY2025. Antes de capturar a mano una línea que falta, corre con
+`--unmapped`: si la emisora la reporta bajo otro concepto, se agrega al mapa de
+su taxonomía en `tools/xbrl_fetch.py` (con prueba), no al canónico de una sola
+cobertura. Lo que de verdad no esté en XBRL se captura del filing, con cita.
