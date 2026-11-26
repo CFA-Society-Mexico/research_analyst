@@ -34,5 +34,7 @@ jobs:
         run: |
           mkdir -p scratch
           python tools/xlsx_builder.py demo ./scratch/demo.xlsx
+      - name: Demo del deck + audit de cifras
+        run: python tools/deck_builder.py demo ./scratch
       - name: Pruebas unitarias (sin red)
         run: python -m unittest discover -s tests -v

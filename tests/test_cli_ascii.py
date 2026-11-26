@@ -95,6 +95,14 @@ class RuntimeAsciiTests(unittest.TestCase):
             self.assertTrue(done.stdout.isascii())
             self.assertEqual(_run_ascii(["tools/model_check.py", "--help"]).returncode, 0)
 
+    def test_deck_builder_demo_survives_ascii_console(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            done = _run_ascii(["tools/deck_builder.py", "demo", tmp])
+            self.assertEqual(done.returncode, 0, done.stderr.decode("ascii", "replace"))
+            self.assertNotIn(b"UnicodeEncodeError", done.stderr)
+            self.assertTrue(done.stdout.isascii())
+            self.assertEqual(_run_ascii(["tools/deck_builder.py", "--help"]).returncode, 0)
+
     def test_builder_usage_message_is_ascii(self) -> None:
         done = _run_ascii(["tools/xlsx_builder.py"])
         self.assertEqual(done.returncode, 2)

@@ -208,6 +208,12 @@ Builder y audit de formato en verde:
 python tools/xlsx_builder.py demo ./scratch/demo.xlsx
 ```
 
+Deck demo con sus cifras auditadas contra el modelo (no necesita navegador):
+
+```bash
+python tools/deck_builder.py demo ./scratch
+```
+
 Pruebas unitarias:
 
 ```bash
