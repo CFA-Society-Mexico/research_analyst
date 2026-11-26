@@ -172,3 +172,76 @@ class NumTests(unittest.TestCase):
         rendered = D.render_markers("<p>" + D._esc(f"A & B <{n:.0f}>") + "</p>")
         self.assertIn("A &amp; B &lt;", rendered)
         self.assertIn('data-src="&#x27;Val Sens&#x27;!C6"', rendered)
+
+
+class ModelBookTests(_Case):
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.book = D.ModelBook(self.root / MODEL_REL)
+
+    def test_series_reads_a_row_over_the_period_axis(self) -> None:
+        rev = self.book.series("Annual", "Ingresos")
+        self.assertEqual(rev.keys, list(YEARS))
+        self.assertEqual(rev[2027].value, 240.0)
+        self.assertEqual(rev[2027].src, "Annual!H6")
+        self.assertTrue(rev.is_actual(2024))
+        self.assertFalse(rev.is_actual(2025))
+
+    def test_unknown_label_is_an_error(self) -> None:
+        with self.assertRaisesRegex(D.DeckError, "no hay fila con etiqueta 'Ventas'"):
+            self.book.series("Annual", "Ventas")
+
+    def test_duplicate_label_needs_a_section(self) -> None:
+        with self.assertRaisesRegex(D.DeckError, "desambigua con section="):
+            self.book.series("Annual", "Total")
+        self.assertEqual(self.book.series("Annual", "Total", section="Flujos")[2022].value, 7.0)
+        self.assertEqual(self.book.series("Annual", "Total", section="Balance")[2022].value, 1.0)
+
+    def test_formula_without_cached_value_stops_with_the_recalc_hint(self) -> None:
+        with self.assertRaisesRegex(D.DeckError, "recalc_validate"):
+            self.book.series("Annual", "Sin calcular")
+
+    def test_missing_period_is_an_error_on_access(self) -> None:
+        partial = self.book.series("Annual", "Parcial")
+        self.assertEqual(partial.keys, [2022, 2023, 2024])
+        with self.assertRaisesRegex(D.DeckError, "no tiene valor en 2027"):
+            partial[2027]
+
+    def test_sheet_without_period_header_is_an_error(self) -> None:
+        with self.assertRaisesRegex(D.DeckError, "encabezado de periodos"):
+            self.book.series("DCF", "WACC")
+
+    def test_growth_over_and_cagr_are_derived_numbers(self) -> None:
+        rev = self.book.series("Annual", "Ingresos")
+        ni = self.book.series("Annual", "Utilidad neta")
+        self.assertEqual(rev.growth().keys, list(YEARS[1:]))
+        self.assertAlmostEqual(rev.growth()[2023].value, 0.2)
+        self.assertEqual(rev.growth()[2023].src, "((Annual!D6/Annual!C6)-1)")
+        self.assertFalse(rev.growth().is_actual(2025))
+        self.assertAlmostEqual(ni.over(rev)[2022].value, 0.1)
+        self.assertAlmostEqual(rev.cagr(2022, 2024).value, (150.0 / 100.0) ** 0.5 - 1)
+        with self.assertRaises(D.DeckError):
+            rev.cagr(2024, 2022)
+
+    def test_cell_reads_the_only_numeric_cell_of_a_row(self) -> None:
+        wacc = self.book.cell("DCF", "WACC")
+        self.assertEqual((wacc.value, wacc.src), (0.09, "DCF!C5"))
+        with self.assertRaisesRegex(D.DeckError, "indica column="):
+            self.book.cell("DCF", "Dos")
+        self.assertEqual(self.book.cell("DCF", "Dos", column="d").value, 2.0)
+        with self.assertRaisesRegex(D.DeckError, "no es un numero"):
+            self.book.cell("DCF", "Texto", column="C")
+
+    def test_range_reads_a_grid_and_quotes_sheet_names_with_spaces(self) -> None:
+        grid = self.book.range("Val Sens", "C6:E8")
+        self.assertEqual((len(grid), len(grid[0])), (3, 3))
+        self.assertEqual(grid[2][1].value, 121.0)
+        self.assertEqual(grid[2][1].src, "'Val Sens'!D8")
+
+    def test_axis_years_and_missing_pieces(self) -> None:
+        self.assertEqual(self.book.axis_years(), set(YEARS))
+        with self.assertRaisesRegex(D.DeckError, "no tiene la hoja"):
+            self.book.cell("Nope", "WACC")
+        with self.assertRaisesRegex(D.DeckError, "no existe el modelo"):
+            D.ModelBook(self.root / "model" / "otro.xlsx")

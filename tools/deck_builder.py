@@ -203,3 +203,151 @@ def render_markers(document: str) -> str:
 
         out.append(token.sub(expand, piece))
     return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Lectura del modelo recalculado
+# ---------------------------------------------------------------------------
+
+PeriodKey = Union[int, str]
+
+
+def _sheet_ref(sheet: str) -> str:
+    return sheet if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", sheet) else f"'{sheet}'"
+
+
+class Series:
+    """Una fila del modelo sobre el eje de periodos: ``serie[2027]`` -> Num."""
+
+    def __init__(self, label: str, points: dict[PeriodKey, Num],
+                 actual: dict[PeriodKey, bool]) -> None:
+        self.label = label
+        self._points = dict(points)
+        self._actual = dict(actual)
+
+    @property
+    def keys(self) -> list[PeriodKey]:
+        return list(self._points)
+
+    def __getitem__(self, key: PeriodKey) -> Num:
+        if key not in self._points:
+            raise DeckError(f"'{self.label}' no tiene valor en {key!r}; "
+                            f"periodos: {self.keys[0]!r}..{self.keys[-1]!r}")
+        return self._points[key]
+
+    def __len__(self) -> int:
+        return len(self._points)
+
+    def is_actual(self, key: PeriodKey) -> bool:
+        return self._actual[key]
+
+    def _derived(self, label: str, points: dict[PeriodKey, Num]) -> "Series":
+        return Series(label, points, {k: self._actual[k] for k in points})
+
+    def growth(self) -> "Series":
+        """Crecimiento contra el periodo anterior (desde el segundo)."""
+        keys = self.keys
+        return self._derived(f"{self.label} (crecimiento)", {
+            key: self._points[key] / self._points[prev] - 1
+            for prev, key in zip(keys, keys[1:])})
+
+    def over(self, other: "Series") -> "Series":
+        """Razon periodo a periodo contra otra serie (p. ej. un margen)."""
+        return self._derived(f"{self.label} / {other.label}", {
+            key: self._points[key] / other[key] for key in self.keys if key in other.keys})
+
+    def cagr(self, first: int, last: int) -> Num:
+        """Crecimiento compuesto anual entre dos anios del eje."""
+        if not (isinstance(first, int) and isinstance(last, int) and last > first):
+            raise DeckError(f"cagr: se esperan dos anios en orden, no {first!r}, {last!r}")
+        return (self[last] / self[first]) ** (1.0 / (last - first)) - 1
+
+
+class ModelBook:
+    """El xlsx recalculado, leido por etiqueta. Solo valores calculados."""
+
+    def __init__(self, path: Path) -> None:
+        if not path.is_file():
+            raise DeckError(f"no existe el modelo: {_ascii(path)}")
+        self.path = path
+        self._values = load_workbook(path, data_only=True)
+        self._formulas = load_workbook(path, data_only=False)
+
+    def _sheet(self, sheet: str) -> Worksheet:
+        if sheet not in self._values.sheetnames:
+            raise DeckError(f"el modelo no tiene la hoja '{_ascii(sheet)}'")
+        return self._values[sheet]
+
+    def num(self, sheet: str, coord: str) -> Num:
+        value = self._sheet(sheet)[coord].value
+        if value is None:
+            formula = self._formulas[sheet][coord].value
+            if isinstance(formula, str) and formula.startswith("="):
+                raise DeckError(
+                    f"{_ascii(sheet)}!{coord} es una formula sin valor calculado: "
+                    f"recalcula con 'python tools/recalc_validate.py <modelo>' y reintenta")
+            raise DeckError(f"{_ascii(sheet)}!{coord} esta vacia")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise DeckError(f"{_ascii(sheet)}!{coord} no es un numero: {_ascii(value)!r}")
+        return Num(float(value), f"{_sheet_ref(sheet)}!{coord}")
+
+    def _row_of(self, sheet: str, label: str, section: Optional[str]) -> int:
+        ws = self._sheet(sheet)
+        first, last = 1, min(ws.max_row, B._MAX_SCAN_ROWS)
+        if section is not None:
+            bounds = M._section_rows(ws, section.strip().lower())
+            if bounds is None:
+                raise DeckError(f"{_ascii(sheet)}: no existe la seccion '{_ascii(section)}'")
+            first, last = bounds
+        rows = [r for r in range(first, last + 1)
+                if isinstance(ws.cell(row=r, column=2).value, str)
+                and ws.cell(row=r, column=2).value.strip() == label]
+        if not rows:
+            raise DeckError(f"{_ascii(sheet)}: no hay fila con etiqueta '{_ascii(label)}'")
+        if len(rows) > 1:
+            raise DeckError(f"{_ascii(sheet)}: la etiqueta '{_ascii(label)}' aparece en las "
+                            f"filas {rows}; desambigua con section=")
+        return rows[0]
+
+    def series(self, sheet: str, label: str, section: Optional[str] = None) -> Series:
+        ws = self._sheet(sheet)
+        axis = M._period_axis(ws)
+        if not axis:
+            raise DeckError(f"{_ascii(sheet)}: no se reconoce un encabezado de periodos")
+        row = self._row_of(sheet, label, section)
+        points: dict[PeriodKey, Num] = {}
+        actual: dict[PeriodKey, bool] = {}
+        for period in axis:
+            key: PeriodKey = (period.year if period.quarter is None
+                              else f"{period.quarter}Q{period.year}")
+            cell = ws.cell(row=row, column=period.column)
+            formula = self._formulas[sheet].cell(row=row, column=period.column).value
+            if cell.value is None and not (isinstance(formula, str) and formula.startswith("=")):
+                continue
+            if key in points:
+                continue
+            points[key] = self.num(sheet, cell.coordinate)
+            actual[key] = period.actual
+        if not points:
+            raise DeckError(f"{_ascii(sheet)}: la fila '{_ascii(label)}' no tiene valores")
+        return Series(label, points, actual)
+
+    def cell(self, sheet: str, label: str, column: Optional[str] = None,
+             section: Optional[str] = None) -> Num:
+        ws = self._sheet(sheet)
+        row = self._row_of(sheet, label, section)
+        if column is not None:
+            return self.num(sheet, f"{column.upper()}{row}")
+        numeric = [c.coordinate for c in ws[row][2:]
+                   if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)]
+        if len(numeric) != 1:
+            raise DeckError(f"{_ascii(sheet)}: la fila '{_ascii(label)}' tiene "
+                            f"{len(numeric)} celdas numericas {numeric[:6]}; indica column=")
+        return self.num(sheet, numeric[0])
+
+    def range(self, sheet: str, ref: str) -> list[list[Num]]:
+        return [[self.num(sheet, c.coordinate) for c in row] for row in self._sheet(sheet)[ref]]
+
+    def axis_years(self) -> set[int]:
+        """Anios presentes en algun encabezado de periodos del libro."""
+        return {p.year for ws in self._values.worksheets for p in M._period_axis(ws)}
