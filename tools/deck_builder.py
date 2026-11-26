@@ -1295,3 +1295,117 @@ def write_report(path: Path, deck_html: Path, groups: Sequence[tuple[str, Sequen
     out += ["", "## Afirmaciones", "", claims_table(doc)]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(out), encoding="utf-8", newline="\n")
+
+
+# ---------------------------------------------------------------------------
+# Medicion de espacio con el navegador ya instalado
+# ---------------------------------------------------------------------------
+
+MEASURE_TIMEOUT_SECONDS = 120
+MEASURED_KINDS = ("content", "raw")
+_BROWSER_NAMES = ("msedge", "chrome", "google-chrome", "google-chrome-stable",
+                  "chromium", "chromium-browser")
+_BROWSER_CANDIDATES = (
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+)
+_MEASURE_ATTR = re.compile(r'data-measure="([^"]*)"')
+
+
+class MeasureError(Exception):
+    """El navegador no pudo abrir o medir el deck."""
+
+
+def find_browser() -> Optional[str]:
+    """Edge, Chrome o Chromium ya instalado. ``RA_BROWSER`` fija la ruta."""
+    forced = os.environ.get("RA_BROWSER")
+    if forced:
+        return forced if Path(forced).is_file() else None
+    for name in _BROWSER_NAMES:
+        found = shutil.which(name)
+        if found:
+            return found
+    return next((c for c in _BROWSER_CANDIDATES if Path(c).is_file()), None)
+
+
+def _run_browser(browser: str, args: Sequence[str]) -> str:
+    with tempfile.TemporaryDirectory() as profile:
+        command = [browser, "--headless=new", "--disable-gpu", "--no-first-run",
+                   f"--user-data-dir={profile}", f"--window-size={SLIDE_W},{SLIDE_H}", *args]
+        try:
+            done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=MEASURE_TIMEOUT_SECONDS, check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise MeasureError(f"el navegador no respondio en {MEASURE_TIMEOUT_SECONDS}s") from exc
+        except OSError as exc:
+            raise MeasureError(f"no se pudo ejecutar el navegador ({_ascii(exc)})") from exc
+    return done.stdout or ""
+
+
+def dump_measure(browser: str, deck_html: Path) -> list[dict[str, object]]:
+    """Abre el deck sin ventana y devuelve la medicion que deja su script."""
+    dom = _run_browser(browser, ["--dump-dom", deck_html.resolve().as_uri()])
+    match = _MEASURE_ATTR.search(dom)
+    if match is None:
+        raise MeasureError("el deck no dejo medicion (no lo genero deck_builder, o el "
+                           "navegador no ejecuto su script)")
+    return json.loads(html.unescape(match.group(1)))
+
+
+def measure_findings(data: Sequence[dict[str, object]], gap_max: int) -> list[Finding]:
+    """P5 a P8 a partir de la medicion por lamina."""
+    measured = [d for d in data if d.get("kind") in MEASURED_KINDS]
+    overlap = [f"lamina {d['n']}: {float(d['gap']):.0f} px" for d in measured
+               if float(d["gap"]) <= 0]
+    empty = []
+    for d in measured:
+        gap = float(d["gap"])
+        if gap >= gap_max:
+            visual = (f" (el visual mide {float(d['visual_h']):.0f} px)"
+                      if d.get("visual_h") is not None else "")
+            empty.append(f"lamina {d['n']}: {gap:.0f} px libres{visual}")
+    wide = [f"lamina {d['n']}: {_ascii(item)}" for d in measured for item in d.get("overflow", [])]
+    outside = [f"lamina {d['n']}: {_ascii(item)!r}" for d in measured
+               for item in d.get("svg_out", [])]
+    total = f"{len(measured)} laminas medidas"
+    return [
+        Finding("P5 sin contenido encimado", not overlap,
+                total if not overlap else "contenido sobre el cierre: " + M._examples(overlap)),
+        Finding("P6 sin lamina vacia", not empty,
+                f"{total}, umbral {gap_max} px" if not empty
+                else f"mas de {gap_max} px libres: " + M._examples(empty)),
+        Finding("P7 sin desborde horizontal", not wide,
+                total if not wide else "texto mas ancho que su caja: " + M._examples(wide)),
+        Finding("P8 etiquetas dentro de su grafica", not outside,
+                total if not outside else "etiqueta fuera del area: " + M._examples(outside)),
+    ]
+
+
+def measure_deck(deck_html: Path, shots: Optional[Path] = None) -> list[Finding]:
+    """Mide el deck. Sin navegador: [pendiente], nunca verde."""
+    doc = read_deck(deck_html.read_text(encoding="utf-8"))
+    gap_max = doc.gap_max if doc.gap_max is not None else Design().gap_max
+    browser = find_browser()
+    if browser is None:
+        return [Finding("P5-P8 medicion de espacio", False,
+                        "sin Edge, Chrome ni Chromium en esta maquina: el deck NO se midio. "
+                        "Instala uno o fija RA_BROWSER y vuelve a correr measure", pending=True)]
+    try:
+        data = dump_measure(browser, deck_html)
+        findings = measure_findings(data, gap_max)
+        if shots is not None:
+            shots.mkdir(parents=True, exist_ok=True)
+            for item in data:
+                target = (shots / f"slide-{int(item['n']):02d}.png").resolve()  # type: ignore[call-overload]
+                _run_browser(browser, [f"--screenshot={target}",
+                                       f"{deck_html.resolve().as_uri()}?shot={item['n']}"])
+                if not target.is_file():
+                    raise MeasureError(f"no se genero la captura de la lamina {item['n']}")
+    except MeasureError as exc:
+        return [Finding("P5-P8 medicion de espacio", False, str(exc))]
+    return findings

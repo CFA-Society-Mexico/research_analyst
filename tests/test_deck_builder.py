@@ -629,3 +629,96 @@ class AuditTests(_Case):
                          "| share | 31.5 % | observado |", "## Afirmaciones",
                          "| 2 | Participa con 31.5% del mercado. |  |"):
             self.assertIn(expected, text)
+
+
+def _slide(n: int, gap: float, **extra: object) -> dict[str, object]:
+    data: dict[str, object] = {"n": n, "kind": "content", "gap": gap, "visual_h": 300.0,
+                               "overflow": [], "svg_out": []}
+    data.update(extra)
+    return data
+
+
+class MeasureTests(_Case):
+
+    def _marks(self, data: list[dict[str, object]], gap_max: int = 90) -> dict[str, B.Finding]:
+        return {f.check.split()[0]: f for f in D.measure_findings(data, gap_max)}
+
+    def test_clean_slides_are_green_and_fixed_templates_are_exempt(self) -> None:
+        marks = self._marks([{"n": 1, "kind": "cover"}, _slide(2, 40.0), _slide(3, 89.0)])
+        self.assertTrue(all(f.ok for f in marks.values()))
+        self.assertIn("2 laminas medidas", marks["P5"].detail)
+
+    def test_each_defect_fails_its_own_check(self) -> None:
+        marks = self._marks([
+            _slide(2, -12.0), _slide(3, 140.0),
+            _slide(4, 30.0, overflow=["h2: Titulo muy largo"]),
+            _slide(5, 30.0, svg_out=["1,380"]),
+        ])
+        self.assertIn("lamina 2: -12 px", marks["P5"].detail)
+        self.assertIn("lamina 3: 140 px libres (el visual mide 300 px)", marks["P6"].detail)
+        self.assertIn("lamina 4: h2: Titulo muy largo", marks["P7"].detail)
+        self.assertIn("lamina 5: '1,380'", marks["P8"].detail)
+        self.assertTrue(all(f.blocking for f in marks.values()))
+
+    def test_threshold_comes_from_the_deck(self) -> None:
+        self.assertTrue(self._marks([_slide(2, 100.0)], gap_max=120)["P6"].ok)
+
+    def _deck_file(self) -> Path:
+        deck = self.deck()
+        deck.slide(title="Titulo", lede="", visual="<p>visual</p>", note="Nota.",
+                   source="Fuente: x.")
+        return deck.build()
+
+    def test_without_a_browser_the_result_is_pending_never_green(self) -> None:
+        with mock.patch.object(D, "find_browser", return_value=None):
+            findings = D.measure_deck(self._deck_file())
+        self.assertEqual(len(findings), 1)
+        self.assertTrue(findings[0].pending and not findings[0].ok)
+
+    def test_measure_reads_what_the_browser_dumps(self) -> None:
+        dump = ('<html data-measure="[{&quot;n&quot;:1,&quot;kind&quot;:&quot;content&quot;,'
+                '&quot;gap&quot;:-5,&quot;visual_h&quot;:20,&quot;overflow&quot;:[],'
+                '&quot;svg_out&quot;:[]}]"><body></body></html>')
+        with mock.patch.object(D, "find_browser", return_value="navegador"), \
+                mock.patch.object(D, "_run_browser", return_value=dump) as run:
+            findings = D.measure_deck(self._deck_file())
+        self.assertIn("--dump-dom", run.call_args.args[1])
+        self.assertTrue(findings[0].blocking)
+        self.assertIn("lamina 1: -5 px", findings[0].detail)
+
+    def test_a_browser_that_does_not_measure_is_a_failure(self) -> None:
+        with mock.patch.object(D, "find_browser", return_value="navegador"), \
+                mock.patch.object(D, "_run_browser", return_value="<html></html>"):
+            findings = D.measure_deck(self._deck_file())
+        self.assertTrue(findings[0].blocking)
+        self.assertIn("no dejo medicion", findings[0].detail)
+
+    def test_forced_browser_path_that_does_not_exist_means_no_browser(self) -> None:
+        with mock.patch.dict(os.environ, {"RA_BROWSER": str(self.root / "nope.exe")}):
+            self.assertIsNone(D.find_browser())
+
+
+# El navegador de verdad es opcional: en CI puede existir y no arrancar (sandbox).
+REAL_BROWSER = os.environ.get("RA_BROWSER_TESTS") == "1" and bool(D.find_browser())
+REAL_BROWSER_REASON = "requiere RA_BROWSER_TESTS=1 y Edge, Chrome o Chromium"
+
+
+@unittest.skipUnless(REAL_BROWSER, REAL_BROWSER_REASON)
+class BrowserTests(_Case):
+    """El navegador de verdad: cada defecto de espacio falla su check."""
+
+    def test_overfull_empty_and_overflowing_slides_fail(self) -> None:
+        deck = self.deck()
+        tall = "<div style='height:700px'>alto</div>"
+        deck.slide(title="Encimada", lede="", visual=tall, note="Nota.", source="Fuente: x.")
+        deck.slide(title="Vacia", lede="", visual="<p>poco</p>", note="Nota.", source="Fuente: x.")
+        deck.slide(title="Ancha", lede="", note="Nota.", source="Fuente: x.",
+                   visual="<div style='width:1500px;height:330px'>ancho</div>")
+        deck.slide(title="Etiqueta", lede="", note="Nota.", source="Fuente: x.",
+                   visual="<svg viewBox='0 0 1100 330'><text x='1090' y='40'>etiqueta "
+                          "larga fuera</text></svg>")
+        marks = {f.check.split()[0]: f for f in D.measure_deck(deck.build())}
+        self.assertIn("lamina 1", marks["P5"].detail)
+        self.assertIn("lamina 2", marks["P6"].detail)
+        self.assertIn("lamina 3", marks["P7"].detail)
+        self.assertIn("lamina 4", marks["P8"].detail)
