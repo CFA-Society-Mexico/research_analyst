@@ -217,6 +217,32 @@ class FacadeApiTests(unittest.TestCase):
              namespace)
         self.assertIs(namespace["ModelStyler"], B.ModelStyler)
 
+    def test_no_two_submodules_disagree_on_a_name(self) -> None:
+        """La re-exportacion total no puede tapar un nombre con otro objeto."""
+        seen: dict[str, tuple[str, object]] = {}
+        for module in B._SUBMODULES:
+            for name, value in vars(module).items():
+                if name.startswith("__"):
+                    continue
+                if name in seen:
+                    self.assertIs(value, seen[name][1],
+                                  f"{name}: {seen[name][0]} vs {module.__name__}")
+                else:
+                    seen[name] = (module.__name__, value)
+                self.assertIs(getattr(B, name), value, name)
+
+    def test_facade_loads_by_path_without_tools_on_sys_path(self) -> None:
+        code = ("import importlib.util, sys\n"
+                "spec = importlib.util.spec_from_file_location('xb_por_ruta', sys.argv[1])\n"
+                "m = importlib.util.module_from_spec(spec)\n"
+                "spec.loader.exec_module(m)\n"
+                "print(m.ModelStyler.__name__, m.Finding('F1 x', True, 'ok').mark)\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            done = subprocess.run([sys.executable, "-c", code, str(TOOLS / "xlsx_builder.py")],
+                                  cwd=tmp, capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.strip(), "ModelStyler [ok]")
+
 
 class FacadePatchTests(unittest.TestCase):
     """``mock.patch.object(B, ...)`` alcanza al codigo que lee el nombre."""

@@ -28,6 +28,7 @@ Un [aviso] se lista siempre y nunca cambia el exit code.
 
 import csv
 import sys
+import types
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -45,153 +46,56 @@ from openpyxl.workbook.properties import CalcProperties
 from openpyxl.worksheet.formula import ArrayFormula
 from openpyxl.worksheet.worksheet import Worksheet
 
-# ---------------------------------------------------------------------------
-# Contract constants (the ONLY allowed values; checks F enforce the whitelists)
-# ---------------------------------------------------------------------------
+# --- Fachada ------------------------------------------------------------------
+# Los submodulos viven junto a este archivo. Al cargar la fachada por ruta sin
+# tools/ en sys.path (importlib), los imports de abajo los encuentran igual.
+_TOOLS_DIR = str(Path(__file__).resolve().parent)
+if _TOOLS_DIR not in sys.path:
+    sys.path.append(_TOOLS_DIR)
 
-BUILDER_STAMP_KEY = "research_analyst_builder"
-BUILDER_STAMP_VALUE = "xlsx_builder v1"
-TRANSITION_STAMP_KEY = "transition"
-_UNSET = object()   # centinela: None es un valor de celda valido
+import xlsx_contract  # noqa: E402
 
+_SUBMODULES = (xlsx_contract,)
 
-def transition_year_of(keywords: Optional[str]) -> Optional[int]:
-    """Anio de transicion sellado en el libro (``set_transition_year``) o None."""
-    import re
-    match = re.search(rf"(?:^|;){TRANSITION_STAMP_KEY}=(\d{{4}})", keywords or "")
-    return int(match.group(1)) if match else None
+# Re-exportacion TOTAL: cada nombre de cada submodulo, privados incluidos. Los
+# scripts de build de coberturas viven fuera del repo y usan
+# ``from xlsx_builder import ...`` / ``B._nombre``: ninguno puede desaparecer
+# (tests/test_xlsx_builder_split.py congela la lista).
+for _module in _SUBMODULES:
+    for _name, _value in vars(_module).items():
+        if not _name.startswith("__"):
+            globals()[_name] = _value
+del _module, _name, _value
 
-FONT_NAME = "Aptos Narrow"
-
-# Vinculo fila <-> capa de captura (check C9). Un nombre definido con alcance
-# de hoja por linea: Excel ajusta su rango al insertar o mover filas, asi que
-# el vinculo sobrevive a una edicion manual del libro.
-CAPTURE_NAME_PREFIX = "CAPTURE."
-# Lineas que C9 usa como referencia de materialidad: ventas y activos totales
-# (los nombres que emite xbrl_fetch.CONCEPT_MAP).
-CAPTURE_REFERENCE_LINES = ("is_ns_total", "bs_ta")
+_MISSING = object()
 
 
-class Color(str, Enum):
-    """Palette (ARGB). Identidad propia del plugin (2026-08-31): azul oscuro +
-    azul claro. Los valores CFI legacy se conservan como referencia historica
-    pero YA NO estan en la whitelist."""
+class _Facade(types.ModuleType):
+    """Modulo fachada: una asignacion sobre ``xlsx_builder`` llega al
+    submodulo que usa el nombre.
 
-    DARK_BLUE = "FF1F4E79"   # barra de marca + bandas de seccion (texto blanco)
-    LIGHT_BLUE = "FFBDD7EE"  # sub-secciones + acento / tab color
-    NAVY = "FF132E57"        # legacy CFI (fuera de whitelist)
-    ORANGE = "FFED942D"      # legacy CFI (fuera de whitelist)
-    TEAL = "FF1E8496"        # legacy CFI (fuera de whitelist)
-    INPUT_BLUE = "FF0000FF"  # analyst input font
-    LINK_GREEN = "FF00CC00"  # cross-sheet link font
-    WARN_RED = "FFFF0000"    # error font
-    WHITE = "FFFFFFFF"
-    BLACK = "FF000000"
-    INPUT_FILL = "FFFFF2CC"  # light yellow input shading
-    SCENARIO_FILL = "FFF2F2F2"  # light gray scenario areas
+    ``mock.patch.object(B, "_MAX_SCAN_ROWS", 50)`` hace ``setattr`` sobre la
+    fachada, pero el codigo del audit lee el nombre en SU modulo. Cada
+    asignacion se replica en todo submodulo cuyo nombre apunta al MISMO objeto
+    que tenia la fachada; al restaurar el parche aplica la misma regla. Una
+    copia cargada por ruta sin registrarse en ``sys.modules`` no propaga.
+    """
 
-
-class NumFmt(str, Enum):
-    """Number-format whitelist (literal CFI strings)."""
-
-    GENERAL = "General"
-    NUM = '_-* #,##0_-;\\(#,##0\\)_-;_-* "-"_-;_-@_-'   # thousands, (neg), dash zero
-    NUM_RED = "#,##0_);[Red](#,##0);-"                   # red negatives variant
-    PCT1 = "0.0%"
-    PCT2 = "0.00%"
-    DEC2 = "0.00"
-    MULT = "0.0\\x"                                       # 12.3x
-    USD = '"$"#,##0_);\\("$"#,##0\\)'
-    USD_CENTS = '"$"#,##0.00_);\\("$"#,##0.00\\)'
-    YEAR_A = '0"A"'                                       # 2025A
-    YEAR_E = '0"E"'                                       # 2026E
-    DATE = "mm-dd-yy"
-    HIDDEN = ";;;"
+    def __setattr__(self, name: str, value: object) -> None:
+        old = self.__dict__.get(name, _MISSING)
+        if old is not _MISSING:
+            for module in _SUBMODULES:
+                if module.__dict__.get(name, _MISSING) is old:
+                    setattr(module, name, value)
+        super().__setattr__(name, value)
 
 
-class CellRole(Enum):
-    """Semantic cell roles -> font color mapping (traceability contract)."""
+if __name__ in sys.modules:
+    sys.modules[__name__].__class__ = _Facade
 
-    LABEL = auto()      # black text
-    INPUT = auto()      # blue font + yellow fill (analyst assumption)
-    OBSERVED = auto()   # blue font, NO fill (historical, cited in comment)
-    FORMULA = auto()    # black font
-    LINK = auto()       # green font (pulls from another sheet)
-    WARN = auto()       # red font
-
-
-_ROLE_FONT_COLOR: dict[CellRole, Color] = {
-    CellRole.LABEL: Color.BLACK,
-    CellRole.INPUT: Color.INPUT_BLUE,
-    CellRole.OBSERVED: Color.INPUT_BLUE,
-    CellRole.FORMULA: Color.BLACK,
-    CellRole.LINK: Color.LINK_GREEN,
-    CellRole.WARN: Color.WARN_RED,
-}
 
 _THIN = Side(style="thin")
 _DOUBLE = Side(style="double")
-
-# Sheets that must carry frozen panes (data grids). Cover/Checks/Summary exempt.
-FROZEN_SHEET_PREFIXES = ("Operating", "Annual", "Model", "Assumptions",
-                         "Macro", "IS", "BS", "CF", "Ratios", "Schedules",
-                         "Rev_Reconcile", "Val_", "Quarterly")
-
-# Ratios completeness contract (check F13): these labels must exist in the
-# Ratios section — build_ratios() writes exactly these, so builder output
-# passes by construction and a lazy hand-built Ratios fails.
-REQUIRED_RATIO_LABELS = (
-    "Margen neto", "Rotacion de activos", "Apalancamiento", "ROE DuPont 3",
-    "Carga fiscal", "Carga de interes", "Margen EBIT", "ROE DuPont 5",
-    "NOPAT", "Capital invertido", "ROIC", "Economic profit",
-    "Margen bruto", "Margen operativo", "Razon corriente", "Quick ratio",
-    "Deuda / EBITDA aprox", "Cobertura de intereses",
-    "DSO", "DIO", "DPO", "CCC",
-    "DFL", "CFO / NI", "Accruals",
-)
-
-JUNK_SHEET_NAMES = ("Hoja1", "Hoja2", "Sheet1", "Sheet2", "Hoja 1", "Sheet 1")
-
-# Canons de FLUJO: en ventana UDM se SUMAN (t-3..t); el resto son SALDOS y se
-# promedian sobre la misma ventana (build_ratios).
-RATIO_FLOW_CANONS = frozenset({"rev", "cogs", "gross", "ebit", "ebt", "ni",
-                               "interest", "tax", "cfo", "da"})
-
-
-@dataclass(frozen=True)
-class PeriodHeader:
-    """Year header spec: e.g. 2019..2031, actuals through 2025."""
-
-    first_year: int
-    last_year: int
-    last_actual_year: int
-
-
-# Rebrandable DECORATIVE slots (brand/DESIGN.md). Semantic colors — input blue,
-# link green, warn red, input/scenario fills — are the traceability contract
-# and are NEVER brandable.
-BRAND_SLOTS = ("brand_primary", "brand_section", "brand_accent")
-
-
-def load_brand(path: str) -> dict[str, str]:
-    """Parse brand/DESIGN.md lines like ``brand_primary: #132E57`` -> ARGB.
-
-    Deterministic: only the three BRAND_SLOTS are read; anything else in the
-    file is prose for humans. Missing file or missing slot -> CFI default.
-    """
-    import re
-    try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError:
-        return {}
-    out: dict[str, str] = {}
-    for slot in BRAND_SLOTS:
-        match = re.search(rf"{slot}\s*[:=]\s*#?([0-9A-Fa-f]{{6}})", text)
-        if match:
-            out[slot] = "FF" + match.group(1).upper()
-    return out
-
 
 # ---------------------------------------------------------------------------
 # Lint de formulas (check F21): lo que Excel descarta o evalua mal
@@ -1105,12 +1009,6 @@ _ALLOWED_FONT_COLORS.add("FF333333")  # near-black tolerated
 _ALLOWED_FILLS = {c.value for c in (
     Color.DARK_BLUE, Color.LIGHT_BLUE, Color.INPUT_FILL, Color.SCENARIO_FILL)}
 _ALLOWED_NUMFMTS = {f.value for f in NumFmt}
-
-# Limites de escaneo del audit. Una hoja mas grande NO se audita en silencio
-# a medias: el check F20 falla y nombra la hoja.
-_MAX_SCAN_ROWS = 5000
-_MAX_SCAN_COLS = 400
-
 
 @dataclass(frozen=True)
 class Finding:
