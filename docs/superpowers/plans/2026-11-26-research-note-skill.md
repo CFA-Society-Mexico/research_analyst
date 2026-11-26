@@ -23,7 +23,7 @@ D1, D4 y la tabla "Contratos que cambian" de D5.
 
 - PR 56 fusionado (`d94c570`). Rama `feat/research-note-skill` sale de
   `origin/main`, en el worktree `.claude/worktrees/research-note-skill`.
-- Línea base: `python -m unittest discover -s tests` -> 430 pruebas, OK (4
+- Línea base (antes del rebase): `python -m unittest discover -s tests` -> 430 pruebas, OK (4
   saltadas); `python tools/deck_builder.py demo ./scratch` -> VERDE.
 - **`main` ya está en v0.8.0** (`3007b01`, check C11). El spec y el encargo dicen
   "bump a v0.8.0": ese número ya se usó. Este PR sube a **v0.9.0** (`minor`:
@@ -423,14 +423,19 @@ Nada de esa copia entra al commit.
 
 ## Desviaciones al ejecutar (2026-11-26)
 
-Las tareas 1 a 4 se ejecutaron como están escritas (`a6aacfa`, `dbba65f`,
-`1b73a94`). El dogfood (tarea 5) cambió tres cosas que este plan no preveía.
+Las tareas 1 a 4 se ejecutaron como están escritas (`2b393f2`, `c0bc0fd`,
+`4405014`). El dogfood (tarea 5) cambió tres cosas que este plan no preveía.
 
 | Commit | Qué cambió | Origen |
 |---|---|---|
-| `b8d994a` | `tools/deck_builder.py`: el número de acto usa la fuente de cuerpo. Con la de encabezado por defecto (Georgia, numerales de estilo antiguo) "01" se leía "O1". Prueba primero: `test_act_number_uses_the_body_font` | Revisión de capturas, con la medición en verde |
-| `619f7d2` | Skill, referencia y comando: volcado de etiquetas del modelo; comprobación de valores en disco (`model_check` sin `--recalc`); P6 en tabla, sensibilidad y football; P8 por nombres de serie encimados; componer visuales; `raw` sin título; etiquetas del registro de hechos y guidance sin documento; reporte que no conserva la evidencia ni incluye la medición; P9 y P10 `[n/a]` sin `brand/DESIGN.md`; lista ampliada de afirmaciones sin número; cambios posteriores al gate 1 | Bitácora de 23 fricciones del agente |
-| `619f7d2` | `templates/debate-protocol.md`: dos filas con el objetivo de los gates de `research-note`. Estaba en "Fuera de este plan"; el agente las buscó ahí | Fricción F09 |
+| `cb99672` | `tools/deck_builder.py`: el número de acto usa la fuente de cuerpo. Con la de encabezado por defecto (Georgia, numerales de estilo antiguo) "01" se leía "O1". Prueba primero: `test_act_number_uses_the_body_font` | Revisión de capturas, con la medición en verde |
+| `5adc398` | Skill, referencia y comando: volcado de etiquetas del modelo; comprobación de valores en disco (`model_check` sin `--recalc`); P6 en tabla, sensibilidad y football; P8 por nombres de serie encimados; componer visuales; `raw` sin título; etiquetas del registro de hechos y guidance sin documento; reporte que no conserva la evidencia ni incluye la medición; P9 y P10 `[n/a]` sin `brand/DESIGN.md`; lista ampliada de afirmaciones sin número; cambios posteriores al gate 1 | Bitácora de 23 fricciones del agente |
+| `5adc398` | `templates/debate-protocol.md`: dos filas con el objetivo de los gates de `research-note`. Estaba en "Fuera de este plan"; el agente las buscó ahí | Fricción F09 |
+
+Antes de abrir el PR la rama se rebasó sobre `origin/main` (`121b641`: checks K,
+macro-view por país y `xlsx_builder` partido en módulos). Tres conflictos, todos
+por cercanía y resueltos conservando ambos lados. Los conteos de pruebas de las
+tareas (431) son anteriores al rebase; con `main` al día la suite son 513.
 
 Resultado del dogfood, sobre una copia de TSMC sin su deck anterior: 12 láminas,
 104 cifras auditadas, 24 hechos con cita cotejada (22 del 20-F, 2 del industry
