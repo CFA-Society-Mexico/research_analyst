@@ -623,6 +623,55 @@ class ChartTests(_Case):
             label_ys = [float(y) for y in re.findall(r'class="val" x="[0-9.]+" y="([0-9.]+)"', svg)]
             self.assertTrue(all(tag_y < y - 6 for y in label_ys), (tag_y, label_ys))
 
+    def test_line_labels_at_the_ends_stay_off_the_axis_and_the_series_name(self) -> None:
+        import re
+        deck = self.deck()
+        rev = deck.series("Annual", "Ingresos")
+        svg = D.render_markers(deck.lines([("Ventas", rev)], show=(2022, 2024, 2027)))
+        anchors = re.findall(r'<text class="val" x="[0-9.]+" y="[0-9.]+" text-anchor="(\w+)"', svg)
+        self.assertEqual(anchors, ["start", "middle", "end"])
+
+    def test_short_charts_carry_fewer_axis_marks(self) -> None:
+        deck = self.deck()
+        rev = deck.series("Annual", "Ingresos")
+        marks = lambda svg: svg.count('text-anchor="end">')      # noqa: E731
+        self.assertEqual(marks(deck.bars(rev, h=320)), 4)
+        self.assertEqual(marks(deck.bars(rev, h=100)), 2)
+        # En lineas el eje no parte de cero: un paso redondo puede pedir una marca mas.
+        self.assertLessEqual(marks(deck.lines([("Ventas", rev)], h=110)), 3)
+        self.assertEqual(D._tick_count(300.0), 4)
+        self.assertEqual(D._tick_count(20.0), 1)
+
+    def test_second_series_is_labelled_below_its_line(self) -> None:
+        import re
+        deck = self.deck()
+        rev = deck.series("Annual", "Ingresos")
+        svg = D.render_markers(deck.lines([("Arriba", rev), ("Abajo", rev)], show=(2024,)))
+        first, second = (float(y) for y in re.findall(
+            r'<text class="val" x="[0-9.]+" y="([0-9.]+)"', svg))
+        self.assertGreater(second - first, 20.0)
+        # Pegada al piso de la grafica, la etiqueta de abajo caeria sobre los
+        # rotulos de periodo: ahi vuelve arriba de la linea.
+        floor = D.Series("Piso", {k: rev[2022] * 0 for k in rev.keys},
+                         {k: True for k in rev.keys})
+        svg = D.render_markers(deck.lines([("Arriba", rev), ("Piso", floor)], show=(2024,),
+                                          h=320))
+        ys = [float(y) for y in re.findall(r'<text class="val" x="[0-9.]+" y="([0-9.]+)"', svg)]
+        self.assertLess(max(ys), 320 - 30)
+
+    def test_period_labels_do_not_crowd_the_last_one(self) -> None:
+        import re
+        deck = self.deck()
+        keys = [f"{q}Q{y}" for y in range(2017, 2032) for q in (1, 2, 3, 4)]
+        quarterly = D.Series("Margen", {k: D.Num(0.4 + i / 1000, f"Annual!C{6 + i}")
+                                        for i, k in enumerate(keys)}, {k: True for k in keys})
+        svg = deck.lines([("Margen", quarterly)], h=320)
+        xs = sorted(float(x) for x in re.findall(
+            r'<text class="auto" x="([0-9.]+)" y="310" text-anchor="middle">', svg))
+        self.assertGreaterEqual(len(xs), 6)
+        self.assertGreaterEqual(min(b - a for a, b in zip(xs, xs[1:])), 60.0)
+        self.assertIn(">4Q2031</text>", svg)
+
     def test_waterfall_ends_in_the_total_read_from_the_model(self) -> None:
         deck = self.deck()
         low, high = deck.cell("DCF", "Bajo"), deck.cell("DCF", "Alto")
@@ -763,6 +812,11 @@ class MeasureTests(_Case):
         self.assertIn("lamina 4: h2: Titulo muy largo", marks["P7"].detail)
         self.assertIn("lamina 5: '1,380'", marks["P8"].detail)
         self.assertTrue(all(f.blocking for f in marks.values()))
+
+    def test_overlapping_chart_labels_fail_p8(self) -> None:
+        marks = self._marks([_slide(2, 30.0, svg_overlap=["55% / 60%"])])
+        self.assertTrue(marks["P8"].blocking)
+        self.assertIn("lamina 2: encimadas '55% / 60%'", marks["P8"].detail)
 
     def test_threshold_comes_from_the_deck(self) -> None:
         self.assertTrue(self._marks([_slide(2, 100.0)], gap_max=120)["P6"].ok)
@@ -1145,6 +1199,23 @@ class ClippedBrowserTests(_Case):
         marks = {f.check.split()[0]: f for f in D.measure_deck(deck.build())}
         self.assertIn("lamina 1: contenido cortado", marks["P5"].detail)
         self.assertNotIn("lamina 2", marks["P5"].detail)
+
+    def test_chart_labels_are_checked_for_overlap(self) -> None:
+        deck = self.deck()
+        keys = [f"{q}Q{y}" for y in range(2017, 2032) for q in (1, 2, 3, 4)]
+        rev = deck.series("Annual", "Ingresos")
+        quarterly = D.Series("Margen", {k: rev[2022] / rev[2027] for k in keys},
+                             {k: i < 40 for i, k in enumerate(keys)})
+        deck.slide(title="Lineas trimestrales", lede="", note="Nota.", source="Fuente: x.",
+                   visual=deck.lines([("Margen", quarterly)], show=(keys[0], keys[39], keys[-1]),
+                                     fmt=".0%", h=330))
+        deck.slide(title="Etiquetas encimadas", lede="", note="Nota.", source="Fuente: x.",
+                   visual="<svg viewBox='0 0 1100 330'><text x='100' y='60'>primera etiqueta"
+                          "</text><text x='120' y='64'>segunda etiqueta</text></svg>")
+        marks = {f.check.split()[0]: f for f in D.measure_deck(deck.build())}
+        self.assertIn("lamina 2: encimadas 'primera etiqueta / segunda etiqueta'",
+                      marks["P8"].detail)
+        self.assertNotIn("lamina 1", marks["P8"].detail)
 
 
 @unittest.skipUnless(REAL_BROWSER, REAL_BROWSER_REASON)

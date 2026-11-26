@@ -957,7 +957,7 @@ var out=slides.map(function(s){
  var sr=s.getBoundingClientRect(),pad=parseFloat(getComputedStyle(s).paddingLeft)||0;
  r.gap=foot.getBoundingClientRect().top-body.getBoundingClientRect().bottom;
  r.visual_h=vis?vis.getBoundingClientRect().height:null;
- r.overflow=[];r.svg_out=[];
+ r.overflow=[];r.svg_out=[];r.svg_overlap=[];
  [].forEach.call(s.querySelectorAll('header *,.body *'),function(el){
   if(el.closest('svg')){return;}
   var b=el.getBoundingClientRect();
@@ -969,7 +969,13 @@ var out=slides.map(function(s){
   [].forEach.call(svg.querySelectorAll('text'),function(t){
    var q=t.getBoundingClientRect();
    if(q.left<b.left-1||q.right>b.right+1||q.top<b.top-1||q.bottom>b.bottom+1){
-    r.svg_out.push(clip(t.textContent));}});});
+    r.svg_out.push(clip(t.textContent));}});
+  var rs=[].map.call(svg.querySelectorAll('text'),function(t){
+   return [t.getBoundingClientRect(),clip(t.textContent)];});
+  for(var i=0;i<rs.length;i++){for(var j=i+1;j<rs.length;j++){
+   var ox=Math.min(rs[i][0].right,rs[j][0].right)-Math.max(rs[i][0].left,rs[j][0].left);
+   var oy=Math.min(rs[i][0].bottom,rs[j][0].bottom)-Math.max(rs[i][0].top,rs[j][0].top);
+   if(ox>2&&oy>2&&rs[i][1]&&rs[j][1]){r.svg_overlap.push(rs[i][1]+' / '+rs[j][1]);}}}});
  return r;});
 document.documentElement.setAttribute('data-measure',JSON.stringify(out));
 })();
@@ -1138,11 +1144,11 @@ class Deck:
         crecimientos). ``show``: periodos que llevan etiqueta de valor."""
         keys = list(keys or series.keys)
         values = [series[k] / scale if scale != 1.0 else series[k] for k in keys]
-        ticks = _nice_ticks(min(0.0, *(float(v) for v in values)),
-                            max(0.0, *(float(v) for v in values)))
-        lo, hi = ticks[0], ticks[-1]
         left, right, top, bottom = 64, 16, 34, 30
         plot_w, plot_h = w - left - right, h - top - bottom
+        ticks = _nice_ticks(min(0.0, *(float(v) for v in values)),
+                            max(0.0, *(float(v) for v in values)), _tick_count(plot_h))
+        lo, hi = ticks[0], ticks[-1]
         slot = plot_w / len(keys)
 
         def y(value: float) -> float:
@@ -1185,10 +1191,10 @@ class Deck:
         first = named[0][1]
         keys = list(keys or first.keys)
         flat = [float(s[k]) for _, s in named for k in keys]
-        ticks = _nice_ticks(min(flat), max(flat))
-        lo, hi = ticks[0], ticks[-1]
-        left, right, top, bottom = 64, 170, 34, 30
+        left, right, top, bottom = 64, 170, 40, 30
         plot_w, plot_h = w - left - right, h - top - bottom
+        ticks = _nice_ticks(min(flat), max(flat), _tick_count(plot_h))
+        lo, hi = ticks[0], ticks[-1]
         step = plot_w / max(len(keys) - 1, 1)
 
         def x(i: int) -> float:
@@ -1203,10 +1209,12 @@ class Deck:
             x0 = x(split) - step / 2
             out.append(f'<rect x="{x0:.1f}" y="{top}" width="{left + plot_w - x0:.1f}" '
                        f'height="{plot_h}" fill="{self.design.muted}" opacity="0.10"/>')
-            out.append(f'<text class="auto" x="{x0 + 6:.1f}" y="{top - 20}">Proyectado</text>')
+            out.append(f'<text class="auto" x="{x0 + 6:.1f}" y="{top - 26}">Proyectado</text>')
         out += _y_axis(ticks, y, left, left + plot_w, tick_fmt or fmt)
+        last, stride = len(keys) - 1, max(len(keys) // 8, 1)
         for i, key in enumerate(keys):
-            if i % max(len(keys) // 8, 1) == 0 or i == len(keys) - 1:
+            # El ultimo periodo siempre se rotula; el anterior cede si queda pegado.
+            if i == last or (i % stride == 0 and last - i >= stride * 0.6):
                 out.append(f'<text class="auto" x="{x(i):.1f}" y="{h - 10}" '
                            f'text-anchor="middle">{html.escape(str(key))}</text>')
         for index, (name, series) in enumerate(named):
@@ -1219,8 +1227,16 @@ class Deck:
                        f"{_esc(name)}</text>")
             for i, key in enumerate(keys):
                 if index in self._weak or key in show:
-                    out.append(f'<text class="val" x="{x(i):.1f}" '
-                               f'y="{y(float(series[key])) - 8:.1f}" text-anchor="middle">'
+                    # En los extremos la etiqueta va hacia adentro: centrada caia
+                    # sobre las marcas del eje o sobre el nombre de la serie.
+                    anchor, dx = (("start", 6) if i == 0 else ("end", -6) if i == last
+                                  else ("middle", 0))
+                    # Series pares arriba de su linea, impares abajo: dos series
+                    # cercanas no apilan sus etiquetas en el mismo punto.
+                    point = y(float(series[key]))
+                    dy = -8 if index % 2 == 0 or point + 18 > top + plot_h - 4 else 18
+                    out.append(f'<text class="val" x="{x(i) + dx:.1f}" '
+                               f'y="{point + dy:.1f}" text-anchor="{anchor}">'
                                f"{series[key]:{fmt}}</text>")
         out.append("</svg>")
         return "".join(out)
@@ -1283,11 +1299,11 @@ class Deck:
             start, running = running, running + float(value)
             spans.append((label, value, start, running))
         spans.append((total[0], total[1], 0.0, float(total[1])))
-        ticks = _nice_ticks(min(0.0, *(min(a, b) for _, _, a, b in spans)),
-                            max(0.0, *(max(a, b) for _, _, a, b in spans)))
-        lo, hi = ticks[0], ticks[-1]
         left, right, top, bottom = 64, 16, 26, 44
         plot_w, plot_h = w - left - right, h - top - bottom
+        ticks = _nice_ticks(min(0.0, *(min(a, b) for _, _, a, b in spans)),
+                            max(0.0, *(max(a, b) for _, _, a, b in spans)), _tick_count(plot_h))
+        lo, hi = ticks[0], ticks[-1]
         slot = plot_w / len(spans)
 
         def y(value: float) -> float:
@@ -1356,6 +1372,11 @@ class Deck:
 def _svg_open(w: int, h: int, label: str) -> str:
     return (f'<svg viewBox="0 0 {w} {h}" role="img" '
             f'aria-label="{html.escape(_MARKER.sub("", label), quote=True)}">')
+
+
+def _tick_count(plot_height: float) -> int:
+    """Intervalos de eje que caben sin encimar sus marcas (~32 px por marca)."""
+    return max(1, min(4, int(plot_height // 32)))
 
 
 def _nice_ticks(lo: float, hi: float, count: int = 4) -> list[float]:
@@ -1628,6 +1649,8 @@ def measure_findings(data: Sequence[dict[str, object]], gap_max: int) -> list[Fi
     wide = [f"lamina {d['n']}: {_ascii(item)}" for d in measured for item in d.get("overflow", [])]
     outside = [f"lamina {d['n']}: {_ascii(item)!r}" for d in measured
                for item in d.get("svg_out", [])]
+    outside += [f"lamina {d['n']}: encimadas {_ascii(item)!r}" for d in measured
+                for item in d.get("svg_overlap", [])]
     total = f"{len(measured)} laminas medidas"
     return [
         Finding("P5 sin contenido encimado", not overlap,
@@ -1638,7 +1661,8 @@ def measure_findings(data: Sequence[dict[str, object]], gap_max: int) -> list[Fi
         Finding("P7 sin desborde horizontal", not wide,
                 total if not wide else "texto mas ancho que su caja: " + M._examples(wide)),
         Finding("P8 etiquetas dentro de su grafica", not outside,
-                total if not outside else "etiqueta fuera del area: " + M._examples(outside)),
+                total if not outside
+                else "etiqueta fuera del area o encimada con otra: " + M._examples(outside)),
     ]
 
 
