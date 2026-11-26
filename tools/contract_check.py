@@ -88,8 +88,17 @@ PROFILE_KEYS = frozenset(PROFILE_REQUIRED + PROFILE_CONFIRMATIONS + PROFILE_POSI
     "valuation_methods", "materiality", "retention_note", "sources"))
 
 
-MACRO_KEYS = frozenset({"updated_at", "owner", "staleness_warn_months", "rates", "fx",
-                        "inflation", "gdp", "commodity_decks", "equity_risk_premium", "notes"})
+MACRO_KEYS = frozenset({"updated_at", "owner", "staleness_warn_months", "gate_status",
+                        "rates", "fx", "inflation", "gdp", "commodity_decks",
+                        "equity_risk_premium", "notes", "countries"})
+# Campos que el contrato nombra en cada bloque de countries.<pais>. El bloque es
+# ABIERTO: una seccion propia del pais (labor, tax) se permite sin aviso.
+COUNTRY_KEYS = frozenset({"as_of", "gate_status", "rates", "fx", "inflation", "gdp",
+                          "equity_risk_premium", "notes"})
+# Secciones de primer nivel y de cada pais cuyos datos se validan como
+# {value, source}; los campos de texto (owner, notes, gate_status) no.
+MACRO_TEXT_KEYS = frozenset({"updated_at", "owner", "staleness_warn_months", "gate_status",
+                             "notes", "countries", "as_of"})
 
 COMP_KEYS = frozenset({"ticker", "name", "selected_because", "as_of", "stale_days",
                        "market_data", "balance_items", "income_items", "framework",
@@ -347,8 +356,77 @@ def check_macro(macro: Loaded | None) -> Finding:
         problems.hard.append("updated_at vacio o sin fecha")
     if "staleness_warn_months" in data and not _positive_int(data["staleness_warn_months"]):
         problems.hard.append("staleness_warn_months debe ser un entero > 0")
-    problems.soft += _unknown_fields(data, MACRO_KEYS)
-    return problems.finding(K3, "updated_at y plazo en orden")
+    for key, value in data.items():
+        if key not in MACRO_TEXT_KEYS:
+            _macro_data_problems(value, str(key), False, problems)
+    countries = data.get("countries")
+    if countries is None:
+        countries = {}
+    if not isinstance(countries, dict):
+        problems.hard.append("countries no es un mapa {pais: bloque}")
+        countries = {}
+    for name, block in countries.items():
+        _country_problems(f"countries.{name}", block, problems)
+    for key in sorted(map(str, set(data) - MACRO_KEYS)):
+        if _looks_like_country(data[key]):
+            problems.soft.append(f"campo desconocido: {key} (parece un bloque por pais: va "
+                                 "bajo countries:, ver la migracion en templates/coverage-tree.md)")
+        else:
+            problems.soft.append(f"campo desconocido: {key}")
+    plural = "pais" if len(countries) == 1 else "paises"
+    return problems.finding(
+        K3, f"updated_at, plazo y datos {{value, source}} en orden ({len(countries)} {plural})")
+
+
+def _looks_like_country(value: object) -> bool:
+    """Un mapa de primer nivel que trae secciones de un bloque por pais: lo que
+    deja un workspace anterior a countries: (p. ej. ``mexico:`` suelto)."""
+    return isinstance(value, dict) and bool(
+        set(map(str, value)) & {"rates", "fx", "inflation", "gdp", "equity_risk_premium"})
+
+
+def _country_problems(path: str, block: object, problems: Problems) -> None:
+    """Un bloque de countries.<pais>: abierto, con as_of y los insumos del CAPM."""
+    if not isinstance(block, dict):
+        problems.hard.append(f"{path} no es un mapa de campos")
+        return
+    if "as_of" not in block:
+        problems.soft.append(f"{path} sin as_of")
+    elif _date_of(block["as_of"]) is None:
+        problems.hard.append(f"{path}.as_of sin fecha YYYY-MM-DD")
+    rates = block.get("rates")
+    if not isinstance(rates, dict) or _empty_datum(rates.get("risk_free_10y")):
+        problems.soft.append(f"{path} sin rates.risk_free_10y (insumo del CAPM)")
+    if _empty_datum(block.get("equity_risk_premium")):
+        problems.soft.append(f"{path} sin equity_risk_premium (insumo del CAPM)")
+    for key, value in block.items():
+        if key not in MACRO_TEXT_KEYS:
+            _macro_data_problems(value, f"{path}.{key}", False, problems)
+
+
+def _macro_data_problems(node: object, path: str, cited: bool, problems: Problems) -> None:
+    """Recorre una seccion del macro-view. Todo mapa con ``value`` es un dato:
+    ``value`` numerico y ``source`` propio o de un mapa que lo contiene (la cita
+    de un ERP cubre sus componentes; la de una ruta, sus puntos). ``value: null``
+    con source es un pendiente declarado: aviso. ``{}`` y ``[]`` no son datos."""
+    if isinstance(node, list):
+        for index, item in enumerate(node):
+            _macro_data_problems(item, f"{path}[{index}]", cited, problems)
+        return
+    if not isinstance(node, dict):
+        return
+    cited = cited or not _blank(node.get("source"))
+    if "value" in node:
+        value = node["value"]
+        if not cited:
+            problems.hard.append(f"{path} sin source")
+        elif value is None:
+            problems.soft.append(f"{path}: value pendiente (null)")
+        elif not _is_number(value):
+            problems.hard.append(f"{path} sin value numerico")
+    for key, child in node.items():
+        if key != "value":
+            _macro_data_problems(child, f"{path}.{key}", cited, problems)
 
 
 def _empty_datum(value: object) -> bool:

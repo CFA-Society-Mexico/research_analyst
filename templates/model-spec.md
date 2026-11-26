@@ -18,7 +18,7 @@ fórmula + valuación). Menos tabs, mejor; secciones colapsables en ambas.
 | 2 | `Checks` | Todos los checks de integridad, uno por fila, con estado | Solo fórmulas; ver integrity-checks.md |
 | 3 | `Operating` | **El operating model, trimestral puro** — secciones: Assumptions → IS → BS → CF → Ratios → Schedules | Ver §Operating. ÚNICA hoja con inputs (S6). Sin columnas FY |
 | 4 | `Annual` | **Agregados anuales + valuación** — misma estructura (sin Assumptions) + sección DCF | Ver §Annual. CERO números tecleados: fórmulas y links (C8/F14) |
-| 5 | `Macro` | Históricos observados de `macro/series/` (última obs + serie anual, con fuente y fecha) + valores de macro/macro-view.yaml | Sin inputs propios; yaml vacío = AVISO D6, la tab nunca queda muerta |
+| 5 | `Macro` | Históricos observados de `macro/series/` (última obs + serie anual, con fuente y fecha) + valores de macro/macro-view.yaml: los de primer nivel, o los del bloque `countries.<pais>` que el analista asignó a la emisora (moneda y mercado; se pregunta, jamás se asume). Cada celda cita su ruta (`countries.mexico.rates.risk_free_10y`) | Sin inputs propios; yaml vacío = AVISO D6, la tab nunca queda muerta |
 | — | `Rev_Reconcile` | Doble ruta de revenue: bottom-up (bloques Sch) vs top-down (Macro × industria × participación) | Divergencia > umbral → flag en error check |
 | — | `Val_Comps` | Múltiplos POR FÓRMULA desde comps/*.yaml; market cap = precio ÷ acciones por ADS × acciones × FX a la moneda de reporte; media armónica; justificados + PVGO | Staleness de snapshots flaggeada (D3); múltiplo fuera de rango marcado `REVISAR` (D12) |
 | — | `Val_<método>` | Solo métodos activos del perfil (DDM / FCFE / NAV_AFFO / SOTP) | RI: especificado, inactivo v1 |

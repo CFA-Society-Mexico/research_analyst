@@ -49,6 +49,9 @@ Gates de usuario en cada transición + protocolo de debate
    folders es información pública. Sin confirmación, no se procesa contenido.
 7. `<raiz>/macro/macro-view.yaml`: existe y `updated_at` dentro de `staleness_warn_months` —
    stale o vacío AVISA (no bloquea): las etapas que lo consumen quedan marcadas.
+   Emisora de otro país que el de primer nivel: preguntar al analista qué
+   bloque `countries.<pais>` usa; si no existe o K3 avisa que le falta rf o
+   ERP, AVISA y propone `/update-macro` para crearlo (no se inventa).
 
 ## Pipeline (cada paso cierra con su gate + debate + entrada en thesis-journal)
 

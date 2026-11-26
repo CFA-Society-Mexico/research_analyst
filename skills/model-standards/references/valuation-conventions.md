@@ -28,7 +28,8 @@ descuento → PV → terminales → EV → valor/acción → cruces → reverse 
 Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
 - FCFF derivado por fórmula desde el modelo (EBIT×(1−t) + D&A − CapEx − ΔWC), nunca
   re-tecleado.
-- WACC: componentes visibles — rf de `Macro` (macro-view), ERP de `Macro`, beta
+- WACC: componentes visibles — rf de `Macro` (macro-view: primer nivel o
+  `countries.<pais>.rates.risk_free_10y`), ERP de `Macro` (mismo bloque), beta
   (supuesto con fuente), costo de deuda, pesos a mercado. Cada uno etiquetado.
 - **Diagnóstico del horizonte** (lectura del check D4): si NINGUNA g
   económicamente sostenible — por debajo del crecimiento nominal de largo
