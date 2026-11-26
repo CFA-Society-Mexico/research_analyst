@@ -50,8 +50,8 @@ paso a paso; cada paso te manda al SKILL.md correspondiente.
 
 ## Contratos (templates/)
 
-`issuer-profile.yaml` (perfil por emisora) · `macro/macro-view.yaml` (house view
-compartido, nivel workspace, con sources/ e history/) · `comp-snapshot.yaml` (un comparable) ·
+`issuer-profile.yaml` (perfil por emisora) · `macro-view.yaml` (house view
+compartido; se instancia en `<raiz>/macro/`, con sources/ e history/) · `comp-snapshot.yaml` (un comparable) ·
 `driver-map` (formato en driver-inventory) · `model-spec.md` (estructura del xlsx) ·
 `coverage-tree.md` (árbol y naming) · `debate-protocol.md` (formato del journal).
 Cada artefacto tiene UNA skill dueña que lo escribe (está declarada en cada
@@ -65,7 +65,9 @@ SKILL.md); las demás solo leen.
   `python tools/sec_fetch.py <TICKER> --ua "<nombre correo>"` (EDGAR público,
   gratis; SIEMPRE con gate del usuario antes de descargar).
 - xlsx solo vía `tools/xlsx_builder.py` (skill xlsx-building) — nunca openpyxl
-  crudo para estructura/formato; audit de formato: `python tools/xlsx_builder.py audit <modelo>`.
+  crudo para estructura/formato; audit de formato: `python tools/xlsx_builder.py audit <modelo>`;
+  checks S + C10 + F en una corrida: `python tools/model_check.py <modelo>` (nunca
+  reimplementes un check S a mano).
 - Historia financiera masiva de emisoras SEC: `python tools/xbrl_fetch.py <TICKER>`
   (companyfacts XBRL — décadas de anuales y trimestrales sin parsear HTML).
 - Nada se borra en la carpeta de cobertura; retención mínima 7 años.

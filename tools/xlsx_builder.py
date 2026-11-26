@@ -731,7 +731,7 @@ def _is_header_row(ws: Worksheet, r: int) -> bool:
     return False
 
 
-# --- Deteccion de referencias circulares (check S11, sin Excel) ------------
+# --- Deteccion de referencias circulares (check F18, sin Excel) ------------
 
 _SHEET_REF = _re_mod.compile(
     r"(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_.]*))!"          # hoja opcional
@@ -792,7 +792,7 @@ def _formula_deps(formula: str, sheet: str,
 
 
 def _find_cycles(wb) -> list[str]:
-    """S11: ciclos reales en el grafo de fórmulas (DFS con pila).
+    """F18: ciclos reales en el grafo de fórmulas (DFS con pila).
 
     Detecta la circularidad estructural — rendimiento sobre saldo de la misma
     columna, interés sobre deuda de cierre — SIN necesitar Excel: es la causa
