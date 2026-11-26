@@ -132,7 +132,9 @@ class IntegrityCheckTests(unittest.TestCase):
     def test_documented_f_checks_are_exactly_the_implemented_ones(self) -> None:
         documented = {i for i in _CHECK_ROW.findall(CHECKS_DOC.read_text(encoding="utf-8"))
                       if i.startswith("F")}
-        source = BUILDER.read_text(encoding="utf-8")
+        # xlsx_builder.py es fachada: los Finding F se emiten en xlsx_audit.py
+        # (los hechos salen de xlsx_scan.py, que no arma Finding).
+        source = (BUILDER.parent / "xlsx_audit.py").read_text(encoding="utf-8")
         implemented = set(_FINDING_ID.findall(source))
         # F20 (cobertura del audit) se emite con el ID armado en tiempo de corrida.
         implemented |= {i for i in documented if f'"{i} ' in source or f"'{i} " in source}

@@ -6,8 +6,9 @@ description: Construcción determinista del xlsx del plugin — TODO workbook se
 # xlsx-building
 
 Capa determinista de construcción. Regla única: **ningún workbook del plugin se
-escribe sin `tools/xlsx_builder.py`**. El módulo es la implementación; esta
-skill es el procedimiento; los checks F son la verificación. Prosa no construye
+escribe sin `tools/xlsx_builder.py`** (fachada sobre `tools/xlsx_*.py`). El
+módulo es la implementación; esta skill es el procedimiento; los checks F son
+la verificación. Prosa no construye
 formato — código sí (lección del smoke test AAPL 2026-08-30: el agente tenía
 las best practices escritas y entregó Calibri con gridlines).
 
@@ -179,7 +180,8 @@ reconstruirlo, el orden es fijo:
   "<plugin>/tools")` + `import xlsx_builder`, o por ruta con
   `importlib.util.spec_from_file_location` + `exec_module` — ambas funcionan
   sin registrar el módulo en `sys.modules` (antes la carga por ruta rompía las
-  dataclasses).
+  dataclasses). Importa siempre la fachada `xlsx_builder`, nunca un
+  `xlsx_*` suelto; los `xlsx_*.py` deben vivir junto a ella en `tools/`.
 - **Para INSERTAR o BORRAR filas usa Excel COM, jamás openpyxl.** COM ajusta
   todas las fórmulas del libro al desplazar; openpyxl no ajusta nada y deja
   cientos de referencias apuntando a la fila equivocada — corrupción
@@ -191,14 +193,18 @@ reconstruirlo, el orden es fijo:
 
 - No decide contenido ni supuestos (eso es driver-inventory / el analista).
 - No inventa estilos: si necesitas un formato que no está en la whitelist, la
-  respuesta es proponer extender `xlsx_builder.py` + checks F con el usuario —
+  respuesta es proponer extender el contrato (`tools/xlsx_contract.py`) + checks F
+  (`tools/xlsx_audit.py`) con el usuario —
   no aplicarlo ad hoc.
 - No toca modelos externos sin instrucción (audit sí — es solo lectura).
 
 ## Referencias
 
-- `tools/xlsx_builder.py` — implementación única (paleta, NumFmt, roles, audit F,
-  bloques de valuación).
+- `tools/xlsx_builder.py` — implementación única: la fachada que se importa y el
+  CLI (`audit`, `demo`). El código vive en `tools/xlsx_contract.py` (paleta,
+  NumFmt, roles), `tools/xlsx_formulas.py` (lint F21, fórmulas de valuación),
+  `tools/xlsx_styler.py` (`ModelStyler`, bloques de valuación, Ratios),
+  `tools/xlsx_scan.py` (lectores del libro) y `tools/xlsx_audit.py` (checks F).
 - `tools/recalc_validate.py` — recálculo con Excel/LibreOffice y checks R.
 - `skills/model-standards/references/excel-practices.md` — el contrato legible.
 - `skills/model-standards/references/integrity-checks.md` — checks F en la lista.

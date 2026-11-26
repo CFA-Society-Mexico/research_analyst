@@ -1,0 +1,23 @@
+[ok] F1 gridlines off: todas ok
+[ok] F20 cobertura del audit: todo dentro de 5000 filas x 400 columnas
+[ok] F2 fuente estandar: Aptos Narrow
+[ok] F3 colores de fuente: whitelist ok
+[ok] F4 paleta de fills: whitelist ok
+[ok] F5 formatos numericos: whitelist ok
+[ok] F6 freeze panes: ok
+[ok] F7 outline por seccion: 56 filas agrupadas
+[ok] F8 sin hojas basura/Sch_*: ok
+[ok] F9 headers de periodo A/E: presentes
+[ok] F10 sello del builder: research_analyst_builder=xlsx_builder v1;periodicity=quarterly
+[ok] F11 continuidad de series: filas de input completas en todo el horizonte
+[ok] F12 sin series partidas: ninguna fila hist/forecast partida
+[ok] F15 series sin huecos: sin huecos en filas de serie
+[ok] F16 respiro antes de headers: headers con fila en blanco previa
+[ok] F17 forecast completo: todo el tramo forecast con formula
+[ok] F13 Ratios completa y unica: 25 razones con formula, sin duplicados
+[ok] F14 modelo trimestral-nativo: Operating: 8 A / 8 E; Annual limpio
+[ok] F19 roll de caja cerrado: n/a (sin filas de roll identificables)
+[ok] F18 sin referencias circulares: grafo de formulas aciclico
+[ok] F21 formulas aceptables para Excel: aridad, parentesis, prefijos y arreglos ok
+[ok] Checks vivos (tabs Checks y Cover): n/a (tabs Checks y Cover sin formulas vivas)
+Resumen F: 22 ok, 0 fallas, 0 pendientes, 0 avisos

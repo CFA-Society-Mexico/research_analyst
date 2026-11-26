@@ -35,6 +35,9 @@ skills/*/SKILL.md    unidades de conocimiento: una skill hace UNA cosa y no llam
 skills/*/references/ material largo que la skill carga bajo demanda (checks, mapeo normativo).
 templates/           CONTRATOS entre skills (yaml y specs). Cambiarlos rompe consumidores: ver 4.4.
 tools/*.py           lo determinista: descarga de datos y construcción/audit del xlsx.
+  xlsx_builder.py    fachada del xlsx (import y CLI) sobre xlsx_contract (paleta, NumFmt,
+                     roles), xlsx_formulas (lint F21, fórmulas de valuación), xlsx_styler
+                     (ModelStyler), xlsx_scan (lectores del libro) y xlsx_audit (checks F).
 docs/architecture.md el porqué del diseño.
 AGENTS.md            router para runtimes sin skills nativas (Cursor, Codex).
 ```
@@ -94,7 +97,7 @@ Es la contribución más valiosa y la más regulada. Cuatro familias:
 | **S** (estructurales) | `tools/model_check.py` (`audit_structure`) | debe ser detectable sin abrir Excel |
 | **C** (contables) | fórmulas en la tab `Checks` del modelo; los de escaneo (C9, C10, C11) en `tools/model_check.py` | la fórmula la escribe el builder, no el analista |
 | **D** (doctrina) | reglas del plugin (drivers, staleness, reconciliación) | avisa o bloquea: declara cuál de los dos |
-| **F** (formato) | `tools/xlsx_builder.py audit` | debe fallar en un libro malo y pasar en el `demo` |
+| **F** (formato) | `tools/xlsx_builder.py audit` (código en `tools/xlsx_audit.py`) | debe fallar en un libro malo y pasar en el `demo` |
 
 Un check nuevo llega completo o no llega:
 
@@ -134,6 +137,14 @@ reasigna su número.
 - **El xlsx solo se escribe vía `ModelStyler` de `tools/xlsx_builder.py`.**
   openpyxl crudo para estructura o formato es rechazo automático: el formato es
   código, no criterio.
+- **`xlsx_builder.py` es fachada; el código vive en `tools/xlsx_*.py`.** Un
+  nombre nuevo va al módulo de su responsabilidad (mapa en el docstring de la
+  fachada) y la fachada lo re-exporta sola. Los scripts de cobertura importan
+  siempre `xlsx_builder`, y un módulo `xlsx_*` jamás importa la fachada.
+  `tests/test_xlsx_builder_split.py` congela la API y compara el `demo` celda
+  por celda contra `tests/fixtures/demo_reference.xlsx`: si cambias el demo a
+  propósito, regenera con `python tests/test_xlsx_builder_split.py --regenerate`
+  y revisa el diff.
 
 ### 4.4 Cambiar un template (`templates/*`)
 
