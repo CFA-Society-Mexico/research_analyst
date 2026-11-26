@@ -679,3 +679,227 @@ def unbound_numbers(doc: DeckDocument, years: set[int]) -> list[tuple[int, str, 
             for number in loose_numbers(part, years):
                 hits.append((block.slide, number, block.text[:60]))
     return hits
+
+
+# ---------------------------------------------------------------------------
+# El deck: anatomia de lamina y render
+# ---------------------------------------------------------------------------
+
+SLIDE_W, SLIDE_H = 1280, 720
+DEFAULT_LEGAL = ("Documento con fines informativos. No constituye una recomendación de "
+                 "inversión ni una oferta. Los supuestos y las conclusiones son del "
+                 "analista que lo firma; las cifras proyectadas pueden no cumplirse.")
+_AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
+_TICKER = re.compile(r"[A-Za-z0-9.\-]+")
+
+_CSS = """
+*{box-sizing:border-box}
+html{background:#D9DCE1}
+body{margin:0;font-family:%(body)s,Arial,sans-serif;color:%(text)s}
+.slide{position:relative;width:1280px;height:720px;margin:24px auto;padding:%(m)spx;
+ background:%(bg)s;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.25)}
+.slide h1,.slide h2{font-family:%(head)s,Georgia,serif;margin:0;color:%(text)s}
+.slide h1{font-size:52px;line-height:1.1}
+.slide h2{font-size:30px;line-height:1.2}
+.lede{font-size:18px;line-height:1.4;margin:10px 0 0;color:%(muted)s}
+.body{margin-top:18px}
+.visual svg{display:block;width:100%%;height:auto}
+.note{margin-top:14px;padding:12px 16px;border-left:4px solid %(s1)s;background:rgba(0,0,0,.035);
+ font-size:15px;line-height:1.45}
+.note b{display:block;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:%(s1)s}
+.note p{margin:4px 0 0}
+.slide footer{position:absolute;left:%(m)spx;right:%(m)spx;bottom:%(fb)spx}
+.takeaway{font-size:16px;font-weight:bold;margin:0 0 8px;padding-top:10px;border-top:1px solid %(muted)s}
+.source{font-size:11px;color:%(muted)s;margin:0;padding-right:60px}
+.page{position:absolute;right:0;bottom:0;font-size:11px;color:%(muted)s}
+.cover,.act,.legal{display:flex;flex-direction:column;justify-content:center}
+.cover .sub{font-size:22px;color:%(muted)s;margin:14px 0 0}
+.cover .asof{font-size:14px;color:%(muted)s;margin:28px 0 0}
+.cover .logo{position:absolute;right:%(m)spx;top:%(m)spx;max-height:56px}
+.figs{display:flex;gap:40px;margin-top:40px}
+.figs div{border-top:3px solid %(s1)s;padding-top:10px;min-width:180px}
+.figs b{display:block;font-size:34px;font-family:%(head)s,Georgia,serif}
+.figs span.lbl{font-size:13px;color:%(muted)s}
+.act .num{font-size:96px;font-family:%(head)s,Georgia,serif;color:%(s1)s;line-height:1}
+.act .q{font-size:20px;color:%(muted)s;margin:12px 0 0}
+.legal p{font-size:14px;line-height:1.5;color:%(muted)s;max-width:900px}
+svg text{font-family:%(body)s,Arial,sans-serif;font-size:13px;fill:%(text)s}
+svg text.auto{fill:%(muted)s;font-size:12px}
+svg text.val{font-weight:bold}
+table.grid{border-collapse:collapse;width:100%%;font-size:14px}
+table.grid th,table.grid td{padding:7px 10px;text-align:right;border-bottom:1px solid rgba(0,0,0,.12)}
+table.grid th:first-child,table.grid td:first-child{text-align:left}
+table.grid th{font-size:12px;color:%(muted)s}
+table.grid td.hl{outline:2px solid %(text)s;font-weight:bold}
+html.shot{background:%(bg)s}
+html.shot .slide{margin:0;box-shadow:none}
+@page{size:1280px 720px;margin:0}
+@media print{html{background:none}.slide{margin:0;box-shadow:none;break-after:page}}
+"""
+
+# Mide cada lamina de contenido y deja el resultado en <html data-measure>.
+# Con ?shot=N muestra solo la lamina N, pegada al origen (capturas).
+_MEASURE_JS = """
+(function(){
+var slides=[].slice.call(document.querySelectorAll('section.slide'));
+var shot=new URLSearchParams(location.search).get('shot');
+if(shot!==null){
+ document.documentElement.classList.add('shot');
+ slides.forEach(function(s,i){if(String(i+1)!==shot){s.style.display='none';}});
+ return;}
+function clip(t){return (t||'').replace(/\\s+/g,' ').trim().slice(0,40);}
+var out=slides.map(function(s){
+ var kind=s.getAttribute('data-kind'),r={n:Number(s.getAttribute('data-n')),kind:kind};
+ if(kind!=='content'&&kind!=='raw'){return r;}
+ var body=s.querySelector('.body'),foot=s.querySelector('footer'),vis=s.querySelector('.visual');
+ var sr=s.getBoundingClientRect(),pad=parseFloat(getComputedStyle(s).paddingLeft)||0;
+ r.gap=foot.getBoundingClientRect().top-body.getBoundingClientRect().bottom;
+ r.visual_h=vis?vis.getBoundingClientRect().height:null;
+ r.overflow=[];r.svg_out=[];
+ [].forEach.call(s.querySelectorAll('header *,.body *'),function(el){
+  if(el.closest('svg')){return;}
+  var b=el.getBoundingClientRect();
+  if(b.width===0){return;}
+  if(b.right>sr.right-pad+1||b.left<sr.left+pad-1||el.scrollWidth>el.clientWidth+1){
+   r.overflow.push(el.tagName.toLowerCase()+': '+clip(el.textContent));}});
+ [].forEach.call(s.querySelectorAll('svg'),function(svg){
+  var b=svg.getBoundingClientRect();
+  [].forEach.call(svg.querySelectorAll('text'),function(t){
+   var q=t.getBoundingClientRect();
+   if(q.left<b.left-1||q.right>b.right+1||q.top<b.top-1||q.bottom>b.bottom+1){
+    r.svg_out.push(clip(t.textContent));}});});
+ return r;});
+document.documentElement.setAttribute('data-measure',JSON.stringify(out));
+})();
+"""
+
+
+class Deck:
+    """Un deck de cobertura. El script pide numeros aqui y arma las laminas."""
+
+    def __init__(self, root: Path, model: str, ticker: str, as_of: str,
+                 facts: Optional[str] = None, design: Optional[str] = None) -> None:
+        if not _AS_OF.fullmatch(as_of):
+            raise DeckError(f"as_of debe ser YYYY-MM-DD, no {_ascii(as_of)!r}")
+        if not _TICKER.fullmatch(ticker):
+            raise DeckError(f"ticker invalido: {_ascii(ticker)!r}")
+        self.root = Path(root)
+        self.ticker = ticker
+        self.as_of = as_of
+        self.book = ModelBook(self.root / model)
+        self.facts = load_facts(self.root / facts, self.root) if facts else {}
+        self.design = load_design(self.root / design if design else None, self.root)
+        self._weak = weak_series(self.design)
+        self._slides: list[tuple[str, str]] = []   # (tipo, html con marcadores)
+        self._acts = 0
+
+    # -- numeros ------------------------------------------------------------
+
+    def series(self, sheet: str, label: str, section: Optional[str] = None) -> Series:
+        return self.book.series(sheet, label, section)
+
+    def cell(self, sheet: str, label: str, column: Optional[str] = None,
+             section: Optional[str] = None) -> Num:
+        return self.book.cell(sheet, label, column, section)
+
+    def range(self, sheet: str, ref: str) -> list[list[Num]]:
+        return self.book.range(sheet, ref)
+
+    def fact(self, key: str) -> Num:
+        if key not in self.facts:
+            raise DeckError(f"hecho '{_ascii(key)}' no esta en el registro de hechos")
+        return Num(self.facts[key].value, f"fact:{key}")
+
+    # -- laminas ------------------------------------------------------------
+
+    def cover(self, title: str, subtitle: str = "",
+              figures: Sequence[tuple[str, str]] = ()) -> None:
+        logo = f'<img class="logo" src="{self.design.logo}" alt=""/>' if self.design.logo else ""
+        figs = "".join(f'<div><b>{_esc(value)}</b><span class="lbl">{_esc(label)}</span></div>'
+                       for label, value in figures)
+        self._slides.append(("cover", (
+            f"{logo}<h1>{_esc(title)}</h1>"
+            + (f'<p class="sub">{_esc(subtitle)}</p>' if subtitle else "")
+            + (f'<div class="figs">{figs}</div>' if figs else "")
+            + f'<p class="asof auto">{self.ticker} · {self.as_of}</p>')))
+
+    def section(self, title: str, question: str = "") -> None:
+        self._acts += 1
+        self._slides.append(("act", (
+            f'<div class="num auto">{self._acts:02d}</div><h1>{_esc(title)}</h1>'
+            + (f'<p class="q">{_esc(question)}</p>' if question else ""))))
+
+    def slide(self, title: str, lede: str, visual: str, note: str, source: str,
+              takeaway: str = "") -> None:
+        for name, value in (("title", title), ("visual", visual), ("note", note),
+                            ("source", source)):
+            if not value.strip():
+                raise DeckError(f"slide '{_ascii(title)[:40]}': falta {name}")
+        self._slides.append(("content", (
+            f"<header><h2>{_esc(title)}</h2>"
+            + (f'<p class="lede">{_esc(lede)}</p>' if lede else "") + "</header>"
+            f'<div class="body"><div class="visual">{visual}</div>'
+            f'<aside class="note"><b>Nota</b><p>{_esc(note)}</p></aside></div>'
+            + self._footer(source, takeaway))))
+
+    def raw(self, content: str, source: str, takeaway: str = "") -> None:
+        """Lamina a medida: HTML/SVG propio. Pasa por bloqueo y medicion."""
+        if not source.strip():
+            raise DeckError("raw: falta source")
+        self._slides.append(("raw", f'<div class="body">{content}</div>'
+                             + self._footer(source, takeaway)))
+
+    def legal(self, text: str = DEFAULT_LEGAL) -> None:
+        self._slides.append(("legal", f"<p>{_esc(text)}</p>"))
+
+    def _footer(self, source: str, takeaway: str) -> str:
+        return ("<footer>"
+                + (f'<p class="takeaway">{_esc(takeaway)}</p>' if takeaway else "")
+                + f'<p class="source">{_esc(source)}</p></footer>')
+
+    # -- salida -------------------------------------------------------------
+
+    @property
+    def output_path(self) -> Path:
+        return (self.root / "research" / "notes"
+                / f"{self.ticker.lower()}-deck_{self.as_of}.html")
+
+    def render(self) -> str:
+        if not self._slides:
+            raise DeckError("el deck no tiene laminas")
+        d = self.design
+        css = _CSS % {"body": d.font_body, "head": d.font_heading, "text": d.text,
+                      "muted": d.muted, "bg": d.background, "s1": d.series[0],
+                      "m": d.margin, "fb": max(d.margin - 24, 16)}
+        sections = []
+        for number, (kind, content) in enumerate(self._slides, start=1):
+            page = (f'<span class="page auto">{number}</span>'
+                    if kind in ("content", "raw") else "")
+            content = content.replace("</footer>", page + "</footer>")
+            sections.append(f'<section class="slide {kind}" data-n="{number}" '
+                            f'data-kind="{kind}">{content}</section>')
+        document = (
+            '<!doctype html>\n<html lang="es" '
+            f'data-gap-max="{d.gap_max}" data-as-of="{self.as_of}">\n<head>\n'
+            '<meta charset="utf-8"/>\n'
+            f"<title>{html.escape(self.ticker)} · {self.as_of}</title>\n"
+            f"<style>{css}</style>\n</head>\n<body>\n"
+            + "\n".join(sections)
+            + f"\n<script>{_MEASURE_JS}</script>\n</body>\n</html>\n")
+        return render_markers(document)
+
+    def build(self) -> Path:
+        """Escribe el deck. Un numero sin origen lo impide (regla de bloqueo)."""
+        document = self.render()
+        loose = unbound_numbers(read_deck(document), self.book.axis_years())
+        if loose:
+            lines = [f"  lamina {slide}: {_ascii(number)!r} en '{_ascii(context)}'"
+                     for slide, number, context in loose[:20]]
+            more = f"\n  (+{len(loose) - 20} mas)" if len(loose) > 20 else ""
+            raise DeckError(
+                f"{len(loose)} numero(s) sin origen; usa deck.series/cell/fact o lit():\n"
+                + "\n".join(lines) + more)
+        out = self.output_path
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(document, encoding="utf-8", newline="\n")
+        return out

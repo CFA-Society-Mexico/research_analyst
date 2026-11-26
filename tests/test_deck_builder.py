@@ -384,3 +384,81 @@ class ScanTests(unittest.TestCase):
         self.assertEqual([(s, n_) for s, n_, _ in D.unbound_numbers(doc, set())],
                          [(3, "99"), (3, "77")])
         self.assertEqual(doc.blocks[0].text, "Crece 38% y vale 99")
+
+
+class DeckTests(_Case):
+
+    def _minimal(self, deck: D.Deck, title: str = "Ventas al alza") -> None:
+        rev = deck.series("Annual", "Ingresos")
+        deck.cover("Emisora X", "Inicio de cobertura")
+        deck.section("Crecimiento", "Que la mueve")
+        deck.slide(title=title, lede="Entradilla.", visual="<p>visual</p>",
+                   note=f"Las ventas llegan a {rev[2027]:,.0f}.", source="Fuente: modelo.",
+                   takeaway="Cierre.")
+        deck.legal()
+
+    def test_build_writes_the_dated_file_under_research_notes(self) -> None:
+        deck = self.deck()
+        self._minimal(deck)
+        out = deck.build()
+        self.assertEqual(out, self.root / "research" / "notes" / f"x-deck_{AS_OF}.html")
+        text = out.read_text(encoding="utf-8")
+        self.assertIn('data-gap-max="90"', text)
+        self.assertIn('<section class="slide content" data-n="3" data-kind="content">', text)
+        self.assertIn('<span class="n" data-src="Annual!H6" data-fmt=",.0f">240</span>', text)
+        self.assertIn('<div class="num auto">01</div>', text)
+        self.assertIn("data-measure", text)
+
+    def test_same_input_gives_the_same_bytes(self) -> None:
+        outputs = []
+        for _ in range(2):
+            deck = self.deck()
+            self._minimal(deck)
+            outputs.append(deck.build().read_bytes())
+        self.assertEqual(outputs[0], outputs[1])
+
+    def test_loose_number_blocks_the_build(self) -> None:
+        deck = self.deck()
+        self._minimal(deck, title="Ventas crecen 38%")
+        with self.assertRaisesRegex(D.DeckError, r"1 numero\(s\) sin origen") as caught:
+            deck.build()
+        self.assertIn("lamina 3: '38%'", str(caught.exception))
+        self.assertFalse(deck.output_path.exists())
+
+    def test_loose_number_inside_custom_svg_blocks_too(self) -> None:
+        deck = self.deck()
+        deck.raw("<svg viewBox='0 0 10 10'><text>72.5</text></svg>", source="Fuente: propia.")
+        with self.assertRaisesRegex(D.DeckError, "sin origen"):
+            deck.build()
+
+    def test_lit_fact_and_axis_years_pass(self) -> None:
+        deck = self.deck()
+        deck.raw(f"<p>En 2027, {D.lit('3', why='condiciones de la tesis')} condiciones y "
+                 f"{deck.fact('share'):.1f}% del mercado.</p>", source="Fuente: 20-F 2019, p. 4.")
+        text = deck.build().read_text(encoding="utf-8")
+        self.assertIn('data-src="fact:share"', text)
+
+    def test_content_slide_requires_note_and_source(self) -> None:
+        deck = self.deck()
+        with self.assertRaisesRegex(D.DeckError, "falta note"):
+            deck.slide(title="T", lede="", visual="<p>v</p>", note=" ", source="Fuente: x.")
+        with self.assertRaisesRegex(D.DeckError, "falta source"):
+            deck.slide(title="T", lede="", visual="<p>v</p>", note="Nota.", source="")
+        with self.assertRaisesRegex(D.DeckError, "raw: falta source"):
+            deck.raw("<p>x</p>", source="")
+
+    def test_text_fields_are_escaped(self) -> None:
+        deck = self.deck()
+        deck.slide(title="A & B <c>", lede="", visual="<p>v</p>", note="Nota.",
+                   source="Fuente: x.")
+        self.assertIn("<h2>A &amp; B &lt;c&gt;</h2>", deck.render())
+
+    def test_constructor_validates_its_arguments(self) -> None:
+        with self.assertRaisesRegex(D.DeckError, "as_of debe ser"):
+            self.deck(as_of="26/11/2026")
+        with self.assertRaisesRegex(D.DeckError, "ticker invalido"):
+            self.deck(ticker="X Y")
+        with self.assertRaisesRegex(D.DeckError, "no esta en el registro"):
+            self.deck().fact("nope")
+        with self.assertRaisesRegex(D.DeckError, "no tiene laminas"):
+            self.deck().build()
