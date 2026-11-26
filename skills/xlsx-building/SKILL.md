@@ -65,7 +65,12 @@ las best practices escritas y entregó Calibri con gridlines).
    Toda fila con histórico OBSERVADO se vincula a su línea de la capa de
    captura: `styler.link_capture(ws, fila, "bs_ap", scale=1_000_000)`
    (`valor_csv = valor_xlsx × scale`; el histórico va sin redondear). Sin
-   vínculo, C9 trata sus cifras como no respaldadas.
+   vínculo, C9 trata sus cifras como no respaldadas. Dos reglas del vínculo:
+   (a) ventas totales (`is_ns_total`) y activos totales (`bs_ta`) se vinculan
+   SIEMPRE, aunque sus filas sean fórmulas: declaran la unidad monetaria con
+   la que C9 mide una cifra sin respaldo; (b) una línea respalda UNA fila por
+   hoja — si la misma cifra aparece dos veces (caja del balance y cierre del
+   flujo), una fila la teclea y la otra la lee por fórmula.
 3b. **Año de transición** (modo `annual`, primer año del forecast con
    trimestres ya observados): `set_transition_year(<año>)` una vez y
    `series_row(..., transition_first="=<ancla>")` en las series ancladas
