@@ -245,3 +245,45 @@ class ModelBookTests(_Case):
             self.book.cell("Nope", "WACC")
         with self.assertRaisesRegex(D.DeckError, "no existe el modelo"):
             D.ModelBook(self.root / "model" / "otro.xlsx")
+
+
+class FactsTests(_Case):
+
+    def _load(self, facts: list[dict[str, object]]) -> dict[str, D.Fact]:
+        path = self.root / FACTS_REL
+        path.write_text(json.dumps({"facts": facts}), encoding="utf-8")
+        return D.load_facts(path, self.root)
+
+    def test_text_source_with_the_quote_is_verified(self) -> None:
+        facts = D.load_facts(self.root / FACTS_REL, self.root)
+        self.assertEqual(facts["share"].value, 31.5)
+        self.assertFalse(facts["share"].manual)
+
+    def test_non_text_source_is_accepted_as_manual(self) -> None:
+        self.assertTrue(D.load_facts(self.root / FACTS_REL, self.root)["plants"].manual)
+
+    def test_quote_absent_from_a_text_source_is_an_error(self) -> None:
+        with self.assertRaisesRegex(D.DeckError, "no aparece en"):
+            self._load([_fact("share", 72.5, REPORT_REL, "72.5%")])
+
+    def test_missing_document_is_an_error(self) -> None:
+        with self.assertRaisesRegex(D.DeckError, "no existe el documento"):
+            self._load([_fact("share", 31.5, "research/industry/nope.md", "31.5%")])
+
+    def test_schema_violations_are_errors(self) -> None:
+        bad_tag = _fact("share", 31.5, REPORT_REL, "31.5%", tag="supuesto")
+        no_locator = dict(_fact("share", 31.5, REPORT_REL, "31.5%"), locator="")
+        text_value = dict(_fact("share", 31.5, REPORT_REL, "31.5%"), value="31.5")
+        ok = _fact("share", 31.5, REPORT_REL, "31.5%")
+        for facts, message in (([bad_tag], "tag debe ser"), ([no_locator], "faltan campos"),
+                               ([text_value], "value debe ser un numero"),
+                               ([ok, ok], "duplicado"),
+                               ([dict(ok, key="a b")], "la clave solo admite")):
+            with self.subTest(message=message), self.assertRaisesRegex(D.DeckError, message):
+                self._load(facts)
+
+    def test_unreadable_file_is_a_deck_error(self) -> None:
+        path = self.root / FACTS_REL
+        path.write_text("{no es json", encoding="utf-8")
+        with self.assertRaisesRegex(D.DeckError, "hechos ilegibles"):
+            D.load_facts(path, self.root)

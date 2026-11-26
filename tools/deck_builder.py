@@ -351,3 +351,57 @@ class ModelBook:
     def axis_years(self) -> set[int]:
         """Anios presentes en algun encabezado de periodos del libro."""
         return {p.year for ws in self._values.worksheets for p in M._period_axis(ws)}
+
+
+# ---------------------------------------------------------------------------
+# Hechos externos citados
+# ---------------------------------------------------------------------------
+
+FACT_TAGS = ("observado", "guidance")
+TEXT_SOURCES = frozenset({".md", ".txt", ".html", ".htm", ".csv", ".json"})
+_FACT_KEY = re.compile(r"[A-Za-z0-9_.\-]+")
+
+
+@dataclass(frozen=True)
+class Fact:
+    key: str
+    value: float
+    unit: str
+    tag: str
+    doc: str
+    locator: str
+    quote: str
+    manual: bool   # True: la fuente no es texto; la cita se verifica a mano
+
+
+def load_facts(path: Path, root: Path) -> dict[str, Fact]:
+    """Lee y valida el registro de hechos. ``root`` = carpeta de la cobertura."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DeckError(f"hechos ilegibles ({_ascii(path)}): {_ascii(exc)}") from exc
+    facts: dict[str, Fact] = {}
+    for raw in payload.get("facts", []):
+        missing = [k for k in ("key", "value", "unit", "tag", "doc", "locator", "quote")
+                   if k not in raw or raw[k] in ("", None)]
+        key = str(raw.get("key", "?"))
+        if missing:
+            raise DeckError(f"hecho '{_ascii(key)}': faltan campos {missing}")
+        if not _FACT_KEY.fullmatch(key):
+            raise DeckError(f"hecho '{_ascii(key)}': la clave solo admite letras, digitos, _ . -")
+        if key in facts:
+            raise DeckError(f"hecho '{_ascii(key)}' duplicado")
+        if raw["tag"] not in FACT_TAGS:
+            raise DeckError(f"hecho '{_ascii(key)}': tag debe ser uno de {FACT_TAGS}")
+        if isinstance(raw["value"], bool) or not isinstance(raw["value"], (int, float)):
+            raise DeckError(f"hecho '{_ascii(key)}': value debe ser un numero")
+        doc = root / raw["doc"]
+        if not doc.is_file():
+            raise DeckError(f"hecho '{_ascii(key)}': no existe el documento {_ascii(raw['doc'])}")
+        manual = doc.suffix.lower() not in TEXT_SOURCES
+        if not manual and raw["quote"] not in doc.read_text(encoding="utf-8", errors="replace"):
+            raise DeckError(f"hecho '{_ascii(key)}': la cita {_ascii(raw['quote'])!r} no "
+                            f"aparece en {_ascii(raw['doc'])}")
+        facts[key] = Fact(key, float(raw["value"]), str(raw["unit"]), raw["tag"],
+                          raw["doc"], str(raw["locator"]), str(raw["quote"]), manual)
+    return facts
