@@ -10,6 +10,7 @@ Correr: python -m unittest discover -s tests -v
 from __future__ import annotations
 
 import contextlib
+import csv
 import io
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from typing import Callable
 
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.workbook.workbook import Workbook
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -266,6 +268,83 @@ class CashRollFormulaTests(unittest.TestCase):
         (finding,) = M.audit_cash_roll_formulas(path)
         self.assertFalse(finding.ok)
         self.assertIn("caja del balance", finding.detail)
+
+
+class CaptureLayerTests(unittest.TestCase):
+    """Lectura de la capa de captura: vinculos del libro, CSV y umbral."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def _csv(self, text: str) -> Path:
+        path = self.dir / "canonical_quarterly.csv"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_links_are_read_in_builder_and_excel_reference_forms(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Operating")
+        styler.link_capture(ws, 91, "bs_ap", scale=1_000_000)
+        # Excel reescribe la referencia sin comillas al guardar.
+        ws.defined_names.add(DefinedName("CAPTURE.bs_ta", attr_text="Operating!$27:$27",
+                                         comment="scale=1000000"))
+        ws.defined_names.add(DefinedName("OTRO_NOMBRE", attr_text="Operating!$5:$5"))
+        self.assertEqual(M.capture_links(ws),
+                         {91: M.CaptureLink("bs_ap", 1_000_000.0),
+                          27: M.CaptureLink("bs_ta", 1_000_000.0)})
+
+    def test_link_without_scale_is_a_capture_error(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Operating")
+        ws.defined_names.add(DefinedName("CAPTURE.bs_ap", attr_text="Operating!$91:$91"))
+        with self.assertRaises(M.CaptureError) as caught:
+            M.capture_links(ws)
+        self.assertIn("CAPTURE.bs_ap", str(caught.exception))
+
+    def test_capture_values_are_keyed_by_line_and_period(self) -> None:
+        path = self._csv("line_item,period,value,source_doc,source_ref,tag\n"
+                         "bs_ap,3Q2016,26318000000.0,10-Q,\"XBRL, filed 2016-07-27\",observado\n"
+                         "is_ni,4Q2016,9014000000,10-K,FY menos 3Q,derivado\n"
+                         "is_ns_total,1Q2027,95000000000,call,p.3,guidance\n")
+        self.assertEqual(M.load_capture(path),
+                         {("bs_ap", "3Q2016"): 26318000000.0,
+                          ("is_ni", "4Q2016"): 9014000000.0})   # guidance no respalda
+
+    def test_capture_without_a_required_column_is_a_capture_error(self) -> None:
+        path = self._csv("line_item,period,value\nbs_ap,3Q2016,1\n")
+        with self.assertRaises(M.CaptureError) as caught:
+            M.load_capture(path)
+        self.assertIn("faltan columnas tag", str(caught.exception))
+
+    def test_non_numeric_capture_value_names_file_and_line(self) -> None:
+        for bad in ("abc", "", "nan"):
+            with self.subTest(value=bad):
+                path = self._csv("line_item,period,value,tag\n"
+                                 "bs_ap,3Q2016,1,observado\n"
+                                 f"bs_ar,3Q2016,{bad},observado\n")
+                with self.assertRaises(M.CaptureError) as caught:
+                    M.load_capture(path)
+                self.assertIn("canonical_quarterly.csv linea 3", str(caught.exception))
+
+    def test_threshold_comes_from_the_profile_or_the_default(self) -> None:
+        profile = self.dir / "issuer-profile.yaml"
+        profile.write_text("materiality:\n"
+                           "  critical_pct_target_price: 10\n"
+                           "  capture_unlinked_pct: 2.5   # C9\n", encoding="utf-8")
+        self.assertEqual(M.materiality_pct_from_profile(profile), (2.5, "perfil"))
+        profile.write_text("materiality:\n  critical_pct_target_price: 10\n", encoding="utf-8")
+        self.assertEqual(M.materiality_pct_from_profile(profile), (0.5, "default"))
+        self.assertEqual(M.materiality_pct_from_profile(self.dir / "no-existe.yaml"),
+                         (0.5, "default"))
+        self.assertEqual(M.materiality_pct_from_profile(None), (0.5, "default"))
+
+    def test_period_axis_reports_the_header_row(self) -> None:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Model")
+        styler.period_header(ws, 3, 3, B.PeriodHeader(2020, 2025, 2022))
+        self.assertEqual({period.row for period in M._period_axis(ws)}, {3})
 
 
 class DriverMapTests(unittest.TestCase):

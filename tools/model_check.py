@@ -34,10 +34,12 @@ Consola ASCII-only.
 from __future__ import annotations
 
 import argparse
+import csv
+import math
 import re
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Sequence
 
@@ -109,6 +111,7 @@ class PeriodColumn:
     actual: bool
     year: int
     quarter: int | None
+    row: int = 0
 
 
 @dataclass(frozen=True)
@@ -198,12 +201,12 @@ def _period_axis(ws: Worksheet) -> list[PeriodColumn]:
             if cell.number_format in (B.NumFmt.YEAR_A.value, B.NumFmt.YEAR_E.value):
                 if isinstance(value, (int, float)):
                     axis.append(PeriodColumn(cell.column, cell.number_format == B.NumFmt.YEAR_A.value,
-                                             int(value), None))
+                                             int(value), None, cell.row))
             elif isinstance(value, str):
                 match = re.fullmatch(r"([1-4])Q(20\d\d)([AE])", value.strip())
                 if match:
                     axis.append(PeriodColumn(cell.column, match.group(3) == "A",
-                                             int(match.group(2)), int(match.group(1))))
+                                             int(match.group(2)), int(match.group(1)), cell.row))
         if len(axis) >= 4:
             break
     return axis if len(axis) >= 4 else []
@@ -576,6 +579,87 @@ def audit_cash_roll_formulas(path: str) -> list[Finding]:
     if not evaluated:
         return [Finding(name, True, "n/a (sin roll de caja con formulas identificable)")]
     return [Finding(name, True, f"{evaluated} celdas del roll bien encadenadas")]
+
+
+# ---------------------------------------------------------------------------
+# C9 - historico del xlsx = capa de captura
+# ---------------------------------------------------------------------------
+
+# CSV canonico segun el header de la hoja: True = trimestral, False = anual.
+CAPTURE_FILES = {True: "canonical_quarterly.csv", False: "canonical_annual.csv"}
+REQUIRED_CAPTURE_COLUMNS = ("line_item", "period", "value", "tag")
+# Una fila guidance es una afirmacion de management: no respalda un historico.
+NON_BACKING_TAG = "guidance"
+DEFAULT_CAPTURE_MATERIALITY_PCT = 0.5
+# El historico se escribe sin redondear: la tolerancia solo absorbe el float.
+MATCH_RELATIVE_TOLERANCE = 1e-6
+
+_CAPTURE_ROW = re.compile(r"\$?(\d+):\$?\d+$")
+_CAPTURE_SCALE = re.compile(r"scale=([0-9.eE+-]+)")
+_PROFILE_PCT = re.compile(r"^\s*capture_unlinked_pct:\s*([0-9]+(?:\.[0-9]+)?)", re.MULTILINE)
+
+
+class CaptureError(Exception):
+    """Vinculo o capa de captura ilegible: C9 lo reporta como falla, sin traceback."""
+
+
+@dataclass(frozen=True)
+class CaptureLink:
+    """Vinculo de una fila del modelo con una linea de la capa de captura."""
+
+    line_item: str
+    scale: float
+
+
+def capture_links(ws: Worksheet) -> dict[int, CaptureLink]:
+    """Fila -> vinculo, leido de los nombres ``CAPTURE.<line_item>`` de la hoja."""
+    links: dict[int, CaptureLink] = {}
+    for name, defined in ws.defined_names.items():
+        if not name.startswith(B.CAPTURE_NAME_PREFIX):
+            continue
+        row = _CAPTURE_ROW.search(defined.attr_text or "")
+        scale = _CAPTURE_SCALE.search(defined.comment or "")
+        if row is None or scale is None:
+            raise CaptureError(f"{ws.title}: el nombre {name} no trae fila o escala "
+                               "(se escribe con ModelStyler.link_capture)")
+        links[int(row.group(1))] = CaptureLink(name[len(B.CAPTURE_NAME_PREFIX):],
+                                               float(scale.group(1)))
+    return links
+
+
+def load_capture(path: Path) -> dict[tuple[str, str], float]:
+    """(line_item, periodo) -> valor de un CSV canonico. Ignora filas guidance."""
+    values: dict[tuple[str, str], float] = {}
+    with path.open(encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        missing = [c for c in REQUIRED_CAPTURE_COLUMNS if c not in (reader.fieldnames or [])]
+        if missing:
+            raise CaptureError(f"{path.name}: faltan columnas {', '.join(missing)}")
+        for number, row in enumerate(reader, start=2):
+            if (row["tag"] or "").strip().lower() == NON_BACKING_TAG:
+                continue
+            try:
+                value = float(row["value"])
+            except (TypeError, ValueError):
+                value = math.nan
+            if math.isnan(value):
+                raise CaptureError(
+                    f"{path.name} linea {number}: value no numerico ({row['value']!r})")
+            values[((row["line_item"] or "").strip(), (row["period"] or "").strip())] = value
+    return values
+
+
+def materiality_pct_from_profile(path: Path | None) -> tuple[float, str]:
+    """(umbral en %, origen) de ``materiality.capture_unlinked_pct`` del perfil.
+
+    Lectura por linea, como load_brand lee DESIGN.md: sin dependencia de YAML.
+    Perfil o campo ausente = default (un perfil viejo sigue siendo valido).
+    """
+    if path is not None and path.is_file():
+        found = _PROFILE_PCT.search(path.read_text(encoding="utf-8"))
+        if found:
+            return float(found.group(1)), "perfil"
+    return DEFAULT_CAPTURE_MATERIALITY_PCT, "default"
 
 
 # ---------------------------------------------------------------------------
