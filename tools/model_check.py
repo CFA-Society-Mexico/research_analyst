@@ -675,10 +675,11 @@ class _UnbackedRow:
     reason: str
     cells: int = 0
     material: int = 0
-    unmeasurable: bool = False
+    unmeasurable: str = ""    # por que no se pudo medir; vacio = medible
 
     def describe(self, where: str) -> str:
-        note = "; sin referencia de materialidad" if self.unmeasurable else ""
+        note = (f"; sin referencia de materialidad ({self.unmeasurable})"
+                if self.unmeasurable else "")
         return f"{where} ({self.label}): {self.cells} cifras {self.reason}{note}"
 
 
@@ -771,8 +772,17 @@ def _scan_capture_sheet(ws: Worksheet, book: Book, folder: Path,
             entry.cells += 1
             threshold = _materiality_threshold(captured, key, materiality_pct)
             scale = link.scale if link is not None else money
-            if threshold is None or scale is None:
-                entry.unmeasurable = True
+            if scale is None:
+                # Ventas y activos totales suelen ser FORMULAS (suma de partidas):
+                # igual se vinculan, para declarar la unidad monetaria de la hoja.
+                entry.unmeasurable = entry.unmeasurable or (
+                    "la hoja no vincula " + " ni ".join(B.CAPTURE_REFERENCE_LINES))
+                entry.material += 1
+            elif threshold is None:
+                # Se reporta el PRIMER periodo sin referencia de la fila.
+                entry.unmeasurable = entry.unmeasurable or (
+                    "la captura no trae " + " o ".join(B.CAPTURE_REFERENCE_LINES)
+                    + f" de {key}")
                 entry.material += 1
             elif abs(value) * scale > threshold:
                 entry.material += 1

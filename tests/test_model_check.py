@@ -459,6 +459,16 @@ class CaptureCheckTests(_DemoCase):
         self.assertTrue(finding.blocking)
         self.assertIn("Operating!fila 27", finding.detail)
         self.assertIn("sin referencia de materialidad", finding.detail)
+        self.assertIn("la captura no trae is_ns_total o bs_ta de 1Q2023", finding.detail)
+
+    def test_sheet_without_reference_links_says_what_to_link(self) -> None:
+        def drop_reference_links(wb: Workbook) -> None:
+            names = wb["Operating"].defined_names
+            for line in B.CAPTURE_REFERENCE_LINES:
+                del names[B.CAPTURE_NAME_PREFIX + line]
+        finding = self._c9(drop_reference_links, materiality_pct=100.0)
+        self.assertTrue(finding.blocking)
+        self.assertIn("la hoja no vincula is_ns_total ni bs_ta", finding.detail)
 
     def test_assumptions_section_is_out_of_scope(self) -> None:
         def rename_section(wb: Workbook) -> None:
