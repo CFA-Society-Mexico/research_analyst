@@ -169,8 +169,9 @@ que ninguna.
 
 ### 4.6 Agregar una skill nueva
 
-Alto costo, gate alto. El repo tiene 8 skills por diseño (el tope original era 6
-y la enmienda está documentada en `docs/architecture.md`). Abre issue ANTES de
+Alto costo, gate alto. El repo tiene 9 skills por diseño (el tope original era 6;
+cada enmienda está documentada en `docs/architecture.md`, con su porqué: la
+novena, `research-note`, entró porque la etapa 7 no tenía dueña). Abre issue ANTES de
 escribir código y responde: de qué artefacto es dueña, por qué no cabe en una
 existente, qué gate propio tiene. Si la respuesta es "para no inflar otra skill",
 el problema real probablemente es que la otra skill necesita `references/`.

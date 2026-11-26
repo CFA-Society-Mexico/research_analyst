@@ -31,6 +31,7 @@ recomendaciones de inversión.
 | Construir el modelo xlsx, pestañas de valuación | `skills/model-standards/SKILL.md` |
 | Escribir/formatear cualquier xlsx, audit de formato | `skills/xlsx-building/SKILL.md` |
 | Clasificar materialidad de un hallazgo | `skills/impact-triage/SKILL.md` |
+| Guion del deck, hechos citados, escribir o verificar el deck de una cobertura | `skills/research-note/SKILL.md` |
 
 ## Estilo de reporte (todos los runtimes)
 

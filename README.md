@@ -131,7 +131,7 @@ reciente y nada se borra jamás (retención de 7 años).
                                #   diario de tesis · decisiones · aciertos de forecast
 ```
 
-## Las 8 skills — y cuándo usarlas sueltas
+## Las 9 skills — y cuándo usarlas sueltas
 
 No hace falta correr el flujo completo ni memorizar nombres: cada skill también
 responde a lenguaje natural, sobre coberturas del plugin o trabajo tuyo previo.
@@ -146,6 +146,7 @@ responde a lenguaje natural, sobre coberturas del plugin o trabajo tuyo previo.
 | `model-standards` | El Excel: estructura, fórmulas, checks, valuación | "revisa mi modelo", "corre los checks" — funciona también sobre modelos que no creó el plugin |
 | `xlsx-building` | Formato del Excel por código (colores, fuentes, checks F) | "el modelo salió feo", "corre el audit de formato" |
 | `impact-triage` | Clasificar hallazgos: crítico / relevante / cosmético | "salió este evento, ¿es material?" |
+| `research-note` | El deck de la cobertura en `research/notes/`: guion, hechos citados, script y verificación | "arma el deck", "¿de dónde salió esta cifra del deck?" |
 
 ## Qué empresas cubre
 
