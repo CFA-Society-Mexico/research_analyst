@@ -141,6 +141,10 @@ LEGACY_CONCEPT_MAP = {
 # segundo va a un canon ``_alt`` (igual que Revenues en US GAAP): nunca se pisan.
 IFRS_CONCEPT_MAP = {
     "Revenue": "is_ns_total",
+    # Alternativa de la MISMA linea: el 20-F de FY2025 de TSMC etiqueta "NET
+    # REVENUE" con este concepto y ya no con Revenue (visto en el filing,
+    # 2026-11-25). Va despues: en un filing que trae ambos gana Revenue.
+    "RevenueFromContractsWithCustomers": "is_ns_total",
     "CostOfSales": "is_cogs_total",
     "GrossProfit": "is_gross",
     "ResearchAndDevelopmentExpense": "is_rd",
@@ -210,6 +214,10 @@ IFRS_CONCEPT_MAP = {
     "NoncurrentPortionOfNoncurrentBondsIssued": "bs_bonds_lt",
     "CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued": "bs_bonds_st",
     "LongtermBorrowings": "bs_borrowings_lt",
+    # OJO: en el balance de TSMC esta linea ("Long-term liabilities - current
+    # portion") YA incluye la porcion circulante de los bonos; bs_bonds_st
+    # sale de la nota de bonos y es su componente, no un sumando (puente
+    # FY2024 contra el 20-F: 59,858 = 57,148 + 2,710). No se suman.
     "CurrentPortionOfLongtermBorrowings": "bs_borrowings_lt_current",
     "NoncurrentLeaseLiabilities": "bs_lease_lt",
     "DepreciationExpense": "cf_depreciation",

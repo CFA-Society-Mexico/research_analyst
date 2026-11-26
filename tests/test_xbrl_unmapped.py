@@ -126,13 +126,13 @@ class FetchDiagnosticsTests(unittest.TestCase):
     def test_year_reported_only_in_unmapped_concepts_raises_a_warning(self) -> None:
         # FY2025 existe en el payload, pero solo bajo un concepto fuera del mapa:
         # el CSV termina en FY2024 y el tool lo dice en vez de callar.
-        extra = {"RevenueFromContractsWithCustomers": _node(
+        extra = {"ComprehensiveIncome": _node(
             "TWD", _annual(3800, 2025, ACCN_2025, "2026-04-16"))}
         out, _ = _fetch(_payload(extra_ifrs=extra))
         self.assertIn("[aviso] el payload trae cierres anuales posteriores", out)
         self.assertIn("2025-12-31", out)
         self.assertIn("2024-12-31", out)
-        self.assertIn("RevenueFromContractsWithCustomers", out)
+        self.assertIn("ComprehensiveIncome", out)
 
     def test_no_gap_no_warning(self) -> None:
         out, _ = _fetch(_payload())
@@ -204,6 +204,22 @@ class TsmReportedConceptsTests(unittest.TestCase):
     def test_basic_eps_is_never_derived_for_the_fourth_quarter(self) -> None:
         self.assertIn("is_eps_basic", X.NON_ADDITIVE)
         self.assertIn(("is_eps_basic", "FY2024"), self.rows)
+
+    def test_revenue_tagged_as_contracts_with_customers_still_lands_on_net_sales(self) -> None:
+        # El 20-F de FY2025 de TSMC etiqueta las ventas con otro concepto.
+        ifrs = {
+            "Revenue": _node("TWD", _annual(2894, 2024, ACCN_2024, "2025-04-17")),
+            "RevenueFromContractsWithCustomers": _node(
+                "TWD", _annual(2890, 2024, ACCN_2024, "2025-04-17"),      # nota del mismo filing
+                _annual(3809, 2025, ACCN_2025, "2026-04-16")),
+        }
+        _, files = _fetch({"facts": {"ifrs-full": ifrs}})
+        rows = {(r["canon"], r["period"]): r for r in files["xbrl_facts_TEST.csv"]}
+        self.assertEqual(float(rows[("is_ns_total", "FY2025")]["value"]), 3809.0)
+        self.assertEqual(rows[("is_ns_total", "FY2025")]["concept"],
+                         "RevenueFromContractsWithCustomers")
+        # En el filing que trae los dos conceptos gana Revenue.
+        self.assertEqual(float(rows[("is_ns_total", "FY2024")]["value"]), 2894.0)
 
     def test_console_states_how_far_companyfacts_reaches(self) -> None:
         self.assertIn("ultimo cierre anual en companyfacts (ifrs-full): 2024-12-31", self.out)

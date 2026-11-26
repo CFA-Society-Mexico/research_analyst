@@ -73,7 +73,21 @@ una sola cobertura.
 Dos conceptos que se SUMAN llevan canon propio y esta skill los agrega, con
 gate, al mapear: `cf_depreciation` + `cf_amortisation` = D&A; `is_sm` +
 `is_ga` (+ `is_rd`) = gastos de operación (contrastar con `is_opex_total`);
-`bs_bonds_lt` + `bs_borrowings_lt` = deuda de largo plazo; `bs_bonds_st` +
-`bs_borrowings_lt_current` = porción circulante; `cf_bonds_issued` +
+`bs_bonds_lt` + `bs_borrowings_lt` = deuda de largo plazo; `cf_bonds_issued` +
 `cf_borrowings_lt_issued` = deuda emitida. Solo comparten canon los conceptos
 que son alternativas de una misma línea (un emisor usa uno u otro).
+
+**Que dos líneas tengan canon propio no prueba que se sumen: se puentea
+contra el balance antes de agregar.** Caso real (20-F de TSMC, FY2024):
+`bs_borrowings_lt_current` es la línea del balance "Long-term liabilities -
+current portion" (59,858 NT$ mn) y YA incluye la porción circulante de los
+bonos; `bs_bonds_st` (57,148, de la nota de bonos) es un componente de ella,
+no un sumando: 59,858 = 57,148 bonos + 2,710 préstamos bancarios. Sumarlas
+duplica 57,148 de deuda. Regla: una cifra que solo aparece en una nota se
+trata como desglose de la línea del estado hasta demostrar lo contrario.
+
+Puente FY2024 de las líneas IFRS contra el 20-F de TSMC (2026-11-25): las 34
+líneas revisadas coinciden con la cifra y la etiqueta de fila del estado
+— p. ej. `cf_depreciation` = "Depreciation expense" del flujo de efectivo,
+`bs_ap` = "Accounts payable", `bs_ar` = "Notes and accounts receivable, net",
+`is_sm` = "Marketing", `is_other_income_finance` = "Other income".
