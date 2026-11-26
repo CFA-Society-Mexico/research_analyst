@@ -405,3 +405,121 @@ def load_facts(path: Path, root: Path) -> dict[str, Fact]:
         facts[key] = Fact(key, float(raw["value"]), str(raw["unit"]), raw["tag"],
                           raw["doc"], str(raw["locator"]), str(raw["quote"]), manual)
     return facts
+
+
+# ---------------------------------------------------------------------------
+# Tokens de diseno (brand/DESIGN.md, slots deck_*)
+# ---------------------------------------------------------------------------
+
+_SLOT_LINE = re.compile(r"\s*(deck_[a-z0-9_]+)\s*[:=]\s*(\S.*)$")
+_HEX = re.compile(r"#[0-9A-Fa-f]{6}")
+MIN_SERIES_CONTRAST = 3.0
+MIN_TEXT_CONTRAST = 4.5
+MIN_CVD_DISTANCE = 40.0
+# Machado et al. (2009), deuteranopia, sobre RGB lineal.
+_DEUTAN = ((0.367322, 0.860646, -0.227968),
+           (0.280085, 0.672501, 0.047413),
+           (-0.011820, 0.042940, 0.968881))
+
+
+@dataclass(frozen=True)
+class Design:
+    background: str = "#FFFFFF"
+    text: str = "#1A1A1A"
+    muted: str = "#5B6670"
+    negative: str = "#B03A2E"
+    # Paleta neutra: cada color pasa MIN_SERIES_CONTRAST sobre blanco y cada par
+    # pasa MIN_CVD_DISTANCE (tests/test_deck_builder.py::DesignTests).
+    series: tuple[str, ...] = ("#1F4E79", "#4A86BA", "#C8691B", "#2E7D6B", "#7B2D26", "#111111")
+    font_heading: str = "Georgia"
+    font_body: str = "Arial"
+    margin: int = 56
+    gap_max: int = 90
+    logo: str = ""   # data URI; vacio = sin logo
+
+
+def _linear(channel: int) -> float:
+    c = channel / 255.0
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    return int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+
+
+def contrast(a: str, b: str) -> float:
+    """Razon de contraste WCAG entre dos colores #RRGGBB (1 a 21)."""
+    def luminance(color: str) -> float:
+        r, g, bl = (_linear(c) for c in _rgb(color))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * bl
+    hi, lo = sorted((luminance(a), luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _deutan(color: str) -> tuple[float, float, float]:
+    lin = [_linear(c) for c in _rgb(color)]
+    return tuple(255.0 * max(0.0, min(1.0, sum(m * v for m, v in zip(row, lin)))) ** (1 / 2.2)
+                 for row in _DEUTAN)  # type: ignore[return-value]
+
+
+def load_design(path: Optional[Path], root: Optional[Path] = None) -> Design:
+    """Lee los slots ``deck_*`` de brand/DESIGN.md. Sin archivo o sin slot:
+    estilo neutro. Un valor mal formado es error (no se adivina)."""
+    if path is None or not path.is_file():
+        return Design()
+    slots: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = _SLOT_LINE.match(line)
+        if match:
+            slots[match.group(1)] = re.sub(r"\s+#\s.*$", "", match.group(2)).strip()
+    base = Design()
+    series = list(base.series)
+    values: dict[str, object] = {}
+    for slot, value in slots.items():
+        name = slot[len("deck_"):]
+        if name.startswith("series_") and name[7:].isdigit() and 1 <= int(name[7:]) <= 6:
+            if not _HEX.fullmatch(value):
+                raise DeckError(f"{slot}: se espera #RRGGBB, no {_ascii(value)!r}")
+            series[int(name[7:]) - 1] = value.upper()
+        elif name in ("background", "text", "muted", "negative"):
+            if not _HEX.fullmatch(value):
+                raise DeckError(f"{slot}: se espera #RRGGBB, no {_ascii(value)!r}")
+            values[name] = value.upper()
+        elif name in ("margin", "gap_max"):
+            if not value.isdigit():
+                raise DeckError(f"{slot}: se espera un entero en px, no {_ascii(value)!r}")
+            values[name] = int(value)
+        elif name in ("font_heading", "font_body"):
+            if not re.fullmatch(r"[A-Za-z0-9 \-]+", value):
+                raise DeckError(f"{slot}: nombre de fuente invalido {_ascii(value)!r}")
+            values[name] = value
+        elif name == "logo":
+            logo = (root or path.parent.parent) / value
+            mime = {".svg": "image/svg+xml", ".png": "image/png"}.get(logo.suffix.lower())
+            if mime is None or not logo.is_file():
+                raise DeckError(f"{slot}: se espera un .svg o .png existente, no {_ascii(value)!r}")
+            values["logo"] = f"data:{mime};base64," + base64.b64encode(logo.read_bytes()).decode("ascii")
+    return Design(series=tuple(series), **values)  # type: ignore[arg-type]
+
+
+def weak_series(design: Design) -> set[int]:
+    """Indices de colores de serie con poco contraste contra el fondo: las
+    graficas etiquetan todos sus valores cuando usan uno de ellos."""
+    return {i for i, color in enumerate(design.series)
+            if contrast(color, design.background) < MIN_SERIES_CONTRAST}
+
+
+def design_findings(design: Design) -> list[Finding]:
+    text_ratio = contrast(design.text, design.background)
+    close = [f"{i + 1}-{j + 1}" for i in range(len(design.series))
+             for j in range(i + 1, len(design.series))
+             if math.dist(_deutan(design.series[i]), _deutan(design.series[j])) < MIN_CVD_DISTANCE]
+    return [
+        Finding("P9 contraste del texto", text_ratio >= MIN_TEXT_CONTRAST,
+                f"razon {text_ratio:.1f} contra el fondo (minimo {MIN_TEXT_CONTRAST})",
+                warning=text_ratio < MIN_TEXT_CONTRAST),
+        Finding("P10 series distinguibles con daltonismo", not close,
+                "sin pares cercanos" if not close
+                else "pares de series cercanos (deuteranopia): " + ", ".join(close),
+                warning=bool(close)),
+    ]

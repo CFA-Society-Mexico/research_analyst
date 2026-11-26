@@ -287,3 +287,59 @@ class FactsTests(_Case):
         path.write_text("{no es json", encoding="utf-8")
         with self.assertRaisesRegex(D.DeckError, "hechos ilegibles"):
             D.load_facts(path, self.root)
+
+
+class DesignTests(_Case):
+
+    def _design(self, text: str) -> D.Design:
+        path = self.root / "brand" / "DESIGN.md"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return D.load_design(path, self.root)
+
+    def test_no_file_gives_the_neutral_style(self) -> None:
+        self.assertEqual(D.load_design(None), D.Design())
+        self.assertEqual(D.load_design(self.root / "brand" / "DESIGN.md"), D.Design())
+
+    def test_slots_are_read_and_the_rest_is_prose(self) -> None:
+        design = self._design(
+            "# Marca\n\nbrand_primary: #132E57\n"
+            "deck_background: #0b1f3a   # fondo oscuro\n"
+            "deck_text: #FFFFFF\ndeck_series_2: #ffcc00\n"
+            "deck_font_heading: Source Serif 4\ndeck_margin: 64\ndeck_gap_max = 120\n")
+        self.assertEqual(design.background, "#0B1F3A")
+        self.assertEqual(design.text, "#FFFFFF")
+        self.assertEqual(design.series[1], "#FFCC00")
+        self.assertEqual(design.series[0], D.Design().series[0])
+        self.assertEqual((design.font_heading, design.margin, design.gap_max),
+                         ("Source Serif 4", 64, 120))
+
+    def test_malformed_slot_is_an_error(self) -> None:
+        for text, message in (("deck_text: azul\n", "se espera #RRGGBB"),
+                              ("deck_margin: ancho\n", "se espera un entero"),
+                              ("deck_font_body: Arial; x\n", "nombre de fuente invalido"),
+                              ("deck_logo: brand/nope.svg\n", "se espera un .svg o .png")):
+            with self.subTest(text=text), self.assertRaisesRegex(D.DeckError, message):
+                self._design(text)
+
+    def test_logo_is_embedded_as_a_data_uri(self) -> None:
+        (self.root / "brand").mkdir()
+        (self.root / "brand" / "logo.svg").write_text("<svg/>", encoding="utf-8")
+        design = self._design("deck_logo: brand/logo.svg\n")
+        self.assertTrue(design.logo.startswith("data:image/svg+xml;base64,"))
+
+    def test_contrast_follows_wcag(self) -> None:
+        self.assertAlmostEqual(D.contrast("#000000", "#FFFFFF"), 21.0)
+        self.assertAlmostEqual(D.contrast("#FFFFFF", "#FFFFFF"), 1.0)
+
+    def test_pale_series_color_is_flagged_as_weak(self) -> None:
+        self.assertEqual(D.weak_series(D.Design()), set())
+        self.assertEqual(D.weak_series(self._design("deck_series_2: #F2F2F2\n")), {1})
+
+    def test_design_findings_warn_and_never_block(self) -> None:
+        self.assertTrue(all(f.ok for f in D.design_findings(D.Design())))
+        text, cvd = D.design_findings(self._design(
+            "deck_text: #BBBBBB\ndeck_series_1: #C0392B\ndeck_series_2: #6B8E23\n"))
+        self.assertTrue(text.warning and not text.blocking)
+        self.assertTrue(cvd.warning and not cvd.blocking)
+        self.assertIn("1-2", cvd.detail)
