@@ -4,7 +4,7 @@ Autor: [Alan Vazquez, CFA](https://www.linkedin.com/in/alan-vazquez-cfa-38515414
 
 > Copiloto de análisis bursátil: acompaña a un analista desde "me asignaron
 > cubrir esta empresa" hasta "publiqué mi reporte".
-> Open source · **CFA Society México · AI for Finance** · v0.7.0 (en dogfood).
+> Open source · **CFA Society México · AI for Finance** · v0.7.1 (en dogfood).
 
 Un analista de acciones pasa semanas leyendo reportes, armando un Excel y
 escribiendo su nota. Este plugin **organiza, redacta, verifica y cuestiona** ese

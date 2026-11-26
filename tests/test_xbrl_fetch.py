@@ -597,8 +597,18 @@ class IfrsFetchTests(unittest.TestCase):
     def test_ifrs_canons_reuse_us_gaap_names_plus_a_declared_list(self) -> None:
         us_canons = set(X.CONCEPT_MAP.values()) | set(X.LEGACY_CONCEPT_MAP.values())
         new = set(X.IFRS_CONCEPT_MAP.values()) - us_canons
-        self.assertEqual(new, {"is_ni_alt", "bs_equity_alt", "is_interest_income",
-                               "is_other_income_finance", "cf_taxes_paid"})
+        self.assertEqual(new, {
+            "is_ni_alt", "bs_equity_alt", "is_interest_income",
+            "is_other_income_finance", "cf_taxes_paid",
+            # Conceptos que TSMC reporta (corrida en vivo con --unmapped).
+            "is_sm", "is_ga", "is_opex_total", "is_finance_costs",
+            "is_equity_method_income", "is_ni_nci", "is_eps_basic",
+            "bs_ppe", "bs_intangibles_goodwill", "bs_rou_assets", "bs_nci",
+            "bs_bonds_lt", "bs_bonds_st", "bs_borrowings_lt",
+            "bs_borrowings_lt_current", "bs_lease_lt",
+            "cf_depreciation", "cf_amortisation", "cf_capex_intangibles",
+            "cf_ppe_disposals", "cf_bonds_issued", "cf_bonds_repaid",
+            "cf_borrowings_lt_issued", "cf_interest_paid", "cf_lease_payments"})
 
     def test_fiscal_year_end_is_detected_on_the_chosen_taxonomy(self) -> None:
         # Cierre en marzo: sin detectar sobre ifrs-full el saldo de cierre
@@ -717,7 +727,7 @@ class CliTests(unittest.TestCase):
     def _main(self, *args: str) -> dict:
         seen: dict = {}
 
-        def fake_fetch(ticker, dest, ua, taxonomy="auto", currency="auto"):
+        def fake_fetch(ticker, dest, ua, taxonomy="auto", currency="auto", unmapped=False):
             seen.update(ticker=ticker, taxonomy=taxonomy, currency=currency)
             return Path("x.csv")
 

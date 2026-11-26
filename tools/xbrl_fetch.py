@@ -25,6 +25,10 @@ Reglas del CSV que el consumidor debe conocer:
   (capex, dividendos, impuestos pagados, amortizacion de deuda). El tool no
   cambia signos: marca esas filas con ``sign = salida(+)`` y statement-mapper
   aplica la convencion del canonico con puente contra el filing.
+- Captura incompleta visible. Un concepto fuera del mapa no emite filas: la
+  consola dice cuantos conceptos con datos quedaron sin mapear y avisa si el
+  payload trae un anio posterior al ultimo capturado. ``--unmapped`` escribe
+  la lista en ``xbrl_unmapped_<TICKER>.csv``.
 
 Uso:
     python tools/xbrl_fetch.py AAPL --dest <raiz>/AAPL/model/inputs \
@@ -184,6 +188,40 @@ IFRS_CONCEPT_MAP = {
     "ProceedsFromIssuingShares": "cf_stock_issued",
     "ProceedsFromBorrowingsClassifiedAsFinancingActivities": "cf_debt_issued",
     "RepaymentsOfBorrowingsClassifiedAsFinancingActivities": "cf_debt_repaid",
+    # --- Conceptos que TSMC SI reporta (lista --unmapped de la corrida en vivo
+    # del 2026-11-25; el mapa inicial, armado sin payload real, dejaba la
+    # captura sin D&A, sin impuestos pagados y sin deuda). Regla: dos conceptos
+    # que se SUMAN (depreciacion y amortizacion; bonos y prestamos) llevan
+    # canon propio y statement-mapper los agrega con gate; solo comparten canon
+    # los que son alternativas de una misma linea (impuestos pagados).
+    "SalesAndMarketingExpense": "is_sm",
+    "GeneralAndAdministrativeExpense": "is_ga",
+    "OperatingExpenseExcludingCostOfSales": "is_opex_total",
+    "FinanceCosts": "is_finance_costs",
+    "ShareOfProfitLossOfAssociatesAccountedForUsingEquityMethod": "is_equity_method_income",
+    "ProfitLossAttributableToNoncontrollingInterests": "is_ni_nci",
+    "BasicEarningsLossPerShare": "is_eps_basic",
+    "PropertyPlantAndEquipment": "bs_ppe",
+    "IntangibleAssetsAndGoodwill": "bs_intangibles_goodwill",
+    "RightofuseAssets": "bs_rou_assets",
+    "CurrentTradeReceivables": "bs_ar",
+    "TradeAndOtherCurrentPayablesToTradeSuppliers": "bs_ap",
+    "NoncontrollingInterests": "bs_nci",
+    "NoncurrentPortionOfNoncurrentBondsIssued": "bs_bonds_lt",
+    "CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued": "bs_bonds_st",
+    "LongtermBorrowings": "bs_borrowings_lt",
+    "CurrentPortionOfLongtermBorrowings": "bs_borrowings_lt_current",
+    "NoncurrentLeaseLiabilities": "bs_lease_lt",
+    "DepreciationExpense": "cf_depreciation",
+    "AmortisationExpense": "cf_amortisation",
+    "IncomeTaxesPaidClassifiedAsOperatingActivities": "cf_taxes_paid",
+    "PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities": "cf_capex_intangibles",
+    "ProceedsFromSalesOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities": "cf_ppe_disposals",
+    "ProceedsFromIssueOfBondsNotesAndDebentures": "cf_bonds_issued",
+    "RepaymentsOfBondsNotesAndDebentures": "cf_bonds_repaid",
+    "ProceedsFromNoncurrentBorrowings": "cf_borrowings_lt_issued",
+    "InterestPaidClassifiedAsFinancingActivities": "cf_interest_paid",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "cf_lease_payments",
 }
 
 # Mapas por taxonomia, en orden de preferencia: dentro de un mismo accession
@@ -219,6 +257,11 @@ OUTFLOW_POSITIVE_CONCEPTS = frozenset({
     "DividendsPaidClassifiedAsFinancingActivities",
     "PaymentsToAcquireOrRedeemEntitysShares",
     "RepaymentsOfBorrowingsClassifiedAsFinancingActivities",
+    "IncomeTaxesPaidClassifiedAsOperatingActivities",
+    "PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities",
+    "RepaymentsOfBondsNotesAndDebentures",
+    "InterestPaidClassifiedAsFinancingActivities",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
 })
 
 # Seleccion de vintage: el accession primario de un (estado, periodo) es el mas
@@ -233,7 +276,7 @@ _VINTAGE_MIX_KEY = "_vintage_mix"
 # Flujos que se desacumulan y cuyo 4Q se deriva FY - acumulado a 3Q. La UPA no
 # es aditiva entre trimestres (cambia el conteo de acciones): nunca se deriva.
 FLOW_PREFIXES = ("is_", "cf_")
-NON_ADDITIVE = frozenset({"is_eps_diluted"})
+NON_ADDITIVE = frozenset({"is_eps_diluted", "is_eps_basic"})
 YTD_UNRESOLVED_TAG = "acumulado YTD sin desacumular"
 
 FIELDNAMES = ("canon", "period", "value", "months", "start", "end",
@@ -241,6 +284,10 @@ FIELDNAMES = ("canon", "period", "value", "months", "start", "end",
               # Columnas nuevas SIEMPRE al final: los lectores existentes
               # indexan las doce anteriores.
               "accession", "sign")
+# Diagnostico --unmapped: conceptos con datos que el mapa no cubre.
+UNMAPPED_FIELDNAMES = ("taxonomy", "concept", "label", "units", "facts",
+                       "first_end", "last_end", "last_filed", "last_form")
+UNMAPPED_TOP = 10
 
 
 BLOCKED_MSG = """[x] Sin acceso de red a SEC ({err}).
@@ -701,8 +748,117 @@ def _counts_text(counts: dict[str, int]) -> str:
     return ", ".join(f"{name} {n}" for name, n in counts.items()) or "-"
 
 
+@dataclass(frozen=True)
+class UnmappedConcept:
+    """Concepto que la emisora reporta y el mapa de su taxonomia no cubre."""
+
+    concept: str
+    label: str
+    units: str
+    facts: int
+    first_end: str
+    last_end: str
+    last_filed: str
+    last_form: str
+
+
+def unmapped_concepts(facts: dict,
+                      concepts: Sequence[tuple[str, str]]) -> list[UnmappedConcept]:
+    """Conceptos CON datos que no estan en el mapa, lo vigente primero.
+
+    Es el diagnostico de una captura incompleta: cada emisora elige sus
+    conceptos (TSMC no etiqueta D&A con el concepto que el mapa esperaba) y un
+    concepto ausente del mapa no emite filas ni avisa. Orden: ultimo cierre
+    descendente, luego numero de hechos; una linea descontinuada queda al final.
+    """
+    mapped = {concept for concept, _ in concepts}
+    found: list[UnmappedConcept] = []
+    for concept in sorted(facts):
+        node = facts[concept]
+        if concept in mapped or not _has_data(node):
+            continue
+        items = [(unit, item) for unit, unit_items in node["units"].items()
+                 for item in unit_items if item.get("end")]
+        if not items:
+            continue
+        last = max((item for _, item in items),
+                   key=lambda item: (item["end"], item.get("filed", "")))
+        found.append(UnmappedConcept(
+            concept=concept, label=str(node.get("label") or ""),
+            units=",".join(sorted({unit for unit, _ in items})), facts=len(items),
+            first_end=min(item["end"] for _, item in items), last_end=last["end"],
+            last_filed=last.get("filed", ""), last_form=last.get("form", "")))
+    # sorted() es estable: el orden alfabetico previo desempata.
+    return sorted(found, key=lambda u: (u.last_end, u.facts), reverse=True)
+
+
+def latest_annual_end(facts: dict) -> tuple[str, list[str]]:
+    """Ultimo cierre de duracion anual de una taxonomia y quienes lo reportan."""
+    latest, reporters = "", []
+    for concept in sorted(facts):
+        node = facts[concept]
+        if not isinstance(node, dict):
+            continue
+        for items in node.get("units", {}).values():
+            for item in items:
+                end = item.get("end", "")
+                if (duration_months(item) or 0) < 11 or end < latest:
+                    continue
+                if end > latest:
+                    latest, reporters = end, []
+                if concept not in reporters:
+                    reporters.append(concept)
+    return latest, reporters
+
+
+def period_gaps(all_facts: dict, taxonomy_used: str,
+                rows: dict[tuple[str, str], dict]) -> list[str]:
+    """Avisos si el payload trae anios posteriores al ultimo anio capturado.
+
+    Un CSV que termina un anio antes que los filings de la emisora es una
+    captura incompleta que parece completa (TSM: FY2025 ausente). Se revisa la
+    taxonomia leida y las demas del payload (``dei`` no trae estados).
+    """
+    captured = max((str(r.get("end", "")) for r in rows.values()
+                    if (r.get("months") or 0) >= 11), default="")
+    mapped = {concept for concept, _ in taxonomy_concepts(taxonomy_used)}
+    notes: list[str] = []
+    for name in sorted(all_facts):
+        if name == "dei" or not isinstance(all_facts[name], dict):
+            continue
+        latest, reporters = latest_annual_end(all_facts[name])
+        if not latest or latest <= captured:
+            continue
+        if name != taxonomy_used:
+            notes.append(f"{name}: hasta {latest} (otra taxonomia; revisar --taxonomy)")
+            continue
+        outside = [c for c in reporters if c not in mapped]
+        if outside:
+            notes.append(f"{name}: hasta {latest} en {len(outside)} conceptos sin mapear "
+                         f"({', '.join(outside[:3])}{' ...' if len(outside) > 3 else ''})")
+        else:
+            notes.append(f"{name}: hasta {latest} en conceptos mapeados pero en otra "
+                         "unidad o moneda (revisar --currency)")
+    if not notes:
+        return []
+    return [f"[aviso] el payload trae cierres anuales posteriores al ultimo capturado "
+            f"({captured or 'ninguno'}):",
+            *(f"    {note}" for note in notes),
+            "    El CSV NO cubre ese periodo: corre con --unmapped para ver que conceptos",
+            "    faltan en el mapa, o capturalo desde el filing."]
+
+
+def write_unmapped(path: Path, taxonomy: str, items: Sequence[UnmappedConcept]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(UNMAPPED_FIELDNAMES)
+        for u in items:
+            writer.writerow((taxonomy, u.concept, u.label, u.units, u.facts,
+                             u.first_end, u.last_end, u.last_filed, u.last_form))
+
+
 def fetch(ticker: str, dest: Path, user_agent: str,
-          taxonomy: str = AUTO, currency: str = AUTO) -> Path:
+          taxonomy: str = AUTO, currency: str = AUTO, unmapped: bool = False) -> Path:
     cik = resolve_cik(ticker, user_agent)
     data = _get_json(FACTS_URL.format(cik=cik), user_agent)
     all_facts = data.get("facts", {})
@@ -770,6 +926,25 @@ def fetch(ticker: str, dest: Path, user_agent: str,
     if missing:
         print(f"[!] conceptos sin datos en esta emisora ({len(missing)}): "
               + ", ".join(missing[:6]) + (" ..." if len(missing) > 6 else ""))
+    # companyfacts puede ir atrasado respecto a los filings (TSM, 2026-11-25:
+    # ultimo cierre 2024-12-31 con el 20-F de FY2025 ya presentado): el
+    # analista debe ver hasta donde llega el payload, no deducirlo del CSV.
+    print(f"[i] ultimo cierre anual en companyfacts ({taxonomy_used}): "
+          f"{latest_annual_end(facts)[0] or 'ninguno'} - un anio posterior ya "
+          "presentado se captura desde el filing")
+    for line in period_gaps(all_facts, taxonomy_used, rows):
+        print(line)
+    outside = unmapped_concepts(facts, concepts)
+    print(f"[i] {len(outside)} conceptos con datos sin mapear en {taxonomy_used}"
+          + ("" if unmapped else " (--unmapped escribe la lista)"))
+    if unmapped:
+        unmapped_path = dest / f"xbrl_unmapped_{ticker.upper()}.csv"
+        write_unmapped(unmapped_path, taxonomy_used, outside)
+        print(f"[ok] lista completa -> {unmapped_path.name}; los mas recientes:")
+        for u in outside[:UNMAPPED_TOP]:
+            print(f"    {u.concept} ({u.facts} hechos, {u.first_end} .. {u.last_end}, {u.units})")
+        print("    Un concepto que deba entrar al modelo se agrega al mapa de su")
+        print("    taxonomia en tools/xbrl_fetch.py con su linea canon; no se captura a mano.")
     outflows = sum(1 for r in ordered if r.get("sign") == SIGN_OUTFLOW_POSITIVE)
     print(f"[i] signos: {outflows} filas con sign = {SIGN_OUTFLOW_POSITIVE} - pagos que XBRL reporta")
     print("    en POSITIVO (capex, dividendos, recompras, impuestos pagados,")
@@ -792,12 +967,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--currency", default=AUTO, metavar="ISO",
                         help="moneda de reporte, codigo ISO 4217 como USD o TWD "
                              "(default auto: la de mas hechos mapeados)")
+    parser.add_argument("--unmapped", action="store_true",
+                        help="escribir xbrl_unmapped_<TICKER>.csv: conceptos con datos que "
+                             "el mapa no cubre (diagnostico de una captura incompleta)")
     args = parser.parse_args(argv[1:])
     currency = normalize_currency(args.currency)      # falla antes de tocar la red
     ua = args.ua or os.environ.get("SEC_EDGAR_UA", "")
     if not ua or "@" not in ua:
         raise SystemExit("[x] SEC exige User-Agent con contacto: --ua o env SEC_EDGAR_UA")
-    fetch(args.ticker, Path(args.dest), ua, taxonomy=args.taxonomy, currency=currency)
+    fetch(args.ticker, Path(args.dest), ua, taxonomy=args.taxonomy, currency=currency,
+          unmapped=args.unmapped)
     return 0
 
 
