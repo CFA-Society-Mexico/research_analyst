@@ -1,6 +1,6 @@
 ---
 name: xlsx-building
-description: Construcción determinista del xlsx del plugin — TODO workbook se arma vía tools/xlsx_builder.py (ModelStyler), jamás con openpyxl crudo; formato (paleta brandeable desde brand/DESIGN.md, fuentes, formatos numéricos, gridlines, freeze, outline, bordes, series continuas hist→forecast) sale del código y se verifica con los checks F (F1-F20); incluye el modo REBUILD para reconstruir cualquier modelo existente al estándar con audit previo y paridad de números obligatoria. Usa esta skill siempre que haya que crear o editar un archivo Excel del plugin, aplicar o corregir formato de un modelo, reconstruir un modelo viejo o ajeno, correr el audit de formato, aplicar colores de marca, o cuando el usuario diga "construye el xlsx", "formatea el modelo", "el modelo salió feo", "reconstrúyelo al estándar", "corre el audit de formato" — model-standards la invoca en su paso de construcción y es obligatoria: si un xlsx se va a escribir y esta skill no está en uso, detente y cárgala.
+description: Construcción determinista del xlsx del plugin — TODO workbook se arma vía tools/xlsx_builder.py (ModelStyler), jamás con openpyxl crudo; formato (paleta brandeable desde brand/DESIGN.md, fuentes, formatos numéricos, gridlines, freeze, outline, bordes, series continuas hist→forecast) sale del código y se verifica con los checks F (F1-F21); incluye el modo REBUILD para reconstruir cualquier modelo existente al estándar con audit previo y paridad de números obligatoria. Usa esta skill siempre que haya que crear o editar un archivo Excel del plugin, aplicar o corregir formato de un modelo, reconstruir un modelo viejo o ajeno, correr el audit de formato, aplicar colores de marca, o cuando el usuario diga "construye el xlsx", "formatea el modelo", "el modelo salió feo", "reconstrúyelo al estándar", "corre el audit de formato" — model-standards la invoca en su paso de construcción y es obligatoria: si un xlsx se va a escribir y esta skill no está en uso, detente y cárgala.
 ---
 
 # xlsx-building
@@ -62,6 +62,27 @@ las best practices escritas y entregó Calibri con gridlines).
    y fill — no elijas colores. Series (drivers, líneas de estados): vía
    `series_row` — histórico calculado y forecast en LA MISMA fila (check F11),
    jamás filas hist/forecast separadas ni columnas históricas vacías.
+3b. **Año de transición** (modo `annual`, primer año del forecast con
+   trimestres ya observados): `set_transition_year(<año>)` una vez y
+   `series_row(..., transition_first="=<ancla>")` en las series ancladas
+   (9M observado + 4T guiado). `transition_first` sustituye a
+   `forecast_values[0]` y se escribe como fórmula negra: en ese año el driver
+   es RESULTADO del ancla. Sin el sello el builder lo rechaza y S5 falla.
+3c. **Fórmulas que Excel acepta (F21):** `set_cell` rechaza al construir una
+   aridad inválida (`ABS(a,b,c)`), un paréntesis sin cerrar, una función
+   moderna sin `_xlfn.` o una operación de arreglo en fórmula normal. Una
+   operación sobre rangos va en `SUMPRODUCT` o con `set_array_formula`
+   (`MEDIAN(IF(rango=1, valores))`). No rodees el rechazo escribiendo la celda
+   con openpyxl crudo: Excel borraría la fórmula al abrir.
+3d. **Valuación por código** (fórmulas y guardas en
+   `skills/model-standards/references/valuation-conventions.md`):
+   `gordon_terminal_block` (flujo terminal normalizado con RONIC),
+   `implied_growth_block` (g implícita del exit y del reverse DCF, con la
+   guarda de la raíz espuria), `sensitivity_grid` + `dcf_per_share_formula`
+   (cuadrícula con fórmula cerrada por celda — openpyxl NO crea data tables),
+   `center_check_formula`, `comps_market_cap_formula`,
+   `multiple_range_flag_formula` y `terminal_multiple_alarm_formula`.
+   PROHIBIDO re-derivar estas fórmulas en el script de la cobertura.
 4. **Constantes**: 365, 1000 y similares como celdas etiquetadas en Assumptions
    con `define_constant` (`DAYS_YEAR`, `MM_TO_B`); las fórmulas referencian el
    named range, nunca el literal (check S4).
@@ -92,10 +113,23 @@ styler.save(path)  # luego: python tools/xlsx_builder.py audit <path>
    ```
 
    Exit 0 = formato verde. Exit 1 = FALLA: corrige y re-corre. Exit 3 =
-   PENDIENTE (p. ej. F19 sin valores calculados): recalcula con Excel COM y
-   re-audita; sin Excel disponible se reporta pendiente, nunca verde. Nunca
-   entregues con audit rojo. Luego corren S/C/D (integrity-checks.md; los S y
-   el C10 con `python tools/model_check.py <modelo.xlsx>`, que re-corre los F).
+   PENDIENTE (F19 o checks vivos SIN evaluar por falta de valores
+   calculados). Nunca entregues con audit rojo. Luego corren S/C/D
+   (integrity-checks.md; los S y el C10 con `python tools/model_check.py
+   <modelo.xlsx>`, que re-corre los F).
+8. **Recalcular y validar con un motor real (obligatorio antes de entregar):**
+
+   ```
+   python tools/model_check.py <modelo.xlsx> --recalc
+   ```
+
+   Recalcula una COPIA con Excel (COM) o LibreOffice y audita esa copia: R1
+   (Excel acepta el libro — una fórmula que el motor descarta es falla), R2
+   (sin celdas en error) y los checks vivos de `Checks`/`Cover` ya evaluados.
+   Un F en verde NO prueba que Excel acepte el libro. Para dejar los valores
+   calculados en el modelo: `python tools/recalc_validate.py <modelo.xlsx>
+   --in-place` (solo escribe si R1 está verde). Sin motor disponible queda
+   `[pendiente]: checks vivos SIN evaluar` — se reporta así, nunca verde.
 
 ## Modo rebuild (modelo existente → modelo al estándar)
 
@@ -129,8 +163,14 @@ reconstruirlo, el orden es fijo:
 - **openpyxl BORRA la caché de valores calculados al guardar.** Todo `save()`
   de openpyxl deja el libro con fórmulas pero sin resultados: si auditas sin
   recalcular, S10/F19 reportan miles de falsos "sin calcular". **Después de
-  CADA escritura con openpyxl, recalcular con Excel COM**
-  (`CalculateFullRebuild` + `Save`) antes de auditar o leer valores.
+  CADA escritura con openpyxl, recalcular** antes de auditar o leer valores:
+  `python tools/recalc_validate.py <modelo.xlsx> --in-place` (Excel COM o
+  LibreOffice; no sobreescribe si el motor descartó fórmulas).
+- **Cargar el builder desde un script de cobertura:** `sys.path.insert(0,
+  "<plugin>/tools")` + `import xlsx_builder`, o por ruta con
+  `importlib.util.spec_from_file_location` + `exec_module` — ambas funcionan
+  sin registrar el módulo en `sys.modules` (antes la carga por ruta rompía las
+  dataclasses).
 - **Para INSERTAR o BORRAR filas usa Excel COM, jamás openpyxl.** COM ajusta
   todas las fórmulas del libro al desplazar; openpyxl no ajusta nada y deja
   cientos de referencias apuntando a la fila equivocada — corrupción
@@ -148,6 +188,8 @@ reconstruirlo, el orden es fijo:
 
 ## Referencias
 
-- `tools/xlsx_builder.py` — implementación única (paleta, NumFmt, roles, audit F).
+- `tools/xlsx_builder.py` — implementación única (paleta, NumFmt, roles, audit F,
+  bloques de valuación).
+- `tools/recalc_validate.py` — recálculo con Excel/LibreOffice y checks R.
 - `skills/model-standards/references/excel-practices.md` — el contrato legible.
 - `skills/model-standards/references/integrity-checks.md` — checks F en la lista.

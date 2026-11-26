@@ -128,6 +128,8 @@ BREAKING_MUTATIONS: dict[str, tuple[Mutation, str]] = {
     "F16": (_set("Operating", "B10", "fila pegada al header"), "Operating!fila 11"),
     "F17": (_set("Operating", "N15", None), "Operating!fila 15"),    # forecast incompleto
     "F18": (_cycle, "CICLOS"),
+    # ABS admite un argumento: Excel repara el libro y borra la formula (issue #33).
+    "F21": (_set("Operating", "T60", "=MAX(ABS(C12,D12,E12))"), "Operating!T60: ABS"),
 }
 # Checks cuya falla no se puede provocar mutando el demo; tienen su propia prueba
 # en AuditTests (F19 necesita valores calculados; F20, bajar el limite de escaneo).
@@ -261,6 +263,71 @@ class BrokenBookTests(unittest.TestCase):
             for col in range(11, 19):  # tramo E del demo (K..R)
                 ws.cell(row=15, column=col).value = None
         self.assertTrue(self._audit(discontinue)["F17"].ok)
+
+
+class LiveChecksTests(unittest.TestCase):
+    """Issue #33: un check de formula viva que nunca se evaluo no es verde."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = str(Path(tmp.name) / "vivos.xlsx")
+
+    def _book(self, formula: object) -> B.ModelStyler:
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Checks", freeze=None)
+        ws["B5"] = "C1 Balance cuadra"
+        if formula is not None:
+            styler.check_result(ws, 5, 3, formula)
+        return styler
+
+    def test_formulas_without_cached_values_are_pending_and_say_so(self) -> None:
+        self._book('=IF(ABS(D5)>0.0001,"Error","OK")').save(self.path)
+        finding = B.live_checks_finding(self.path)
+        self.assertTrue(finding.pending)
+        self.assertIn("SIN evaluar", finding.detail)
+        self.assertIn("1 de 1", finding.detail)
+
+    def test_checks_tab_without_formulas_is_not_applicable(self) -> None:
+        self._book(None).save(self.path)
+        finding = B.live_checks_finding(self.path)
+        self.assertTrue(finding.ok)
+        self.assertFalse(finding.pending)
+
+    def test_cli_audit_is_not_green_while_live_checks_are_unevaluated(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()):
+            B._demo(self.path)
+        wb = load_workbook(self.path)
+        wb["Checks"]["C7"] = '=IF(ABS(Operating!C27)>0,"OK","Error")'
+        wb["Checks"]["C7"].font = Font(name=B.FONT_NAME, size=11)   # F2 sigue verde
+        wb.save(self.path)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = B.main(["xlsx_builder.py", "audit", self.path])
+        self.assertEqual(code, 3)
+        self.assertIn("[pendiente] Checks vivos", out.getvalue())
+        self.assertIn("SIN evaluar", out.getvalue())
+
+    def test_evaluated_error_is_a_failure_and_names_the_check(self) -> None:
+        # Valores cacheados simulados: se parchea la lectura data_only.
+        self._book('=IF(ABS(D5)>0.0001,"Error","OK")').save(self.path)
+        cached = B.Workbook()
+        ws = cached.active
+        ws.title = "Checks"
+        real_load = B.load_workbook
+
+        def fake_load(path: str, data_only: bool = False, **kwargs: object) -> Workbook:
+            return cached if data_only else real_load(path, data_only=False, **kwargs)
+
+        for value, expect_ok in (("Error", False), ("#NAME?", False), ("OK", True)):
+            with self.subTest(value=value):
+                ws["C5"] = value
+                with mock.patch.object(B, "load_workbook", side_effect=fake_load):
+                    finding = B.live_checks_finding(self.path)
+                self.assertEqual(finding.ok, expect_ok, finding.detail)
+                self.assertFalse(finding.pending)
+                if not expect_ok:
+                    self.assertIn("C1 Balance cuadra", finding.detail)
 
 
 class ExternalModelTests(unittest.TestCase):

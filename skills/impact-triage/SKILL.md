@@ -32,7 +32,7 @@ con su porqué en `journal/decisions.md` (es señal de tesis, no corrección).
 1. Toma el diff (lo nuevo capturado por statement-mapper vs el modelo vigente).
 2. Por cada delta material: ¿qué driver lo explica? (driver-map) ¿toca un pilar de
    la tesis? (thesis-journal) ¿cuánto movería la valuación? — la estimación de
-   impacto usa las sensibilidades YA construidas en el modelo (data tables), nunca
+   impacto usa las sensibilidades YA construidas en el modelo (cuadrícula de Sensitivity), nunca
    cálculo propio de la skill.
 3. Clasifica cada hallazgo con su racional en una tabla. Formato EXACTO (la
    columna "impacto estimado" siempre cita la sensibilidad del modelo o dice
@@ -40,7 +40,7 @@ con su porqué en `journal/decisions.md` (es señal de tesis, no corrección).
 
    | Hallazgo | Nivel | Por qué | Dónde pega | Impacto estimado |
    |---|---|---|---|---|
-   | GM% Products −180bps vs estimado | CRÍTICO | rompe driver de margen del driver-map | Sch: COGS → IS → valuación | −7% precio objetivo (data table WACC×g, fila margen) |
+   | GM% Products −180bps vs estimado | CRÍTICO | rompe driver de margen del driver-map | Sch: COGS → IS → valuación | −7% precio objetivo (cuadrícula de Sensitivity WACC×g, fila margen) |
    | Nuevo programa de recompras $110B | Relevante | cambia supuesto secundario de buyback | Sch: Buyback | pendiente de poblar |
    | Cambio de auditor | Cosmético | sin contacto con tesis ni drivers | — | — |
 4. Entrega el triage ANTES de que nadie toque el modelo — el orden importa: primero

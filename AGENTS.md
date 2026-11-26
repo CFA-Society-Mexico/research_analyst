@@ -63,12 +63,18 @@ SKILL.md); las demás solo leen.
   workspace, nunca en el repo ni en consola. Fuentes: filings locales del usuario,
   datos públicos, web search de tu plataforma si existe. Filings SEC faltantes:
   `python tools/sec_fetch.py <TICKER> --ua "<nombre correo>"` (EDGAR público,
-  gratis; SIEMPRE con gate del usuario antes de descargar).
+  gratis; sin `--forms` detecta emisora doméstica — 10-K/10-Q/8-K — o
+  extranjera — 20-F/40-F + 6-K; SIEMPRE con gate del usuario antes de descargar).
 - xlsx solo vía `tools/xlsx_builder.py` (skill xlsx-building) — nunca openpyxl
   crudo para estructura/formato; audit de formato: `python tools/xlsx_builder.py audit <modelo>`;
   checks S + C10 + F en una corrida: `python tools/model_check.py <modelo>` (nunca
-  reimplementes un check S a mano).
+  reimplementes un check S a mano); con `--recalc` recalcula una copia con
+  Excel o LibreOffice y evalúa además R1/R2 y los checks de fórmula viva
+  (`python tools/recalc_validate.py <modelo>` hace solo ese paso). Sin
+  recálculo los checks vivos quedan `[pendiente]`, nunca verdes.
 - Historia financiera masiva de emisoras SEC: `python tools/xbrl_fetch.py <TICKER>`
-  (companyfacts XBRL — décadas de anuales y trimestrales sin parsear HTML).
+  (companyfacts XBRL, US GAAP o IFRS en la moneda de reporte — décadas de
+  anuales y trimestrales sin parsear HTML; reglas de vintage y de signo del CSV
+  en statement-mapper).
 - Nada se borra en la carpeta de cobertura; retención mínima 7 años.
 - Documentación al usuario en español; nombres de archivos y skills en inglés.

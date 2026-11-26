@@ -51,11 +51,15 @@ Falta un contrato → detente y repórtalo; no construyas parcial ni inventes el
    histórico/forecast).
 5. Pestañas de valuación según métodos activos — fórmulas y convenciones exactas en
    `references/valuation-conventions.md` (incluye bloque Hamada, reverse DCF y
-   múltiplos justificados + PVGO). Usuario en el loop en cada supuesto.
+   múltiplos justificados + PVGO). Usuario en el loop en cada supuesto. El
+   terminal Gordon usa el flujo NORMALIZADO con RONIC (nunca `FCFF_n`
+   perpetuado), la tab Sensitivity es una cuadrícula con fórmula por celda y
+   el market cap de cada comparable convierte ADS y moneda: todo con los
+   bloques del builder (xlsx-building 3d), no con fórmulas propias.
 6. Corre TODOS los checks de `references/integrity-checks.md`: los S, el C10 y
-   los F por código (`python tools/model_check.py <modelo> --driver-map
-   driver-map.md`, exit 0 exigido — nunca con un script propio), más los C de
-   fórmula y los D.
+   los F por código, con recálculo real (`python tools/model_check.py <modelo>
+   --driver-map driver-map.md --recalc`, exit 0 exigido — nunca con un script
+   propio): eso agrega R1/R2 y evalúa los C de fórmula viva. Más los D.
    Cualquier rojo: arregla estructura/fórmulas (nunca "ajustes" a cifras
    observadas) y re-corre.
 7. Entrega solo con checks verdes. Check rojo irresoluble = reporta FALLA con celdas

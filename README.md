@@ -152,7 +152,7 @@ responde a lenguaje natural, sobre coberturas del plugin o trabajo tuyo previo.
 | Tipo | ¿Hoy? |
 |---|---|
 | SEC (10-K/10-Q, US GAAP) · BMV no financiera (IFRS) · privada (NIF) · FIBRA/REIT | ✅ |
-| ADR (20-F, IFRS) | ⚠️ Perfil, modelo y valuación sí. `sec_fetch` baja 20-F y 6-K con `--forms 20-F,6-K`; `xbrl_fetch` solo lee US GAAP, así que la historia se captura desde el filing |
+| ADR (20-F, IFRS) | ⚠️ Perfil, modelo y valuación sí. `sec_fetch` detecta la emisora extranjera y baja 20-F (o 40-F) y 6-K con sus exhibits sin pasar `--forms`; `xbrl_fetch` lee la taxonomía `ifrs-full` en la moneda de reporte (autodetectadas; `--taxonomy`, `--currency`), así que la historia anual sale de XBRL — los trimestres de los 6-K, que normalmente no traen XBRL, se capturan desde el filing |
 | Comparar empresas entre marcos contables | ⚠️ Las 7 diferencias más comunes verificadas; el resto se marca `[VERIFICAR]` |
 | Bancos y aseguradoras | ❌ v2 — falta el mapeo CNBV/CNSF; el plugin lo detecta y te avisa |
 

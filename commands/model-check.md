@@ -21,25 +21,36 @@ el C10 y los F corren en UNA corrida con `python tools/model_check.py
 brand/DESIGN.md]` — implementación única, cero interpretación del agente:
 exit 1 = falla, exit 3 = pendiente de recálculo (se reporta `[pendiente]`,
 nunca como ok). JAMÁS reimplementar un check S con un script propio de la
-cobertura. Los C de fórmula viva se leen de la tab `Checks`; C9 y los D los
-evalúa el agente con la regla escrita. Solo lectura: este comando NUNCA
-modifica el modelo.
+cobertura. Los C de fórmula viva (tabs `Checks` y `Cover`) los lee la misma
+corrida: evaluados si el libro trae valores calculados, `[pendiente]: SIN
+evaluar` si no. C9 y los D los evalúa el agente con la regla escrita. Solo
+lectura: este comando NUNCA modifica el modelo.
 En modelo externo se agrega `--external`: F10 (sello del builder) se reporta
 `[aviso]`, no falla. Sin la bandera, la falta de sello es falla.
 
-## Recalculo (detección de ciclos — S10)
+## Recálculo y validación (checks R, S10, F19 y checks vivos)
 
-Si hay Excel disponible (COM en Windows), recalcular el libro
-(`CalculateFullRebuild` + `Save`) y volver a correr `tools/model_check.py`: **celda de FÓRMULA cuyo valor cacheado
-queda vacío tras el recálculo = FALLA S10** (referencia circular o cadena de
-dependencias rota — el síntoma exacto del forecast sin calcular del smoke #5).
-Sin Excel disponible: reportar S10 como `[pendiente: recalc manual]`, nunca
-como ok.
+Agrega `--recalc` a la corrida: `tools/model_check.py` recalcula una COPIA del
+modelo con Excel (COM en Windows) o LibreOffice headless y audita esa copia.
+Un audit en verde sobre un libro sin recalcular NO prueba nada sobre sus
+fórmulas vivas:
+
+- **R1** — el motor abre el libro y conserva todas sus fórmulas. Una fórmula
+  descartada (o un libro que no abre) es lo que el analista vería como
+  "encontramos un problema con el contenido": FALLA con las celdas.
+- **R2** — ninguna celda calculada en error (`#NAME?`, `#VALUE!`…).
+- **S10** — celda de FÓRMULA cuyo valor queda vacío tras el recálculo = FALLA
+  (referencia circular o cadena rota — el forecast sin calcular del smoke #5).
+- **Checks vivos** — cada `Error` de `Checks`/`Cover` se reporta con su nombre.
+
+Sin Excel ni LibreOffice: R1 sale `[pendiente]` y el reporte dice cuántos
+checks vivos quedaron SIN evaluar. Se reporta así, nunca como ok.
 
 ## Reporte
 
 ```
 MODEL CHECK — <archivo>  [fecha]
+Recálculo (R) : [ok] x N   [x] ...   [pendiente] sin motor   (--recalc)
 Estructurales : [ok] x N   [x] ...celda/hoja...   (tools/model_check.py)
 Contables     : [ok] x N   [x] ...
 Contenido     : [ok] x N   [aviso] ...   [n/a] ...

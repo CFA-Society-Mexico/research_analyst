@@ -13,7 +13,10 @@ model-standards) y **no mueve archivos** (eso es coverage-folders).
 **Captura masiva vía XBRL (emisoras SEC):** `python tools/xbrl_fetch.py
 <TICKER> --dest model/inputs --ua "<nombre correo>"` baja TODA la historia
 reportada (anual y trimestral, décadas) desde companyfacts de SEC como CSV
-largo con periodo fiscal, form y filed — sin parsear HTML. Esta skill convierte
+largo con periodo fiscal, form, filed y accession — sin parsear HTML. Lee
+`us-gaap` e `ifrs-full` (emisoras 20-F/40-F bajo IFRS, mismas líneas canon) en
+la moneda de reporte; ambas se autodetectan o se fijan con `--taxonomy` /
+`--currency` (más de una moneda ⇒ `[aviso]` con cuál se tomó). Esta skill convierte
 ese CSV en los `canonical_*.csv` (mapeo canon → línea con gate del analista).
 El tool ya entrega el 4Q de IS y CF derivado (FY − acumulado a 3Q, tag
 `derivado`) — esta skill no resta nada a mano; la UPA de 4Q no se deriva
@@ -21,6 +24,10 @@ porque no es aditiva. Filas con tag `acumulado YTD sin desacumular` NO son
 trimestrales: se reportan al analista y jamás entran al canónico como
 trimestre. Preferir esta ruta a extraer trimestre por trimestre de 10-Qs; el
 filing HTML queda para lo que XBRL no trae (notas, segmentos, guidance).
+**Antes de mapear ese CSV lee `references/xbrl-csv-rules.md`** (obligatorio):
+un vintage por estado y periodo (tag `vintage distinto` = conciliar contra el
+filing), signo (`sign = salida(+)`: el tool no invierte; se puentea contra el
+subtotal observado) y líneas `_alt` / IFRS.
 
 **Salida formal — `model/inputs/`** (dueña también de esta carpeta):
 - `extract_*.json`: papeles de trabajo por filing — cada cifra con valor,
@@ -83,6 +90,15 @@ filing HTML queda para lo que XBRL no trae (notas, segmentos, guidance).
    football field de cualquier fecha). Balance e income items del último filing
    del comp con cita; market data (precio, acciones) de fuente pública con
    fuente y **timestamp** (`as_of` con hora: los precios envejecen).
+2b. **Unidades y moneda del precio (obligatorio):** captura
+   `market_data.price_currency`, `shares_per_ads` (acciones ordinarias por
+   ADS; 1 si el precio es por acción ordinaria) y `fx_to_reporting` (a la
+   moneda de reporte de la emisora cubierta, con fuente y fecha).
+   `shares_outstanding` son acciones ORDINARIAS, nunca número de ADS. Un ADR
+   cotiza por ADS y en USD: sin estos tres campos el market cap mezcla
+   unidades y monedas (EV/EBITDA 1.0x en vez de 10.1x en un comparable de la
+   cobertura de TSMC). Jamás se asume 1 ni la moneda: campo sin fuente ⇒ vacío
+   y reportado (el snapshot no entra a Val_Comps).
 3. Anota el marco contable del comp y las notas de comparabilidad (consulta la
    reference de framework-mapper si el marco difiere del de la emisora — pero la
    cita normativa la emite framework-mapper, no tú).
