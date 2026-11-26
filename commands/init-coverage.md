@@ -66,6 +66,10 @@ Los pasos 3 y 4 pueden correr en paralelo (la máquina captura mientras el anali
 piensa industria); sus gates cierran por separado y AMBOS deben estar cerrados antes
 del paso 5.
 
+Al cerrar los gates de los pasos 2 y 3, y antes del paso 5:
+`python tools/contract_check.py <raiz>/<TICKER>` sin fallas (checks K). Antes
+del gate del paso 2 el perfil no está confirmado y K2 falla por diseño.
+
 ## Post-run (antes de reportar terminado)
 
 - Balance check y tie-out de caja verdes; celda única de error check limpia.

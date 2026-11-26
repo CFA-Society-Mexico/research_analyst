@@ -118,6 +118,26 @@ nombra el check. Sobre un libro sin valores calculados el reporte dice
 `N de M checks vivos SIN evaluar` y queda `[pendiente]`: un check que nunca
 se evaluó no es un check verde.
 
+## De contratos de la cobertura (checks K — `tools/contract_check.py`)
+
+Corren con `python tools/contract_check.py <raiz>/<TICKER>`, sobre los insumos
+y no sobre el xlsx: sirven antes de que exista un modelo. Solo lectura, mismos
+exit codes. Falla lo estructural; avisa lo tolerable (campo que el contrato no
+conoce, valor deprecado con equivalente, etiqueta válida con texto extra).
+PyYAML es opcional: sin él K1–K4 salen `[pendiente]` y K5 corre.
+
+| # | Check | Regla |
+|---|---|---|
+| K1 | Todo YAML parsea | `issuer-profile.yaml`, `macro-view.yaml` y cada `comps/*.yaml` son YAML válido y un mapa de campos. Falla con archivo, línea y columna. Un archivo que no parsea deja su check de contenido `[pendiente]` |
+| K2 | `issuer-profile.yaml` | Obligatorios no vacíos (ticker, name, as_of, listing, issuer_type, framework_governing, currency_reporting, units, fiscal_year_end, model_periodicity); valores de su lista; las tres confirmaciones del analista en `true`; tipos de los campos numéricos y booleanos. Aviso: campo desconocido, `annual_plus_quarterly` (deprecado), `fiscal_year_end` que no es `MM-DD` (un año fiscal de 52/53 semanas no cabe en ese formato) |
+| K3 | `macro/macro-view.yaml` | `updated_at` con fecha; `staleness_warn_months` entero > 0 si está. Sin archivo o con campo desconocido: aviso |
+| K4 | `comps/*.yaml` | Sobre el snapshot VIGENTE de cada comparable: `ticker`, `as_of` con fecha, los cinco campos obligatorios de `market_data` (price, price_currency ISO 4217, shares_per_ads, fx_to_reporting con `as_of`, shares_outstanding) y cada dato capturado con `value` numérico y `source`. Aviso: `framework` fuera de lista, campo desconocido (también dentro de `market_data`, `balance_items` e `income_items`) |
+| K5 | `model/inputs/canonical_*.csv` | Las seis columnas del contrato; `period` `FY2016` en el anual y `3Q2016` en el trimestral; `value` numérico; llave `(line_item, period)` única; `tag` de la lista; `observado` con `source_doc`. Aviso: etiqueta válida con texto extra |
+
+Las tablas de reglas viven en el tool; `tests/test_repo_contracts.py` falla si
+un template gana o pierde un campo sin que el validador se entere.
+
+
 ## Reporte de /model-check
 
 ```

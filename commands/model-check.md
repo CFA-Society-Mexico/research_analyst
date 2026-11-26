@@ -11,6 +11,9 @@ Uso: `/model-check [ruta del xlsx]` (default: el modelo vigente de la cobertura 
 2. Si es modelo del plugin: driver-map e issuer-profile presentes (habilita los
    checks D1, D2, D7). Si es modelo externo: los checks D que dependen de contratos
    del plugin se reportan como `n/a`, no como falla.
+3. Si el modelo vive en una cobertura: `python tools/contract_check.py
+   <raiz>/<TICKER>` (checks K) y su resultado va en el reporte, antes de los S.
+   Un contrato roto explica la mitad de los rojos del modelo.
 
 ## Ejecución
 

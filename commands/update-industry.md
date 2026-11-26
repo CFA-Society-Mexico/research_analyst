@@ -10,6 +10,7 @@ Uso: `/update-industry <TICKER> [contexto del porqué]`.
    previo — si no hay ninguno, esto es `/init-coverage` paso 4, no un update:
    abortar con esa instrucción.
 2. `macro-view.yaml` dentro de staleness (aviso, no bloqueo — igual que D6).
+3. Contratos sin fallas: `python tools/contract_check.py <raiz>/<TICKER>`.
 
 ## Pipeline
 

@@ -5,7 +5,9 @@ actual-vs-driver + calibración. Uso: `/update-quarter <TICKER> [filing nuevo]`.
 
 ## Preflight (obligatorio — cualquier fallo DETIENE el comando)
 
-1. Árbol de cobertura e `issuer-profile.yaml` existen y el perfil está confirmado.
+1. Árbol de cobertura e `issuer-profile.yaml` existen y el perfil está confirmado:
+   `python tools/contract_check.py <raiz>/<TICKER>` sin fallas (checks K; un
+   `[aviso]` se reporta y no detiene).
 2. **Baseline verde:** el modelo vigente pasa TODOS los checks ANTES de tocar nada.
    Roto ⇒ arreglar primero vía `/model-check`; nunca actualizar sobre un modelo roto.
 3. Filing nuevo identificado, legible y no capturado previamente (anti-doble-captura).

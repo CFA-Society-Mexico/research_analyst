@@ -10,7 +10,10 @@ valor. El plugin jamás decide un supuesto macro.
 ## Preflight (cualquier fallo DETIENE el comando)
 
 1. `macro/` existe con `macro-view.yaml` (si no: crear estructura desde
-   template y avisar — no hay nada que actualizar todavía).
+   template y avisar — no hay nada que actualizar todavía). El archivo debe
+   parsear: correr `python tools/contract_check.py <raiz>/<TICKER>` sobre una
+   cobertura del workspace y resolver K1/K3 ANTES de proponer cambios — editar
+   un YAML roto lo rompe más.
 2. **Series frescas:** correr `python tools/fred_fetch.py --dest macro/series`
    (gate: avisar antes). Sin key: pedirla en el chat (el registro es gratuito,
    link en el mensaje del tool) y guardarla en `macro/fred.key` — jamás

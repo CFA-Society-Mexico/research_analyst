@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -20,6 +21,7 @@ COMMANDS_DIR = ROOT / "commands"
 CHECKS_DOC = SKILLS_DIR / "model-standards" / "references" / "integrity-checks.md"
 BUILDER = ROOT / "tools" / "xlsx_builder.py"
 CHECKER = ROOT / "tools" / "model_check.py"
+CONTRACT_CHECKER = ROOT / "tools" / "contract_check.py"
 # Checks C que son escaneo por codigo (el resto son formulas de la tab Checks).
 SCANNED_C_CHECKS = {"C9", "C10", "C11"}
 # Checks D que son escaneo por codigo: los de vigencia. El resto de los D son
@@ -30,7 +32,7 @@ SCANNED_D_CHECKS = {"D3", "D6", "D10"}
 ROUTED_DOCS = ("AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/architecture.md")
 
 _REPO_PATH = re.compile(r"`((?:commands|skills|templates|tools|docs|tests)/[^`\s]+)`")
-_CHECK_ROW = re.compile(r"^\| ([SCDF]\d+[a-z]?) \|", re.MULTILINE)
+_CHECK_ROW = re.compile(r"^\| ([SCDFK]\d+[a-z]?) \|", re.MULTILINE)
 _FINDING_ID = re.compile(r'Finding\(\s*"(F\d+)[ "]')
 
 
@@ -151,6 +153,47 @@ class IntegrityCheckTests(unittest.TestCase):
         emitted = set(re.findall(r'"(D\d+) ', CHECKER.read_text(encoding="utf-8")))
         self.assertEqual(emitted, SCANNED_D_CHECKS, "checks D emitidos por tools/model_check.py")
         self.assertLessEqual(emitted, documented, "check D emitido sin fila en integrity-checks")
+
+
+class ContractCheckTests(unittest.TestCase):
+    """El validador de contratos conoce exactamente los campos de los templates."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import contract_check
+        cls.K = contract_check
+
+    def _template(self, name: str) -> dict:
+        if self.K.yaml is None:
+            self.skipTest("PyYAML no instalado")
+        return self.K.yaml.safe_load(_read(f"templates/{name}"))
+
+    def test_validator_knows_exactly_the_template_fields(self) -> None:
+        for name, known in (("issuer-profile.yaml", self.K.PROFILE_KEYS),
+                            ("macro-view.yaml", self.K.MACRO_KEYS),
+                            ("comp-snapshot.yaml", self.K.COMP_KEYS)):
+            with self.subTest(template=name):
+                self.assertEqual(set(self._template(name)), set(known),
+                                 "campos del template vs campos que conoce contract_check.py")
+
+    def test_validator_knows_the_market_data_fields(self) -> None:
+        market = self._template("comp-snapshot.yaml")["market_data"]
+        self.assertEqual(set(market), set(self.K.COMP_MARKET_KEYS))
+
+    def test_validator_knows_the_balance_and_income_fields(self) -> None:
+        template = self._template("comp-snapshot.yaml")
+        for section in ("balance_items", "income_items"):
+            with self.subTest(section=section):
+                known = self.K.COMP_SECTION_DATA[section] + self.K.COMP_SECTION_TEXT[section]
+                self.assertEqual(set(template[section]), set(known))
+
+    def test_documented_k_checks_are_exactly_the_emitted_ones(self) -> None:
+        documented = {i for i in _CHECK_ROW.findall(CHECKS_DOC.read_text(encoding="utf-8"))
+                      if i.startswith("K")}
+        emitted = set(re.findall(r'"(K\d+) ', CONTRACT_CHECKER.read_text(encoding="utf-8")))
+        self.assertEqual(emitted, documented,
+                         "checks K documentados vs emitidos por tools/contract_check.py")
 
 
 if __name__ == "__main__":
