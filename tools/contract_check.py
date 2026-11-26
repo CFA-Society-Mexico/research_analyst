@@ -108,6 +108,46 @@ def _listing(items: Sequence[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Carga de YAML y K1
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Loaded:
+    """Un contrato YAML leido: ``data`` es None si no parsea o no es un mapa."""
+
+    path: Path
+    data: dict[str, Any] | None
+    error: str = ""
+
+
+def load_yaml(path: Path) -> Loaded:
+    """Lee un contrato YAML. Requiere PyYAML (el llamador ya lo comprobo)."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        return Loaded(path, None, f"{path.name}: no es UTF-8")
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" linea {mark.line + 1}, columna {mark.column + 1}" if mark else ""
+        problem = getattr(exc, "problem", None) or "YAML invalido"
+        return Loaded(path, None, f"{path.name}{where}: {problem}")
+    if not isinstance(data, dict):
+        return Loaded(path, None, f"{path.name}: el documento no es un mapa de campos")
+    return Loaded(path, data)
+
+
+def check_yaml_parses(loaded: Sequence[Loaded]) -> Finding:
+    """K1: todo contrato YAML de la cobertura es YAML valido."""
+    problems = Problems(hard=[item.error for item in loaded if item.data is None])
+    return problems.finding(K1, f"{len(loaded)} archivos YAML validos")
+
+
+def _unparsed(name: str) -> Finding:
+    return Finding(name, False, "no evaluado: el archivo no parsea (ver K1)", pending=True)
+
+
+# ---------------------------------------------------------------------------
 # K5 - capa de captura
 # ---------------------------------------------------------------------------
 
@@ -174,4 +214,34 @@ def check_capture(inputs_dir: Path) -> Finding:
 
 def audit_contracts(coverage: Path, macro_view: Path | None = None) -> list[Finding]:
     """Checks K sobre la carpeta de una cobertura (``<raiz>/<TICKER>``)."""
-    return [check_capture(coverage / "model" / "inputs")]
+    capture = check_capture(coverage / "model" / "inputs")
+    if yaml is None:
+        return [*(Finding(name, False, PYYAML_HINT, pending=True) for name in (K1, K2, K3, K4)),
+                capture]
+    macro_path = macro_view or coverage.parent / "macro" / "macro-view.yaml"
+    profile_path = coverage / "issuer-profile.yaml"
+    comps_dir = coverage / "comps"
+    profile = load_yaml(profile_path) if profile_path.is_file() else None
+    macro = load_yaml(macro_path) if macro_path.is_file() else None
+    comps = [load_yaml(p) for p in sorted(comps_dir.glob("*.yaml"))] if comps_dir.is_dir() else []
+    loaded = [item for item in (profile, macro, *comps) if item is not None]
+    return [check_yaml_parses(loaded), check_profile(profile), check_macro(macro),
+            check_comps(comps), capture]
+
+
+def check_profile(profile: Loaded | None) -> Finding:
+    if profile is not None and profile.data is None:
+        return _unparsed(K2)
+    return Finding(K2, True, "n/a (reglas en la Task 3)")
+
+
+def check_macro(macro: Loaded | None) -> Finding:
+    if macro is not None and macro.data is None:
+        return _unparsed(K3)
+    return Finding(K3, True, "n/a (reglas en la Task 4)")
+
+
+def check_comps(comps: Sequence[Loaded]) -> Finding:
+    return Finding(K4, True, "n/a (reglas en la Task 4)")
+
+

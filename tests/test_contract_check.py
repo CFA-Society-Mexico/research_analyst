@@ -186,5 +186,55 @@ class CaptureTests(_Coverage):
         self.assertLess(len(finding.detail), 400)
 
 
+# Mapa en linea sin cerrar: ningun parser de YAML lo acepta.
+BROKEN_YAML = """\
+updated_at: "2026-10-01"
+rates:
+  risk_free_10y: {value: 4.1, source: "FRED DGS10"
+fx: 1
+"""
+
+
+@unittest.skipIf(K.yaml is None, "PyYAML no instalado")
+class YamlParsingTests(_Coverage):
+
+    def test_valid_coverage_passes_the_five_checks(self) -> None:
+        found = self._checks()
+        self.assertEqual(sorted(found), ["K1", "K2", "K3", "K4", "K5"])
+        for check_id, finding in found.items():
+            with self.subTest(check=check_id):
+                self.assertTrue(finding.ok, finding.detail)
+
+    def test_broken_yaml_fails_k1_with_file_and_line(self) -> None:
+        self._write("macro/macro-view.yaml", BROKEN_YAML)
+        found = self._checks()
+        self.assertFails(found["K1"], "macro-view.yaml", "linea")
+        # Lo que no parsea no se puede revisar por dentro: pendiente, no verde.
+        self.assertTrue(found["K3"].pending)
+
+    def test_yaml_that_is_not_a_mapping_fails_k1(self) -> None:
+        self._write("TICK/comps/MSFT.yaml", "- solo\n- una lista\n")
+        self.assertFails(self._checks()["K1"], "MSFT.yaml", "no es un mapa")
+
+    def test_macro_flag_points_at_another_file(self) -> None:
+        other = self._write("otra/macro-view.yaml", BROKEN_YAML)
+        found = {f.check.split()[0]: f for f in K.audit_contracts(self.coverage, other)}
+        self.assertFails(found["K1"], "macro-view.yaml")
+
+
+class WithoutPyYamlTests(_Coverage):
+
+    def test_yaml_checks_are_pending_and_csv_still_runs(self) -> None:
+        self._write("TICK/model/inputs/canonical_annual.csv",
+                    CSV_HEADER + "is_ni,FY2025,9.0,10-K,p.1,estimado\n")
+        with mock.patch.object(K, "yaml", None):
+            found = self._checks()
+        for check_id in ("K1", "K2", "K3", "K4"):
+            with self.subTest(check=check_id):
+                self.assertTrue(found[check_id].pending)
+                self.assertIn("pip install pyyaml", found[check_id].detail)
+        self.assertTrue(found["K5"].blocking)      # el CSV se valida igual
+
+
 if __name__ == "__main__":
     unittest.main()
