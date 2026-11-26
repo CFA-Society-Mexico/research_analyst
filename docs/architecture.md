@@ -29,7 +29,7 @@ flowchart TD
     S3 --> S4[4 · Construcción del modelo<br/>model-standards]
     S4 --> S5[5 · Forecast: poblar e iterar<br/>driver-inventory · populate]
     S5 --> S6[6 · Valuación multi-método<br/>model-standards · valuation]
-    S6 --> S7[7 · Nota<br/>tesis desde journal + disclosures]
+    S6 --> S7[7 · Nota<br/>research-note · deck y nota]
     S7 --> S8[8 · Mantenimiento<br/>impact-triage · calibración]
     S8 -.->|/update-quarter cada trimestre| S1
     MV[(macro-view.yaml<br/>house view compartido)] -.-> S2
@@ -59,6 +59,7 @@ Cada flecha del flujo principal lleva un gate: entrevista adaptativa + debate co
 | El xlsx completo | model-standards |
 | Formato del xlsx por código (vía `tools/xlsx_builder.py`) | xlsx-building — el contenido sigue siendo de model-standards |
 | Clasificación de materialidad | impact-triage |
+| `research/notes/*`: guion, hechos citados, `build_deck.py`, deck HTML, verificación y capturas | research-note — las cifras siguen siendo del modelo; el deck las lee, no las escribe |
 
 ## Decisiones de diseño y su porqué
 
@@ -77,6 +78,9 @@ Cada flecha del flujo principal lleva un gate: entrevista adaptativa + debate co
 | Cuarta etiqueta `guidance` | El guidance no es observable ni del analista; sin etiqueta propia contamina el contraste driver-vs-guidance |
 | Registro de calibración (forecast-accuracy) | Remedio conductual CFA (feedback loops → calibración); el debate cita el sesgo documentado, no impresiones |
 | Guard MNPI en preflight | Mosaic theory (Standard II(A)) protege solo con insumo público; los folders los llena el usuario |
+| research-note como novena skill, una sola para deck y nota (enmienda al tope de 8) | La etapa 7 no tenía dueña y `research/notes/` nadie lo escribía. Deck y nota comparten insumos, registro de hechos y verificación de cifras: dos skills duplicarían el gate y partirían la propiedad de la carpeta |
+| Deck con tool determinista + script libre por cobertura | Mismo patrón que `tools/xlsx_builder.py` con `build_model.py`: el tool fija lo que no depende de la emisora (procedencia de cada cifra, anatomía, medición); guion, narrativa y láminas a medida son de cada cobertura. Un generador declarativo no deja válvula para lo propio de la emisora |
+| Cifra sin origen bloquea el deck | En el deck hecho a mano, las seis afirmaciones falsas salieron de texto sin atadura a una fuente. Reportar no basta: el número suelto no llega al archivo |
 | Disclosures obligatorios en la nota | Standard V(B) + Research Objectivity Standards: derivación, supuestos, riesgos, conflictos, certificación — nunca en letra chica |
 
 ## Multi-plataforma
@@ -103,5 +107,7 @@ Huecos conocidos marcados `[VERIFICAR]` (ver README → Contribuir, fronteras co
   (`integrity-checks.md`); builder con respiro fail-fast y `check_result`
   fechado.
 - v0.6.0: repo público en CFA-Society-Mexico; 8 skills y 5 comandos.
+- v0.9.0: 9 skills y 6 comandos; la etapa 7 tiene dueña (`research-note`,
+  formato deck sobre `tools/deck_builder.py`). La nota .docx sigue pendiente.
 - Pendiente: suite de evals; slots `filings/management/` y
   `research/sell-side/` en uso real.

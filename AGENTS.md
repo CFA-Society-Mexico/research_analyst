@@ -78,6 +78,13 @@ SKILL.md); las demás solo leen.
 - Contratos de la cobertura (perfil, macro-view, comps, CSV canónicos):
   `python tools/contract_check.py <raiz>/<TICKER>` — checks K, solo lectura.
   Sin PyYAML los de YAML quedan `[pendiente]`, nunca verdes.
+- Deck solo vía `tools/deck_builder.py` (skill research-note) — ninguna cifra
+  tecleada: cada número sale del modelo recalculado o de un hecho citado, y uno
+  sin origen impide generar el deck. Verificación:
+  `python tools/deck_builder.py audit <deck.html> <modelo>` (checks P1 a P4) y
+  `python tools/deck_builder.py measure <deck.html> --shots <carpeta>` (P5 a
+  P8, con el navegador ya instalado). Sin navegador la medición queda
+  `[pendiente]`, nunca verde. El HTML del deck no se edita a mano.
 - Historia financiera masiva de emisoras SEC: `python tools/xbrl_fetch.py <TICKER>`
   (companyfacts XBRL, US GAAP o IFRS en la moneda de reporte — décadas de
   anuales y trimestrales sin parsear HTML; reglas de vintage y de signo del CSV

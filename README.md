@@ -128,13 +128,13 @@ reciente y nada se borra jamás (retención de 7 años).
     ├── filings/               # ENTRADAS · reportes oficiales (SEC y BMV), organizados
     ├── transcripts/           # ENTRADAS · earnings calls — si están, se usan como guidance
     ├── comps/                 # ENTRADAS · fotos fechadas de cada comparable
-    ├── brand/                 # CONFIG · tus colores de marca para el Excel (opcional)
+    ├── brand/                 # CONFIG · tus colores de marca para el Excel y el deck (opcional)
     ├── model/                 # SALIDAS · el Excel versionado por fecha
     │   └── inputs/            #   cifras capturadas de los filings, con su cita
     ├── research/              # SALIDAS · análisis fechados
     │   ├── industry/          #   reportes de industria (historia completa, con diffs)
     │   │   └── sources/       #     tu research del sector y el de terceros
-    │   └── notes/             #   notas de inversión publicadas
+    │   └── notes/             #   el deck de la tesis: guion, hechos citados, verificación
     └── journal/               # REGISTRO · solo se agrega, nunca se borra:
                                #   diario de tesis · decisiones · aciertos de forecast
 ```
@@ -168,7 +168,9 @@ responde a lenguaje natural, sobre coberturas del plugin o trabajo tuyo previo.
 ## Extras que el analista controla
 
 - **`brand/DESIGN.md`** — pon tus colores de marca y el Excel se genera con
-  ellos (los colores de trazabilidad no se tocan).
+  ellos (los colores de trazabilidad no se tocan). El mismo archivo fija el
+  estilo del deck con los slots `deck_*` (colores, fuentes, márgenes, logo); sin
+  él, el deck sale en un estilo neutro, sin marca de nadie.
 - **`macro/`** — los supuestos macro de la casa (tasa, FX, PIB) viven una sola
   vez a nivel workspace y alimentan todas las coberturas. Deja tu research en
   `macro/sources/` y `/update-macro` te propone la actualización campo por
