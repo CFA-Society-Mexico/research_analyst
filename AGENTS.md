@@ -22,6 +22,7 @@ recomendaciones de inversión.
 | Actualizar por trimestre nuevo / evento relevante | `commands/update-quarter.md` |
 | Refrescar el análisis de industria ("la industria se movió", "actualiza el landscape con diff") | `commands/update-industry.md` |
 | Actualizar el house view macro desde fuentes del analista ("actualiza el macro-view con mi research") | `commands/update-macro.md` |
+| Presentar la cobertura: deck de la tesis desde el modelo ("arma el deck", "presenta la cobertura") | `commands/present-coverage.md` |
 | Auditar un modelo / correr checks | `commands/model-check.md` |
 | Crear carpetas, archivar un filing | `skills/coverage-folders/SKILL.md` |
 | Saber qué norma gobierna una línea, marco de la emisora, perfil contable | `skills/framework-mapper/SKILL.md` |

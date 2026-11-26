@@ -44,7 +44,7 @@ enruta cada tarea a la skill correcta. Codex también lee el marketplace:
 
 ## El flujo completo
 
-Cinco comandos orquestan todo. Antes de correr verifican que nada falte
+Seis comandos orquestan todo. Antes de correr verifican que nada falte
 (incluida la confirmación de que no hay información privilegiada); si algo
 falla, se detienen — nunca dejan trabajo a medias.
 
@@ -53,6 +53,7 @@ falla, se detienen — nunca dejan trabajo a medias.
 /update-quarter AAPL ./nuevo-10q.pdf   # actualizarla cada trimestre
 /update-industry AAPL                  # refrescar la vista de industria, con diff
 /update-macro                          # actualizar el view macro desde tus fuentes
+/present-coverage AAPL                 # armar el deck de la tesis desde el modelo
 /model-check                           # auditar el Excel en cualquier momento
 ```
 
@@ -96,6 +97,13 @@ estimaste cada driver (calibración).
 cuando el reporte lleva más de 6 meses sin tocarse — el plugin te avisa): escribe
 un reporte NUEVO fechado, muestra el **diff contra la versión anterior**, y el
 triage clasifica qué deltas tocan tus supuestos.
+
+`/present-coverage` arma el deck de la tesis (`research-note`): propone el guion
+y tú lo apruebas antes de construir nada; cada cifra de cada lámina viene de una
+celda del modelo o de un hecho con su cita, y una cifra sin origen impide
+generar el deck (`tools/deck_builder.py`). Cierra con la verificación: cifras
+contra el modelo, espacio de cada lámina, evidencia frase por frase y capturas
+que revisas una por una.
 
 ## Cómo se ve una cobertura en disco
 
