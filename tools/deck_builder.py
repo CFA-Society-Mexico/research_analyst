@@ -903,3 +903,248 @@ class Deck:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(document, encoding="utf-8", newline="\n")
         return out
+
+
+    # -- graficas (SVG sin librerias) -----------------------------------------
+    # Reciben Num; la geometria usa float(). Las marcas de eje las calcula el
+    # tool y van con class="auto" (no son cifras del analista).
+
+    def _color(self, index: int) -> str:
+        return self.design.series[index % len(self.design.series)]
+
+    def bars(self, series: Series, keys: Optional[Sequence[PeriodKey]] = None,
+             show: Sequence[PeriodKey] = (), fmt: str = ",.0f", scale: float = 1.0,
+             tick_fmt: Optional[str] = None, w: int = 1100, h: int = 320) -> str:
+        """Barras por periodo. Observado y proyectado en colores distintos, con
+        corte rotulado; negativos en el color de negativo (sirve para
+        crecimientos). ``show``: periodos que llevan etiqueta de valor."""
+        keys = list(keys or series.keys)
+        values = [series[k] / scale if scale != 1.0 else series[k] for k in keys]
+        ticks = _nice_ticks(min(0.0, *(float(v) for v in values)),
+                            max(0.0, *(float(v) for v in values)))
+        lo, hi = ticks[0], ticks[-1]
+        left, right, top, bottom = 64, 16, 26, 30
+        plot_w, plot_h = w - left - right, h - top - bottom
+        slot = plot_w / len(keys)
+
+        def y(value: float) -> float:
+            return top + plot_h * (hi - value) / (hi - lo)
+
+        label_all = bool(self._weak & {0, 1})
+        out = [_svg_open(w, h, series.label)]
+        out += _y_axis(ticks, y, left, w - right, tick_fmt or fmt)
+        split = next((i for i, k in enumerate(keys) if not series.is_actual(k)), None)
+        if split not in (None, 0):
+            x = left + slot * split
+            out.append(f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top + plot_h}" '
+                       f'stroke="{self.design.muted}" stroke-dasharray="4 4"/>')
+            out.append(f'<text class="auto" x="{x + 6:.1f}" y="{top + 12}">Proyectado</text>')
+        for i, (key, value) in enumerate(zip(keys, values)):
+            v = float(value)
+            color = (self.design.negative if v < 0
+                     else self._color(0) if series.is_actual(key) else self._color(1))
+            x, y0, y1 = left + slot * i + slot * 0.15, y(max(v, 0.0)), y(min(v, 0.0))
+            out.append(f'<rect x="{x:.1f}" y="{y0:.1f}" width="{slot * 0.7:.1f}" '
+                       f'height="{max(y1 - y0, 0.5):.1f}" fill="{color}"/>')
+            out.append(f'<text class="auto" x="{x + slot * 0.35:.1f}" y="{h - 10}" '
+                       f'text-anchor="middle">{html.escape(str(key))}</text>')
+            if label_all or key in show:
+                ly = y0 - 5 if v >= 0 else y1 + 14
+                out.append(f'<text class="val" x="{x + slot * 0.35:.1f}" y="{ly:.1f}" '
+                           f'text-anchor="middle">{value:{fmt}}</text>')
+        out.append("</svg>")
+        return "".join(out)
+
+    def lines(self, named: Sequence[tuple[str, Series]],
+              keys: Optional[Sequence[PeriodKey]] = None, show: Sequence[PeriodKey] = (),
+              fmt: str = ".0%", tick_fmt: Optional[str] = None,
+              w: int = 1100, h: int = 320) -> str:
+        """Lineas de una o varias series sobre el mismo eje; la zona
+        proyectada va sombreada y cada linea lleva su nombre al final."""
+        first = named[0][1]
+        keys = list(keys or first.keys)
+        flat = [float(s[k]) for _, s in named for k in keys]
+        ticks = _nice_ticks(min(flat), max(flat))
+        lo, hi = ticks[0], ticks[-1]
+        left, right, top, bottom = 64, 170, 26, 30
+        plot_w, plot_h = w - left - right, h - top - bottom
+        step = plot_w / max(len(keys) - 1, 1)
+
+        def x(i: int) -> float:
+            return left + step * i
+
+        def y(value: float) -> float:
+            return top + plot_h * (hi - value) / (hi - lo)
+
+        out = [_svg_open(w, h, ", ".join(name for name, _ in named))]
+        split = next((i for i, k in enumerate(keys) if not first.is_actual(k)), None)
+        if split not in (None, 0):
+            x0 = x(split) - step / 2
+            out.append(f'<rect x="{x0:.1f}" y="{top}" width="{left + plot_w - x0:.1f}" '
+                       f'height="{plot_h}" fill="{self.design.muted}" opacity="0.10"/>')
+            out.append(f'<text class="auto" x="{x0 + 6:.1f}" y="{top + 12}">Proyectado</text>')
+        out += _y_axis(ticks, y, left, left + plot_w, tick_fmt or fmt)
+        for i, key in enumerate(keys):
+            if i % max(len(keys) // 8, 1) == 0 or i == len(keys) - 1:
+                out.append(f'<text class="auto" x="{x(i):.1f}" y="{h - 10}" '
+                           f'text-anchor="middle">{html.escape(str(key))}</text>')
+        for index, (name, series) in enumerate(named):
+            color = self._color(index)
+            points = " ".join(f"{x(i):.1f},{y(float(series[k])):.1f}" for i, k in enumerate(keys))
+            out.append(f'<polyline points="{points}" fill="none" stroke="{color}" '
+                       f'stroke-width="2.5"/>')
+            out.append(f'<text x="{left + plot_w + 8:.1f}" '
+                       f'y="{y(float(series[keys[-1]])) + 4:.1f}" fill="{color}">'
+                       f"{_esc(name)}</text>")
+            for i, key in enumerate(keys):
+                if index in self._weak or key in show:
+                    out.append(f'<text class="val" x="{x(i):.1f}" '
+                               f'y="{y(float(series[key])) - 8:.1f}" text-anchor="middle">'
+                               f"{series[key]:{fmt}}</text>")
+        out.append("</svg>")
+        return "".join(out)
+
+    def football(self, rows: Sequence[tuple[str, Num, Num, Num]],
+                 marker: Optional[tuple[str, Num]] = None, fmt: str = ",.0f",
+                 w: int = 1100, h: Optional[int] = None) -> str:
+        """Football field: por fila (metodo, minimo, maximo, punto central);
+        ``marker`` = (rotulo, valor) de la linea vertical (precio actual)."""
+        h = h or 60 * len(rows) + 60
+        values = [float(v) for _, low, high, mid in rows for v in (low, high, mid)]
+        if marker is not None:
+            values.append(float(marker[1]))
+        ticks = _nice_ticks(min(values), max(values))
+        lo, hi = ticks[0], ticks[-1]
+        left, right, top = 300, 70, 34
+        plot_w = w - left - right
+
+        def x(value: float) -> float:
+            return left + plot_w * (value - lo) / (hi - lo)
+
+        out = [_svg_open(w, h, "Rangos de valor por metodo")]
+        for tick in ticks:
+            out.append(f'<text class="auto" x="{x(tick):.1f}" y="{h - 8}" '
+                       f'text-anchor="middle">{tick:{fmt}}</text>')
+        for i, (label, low, high, mid) in enumerate(rows):
+            cy, color = top + 60 * i + 22, self._color(i)
+            out.append(f'<text x="0" y="{cy + 4}">{_esc(label)}</text>')
+            out.append(f'<rect x="{x(float(low)):.1f}" y="{cy - 12}" '
+                       f'width="{x(float(high)) - x(float(low)):.1f}" height="24" '
+                       f'fill="{color}" opacity="0.30"/>')
+            out.append(f'<circle cx="{x(float(mid)):.1f}" cy="{cy}" r="6" fill="{color}"/>')
+            out.append(f'<text class="val" x="{x(float(mid)):.1f}" y="{cy - 18}" '
+                       f'text-anchor="middle">{mid:{fmt}}</text>')
+            out.append(f'<text x="{x(float(low)) - 6:.1f}" y="{cy + 4}" '
+                       f'text-anchor="end">{low:{fmt}}</text>')
+            out.append(f'<text x="{x(float(high)) + 6:.1f}" y="{cy + 4}">{high:{fmt}}</text>')
+        if marker is not None:
+            mx = x(float(marker[1]))
+            out.append(f'<line x1="{mx:.1f}" y1="{top - 6}" x2="{mx:.1f}" y2="{h - 26}" '
+                       f'stroke="{self.design.text}" stroke-width="2"/>')
+            out.append(f'<text class="val" x="{mx:.1f}" y="{top - 14}" text-anchor="middle">'
+                       f"{_esc(marker[0])} {marker[1]:{fmt}}</text>")
+        out.append("</svg>")
+        return "".join(out)
+
+    def waterfall(self, steps: Sequence[tuple[str, Num]], total: tuple[str, Num],
+                  fmt: str = ",.0f", w: int = 1100, h: int = 320) -> str:
+        """Puente: cada paso suma o resta sobre el acumulado; ``total`` es la
+        barra final, leida del modelo (no se calcula aqui)."""
+        running, spans = 0.0, []
+        for label, value in steps:
+            start, running = running, running + float(value)
+            spans.append((label, value, start, running))
+        spans.append((total[0], total[1], 0.0, float(total[1])))
+        ticks = _nice_ticks(min(0.0, *(min(a, b) for _, _, a, b in spans)),
+                            max(0.0, *(max(a, b) for _, _, a, b in spans)))
+        lo, hi = ticks[0], ticks[-1]
+        left, right, top, bottom = 64, 16, 26, 44
+        plot_w, plot_h = w - left - right, h - top - bottom
+        slot = plot_w / len(spans)
+
+        def y(value: float) -> float:
+            return top + plot_h * (hi - value) / (hi - lo)
+
+        out = [_svg_open(w, h, "Puente de valor")]
+        out += _y_axis(ticks, y, left, w - right, fmt)
+        for i, (label, value, start, end) in enumerate(spans):
+            is_total = i == len(spans) - 1
+            color = (self._color(0) if is_total
+                     else self.design.negative if end < start else self._color(1))
+            x0, y0, y1 = left + slot * i + slot * 0.15, y(max(start, end)), y(min(start, end))
+            out.append(f'<rect x="{x0:.1f}" y="{y0:.1f}" width="{slot * 0.7:.1f}" '
+                       f'height="{max(y1 - y0, 0.5):.1f}" fill="{color}"/>')
+            out.append(f'<text class="val" x="{x0 + slot * 0.35:.1f}" y="{y0 - 5:.1f}" '
+                       f'text-anchor="middle">{value:{fmt}}</text>')
+            out.append(f'<text x="{x0 + slot * 0.35:.1f}" y="{h - 14}" text-anchor="middle">'
+                       f"{_esc(label)}</text>")
+        out.append("</svg>")
+        return "".join(out)
+
+    def heatmap(self, grid: Sequence[Sequence[Num]], rows: Sequence[Union[Num, str]],
+                cols: Sequence[Union[Num, str]], fmt: str = ",.0f", row_fmt: str = ".1%",
+                col_fmt: str = ".1%", corner: str = "",
+                center: Optional[tuple[int, int]] = None) -> str:
+        """Cuadricula de sensibilidad como tabla; el fondo crece con el valor
+        y ``center`` (fila, columna) marca el caso base."""
+        flat = [float(v) for line in grid for v in line]
+        lo, span = min(flat), (max(flat) - min(flat)) or 1.0
+
+        def head(item: Union[Num, str], spec: str) -> str:
+            return f"{item:{spec}}" if isinstance(item, Num) else _esc(item)
+
+        r, g, b = _rgb(self._color(0))
+        out = ['<table class="grid heat"><tr>', f"<th>{_esc(corner)}</th>"]
+        out += [f"<th>{head(c, col_fmt)}</th>" for c in cols]
+        out.append("</tr>")
+        for i, line in enumerate(grid):
+            out.append(f"<tr><th>{head(rows[i], row_fmt)}</th>")
+            for j, value in enumerate(line):
+                alpha = 0.06 + 0.34 * (float(value) - lo) / span
+                hl = ' class="hl"' if center == (i, j) else ""
+                out.append(f'<td{hl} style="background:rgba({r},{g},{b},{alpha:.2f})">'
+                           f"{value:{fmt}}</td>")
+            out.append("</tr>")
+        out.append("</table>")
+        return "".join(out)
+
+    def table(self, header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+        """Tabla simple. Las celdas son texto; los numeros llegan ya
+        formateados desde un Num (f-string)."""
+        out = ['<table class="grid"><tr>']
+        out += [f"<th>{_esc(cell)}</th>" for cell in header]
+        out.append("</tr>")
+        for row in rows:
+            out.append("<tr>" + "".join(f"<td>{_esc(cell)}</td>" for cell in row) + "</tr>")
+        out.append("</table>")
+        return "".join(out)
+
+
+def _svg_open(w: int, h: int, label: str) -> str:
+    return (f'<svg viewBox="0 0 {w} {h}" role="img" '
+            f'aria-label="{html.escape(_MARKER.sub("", label), quote=True)}">')
+
+
+def _nice_ticks(lo: float, hi: float, count: int = 4) -> list[float]:
+    """Marcas de eje redondas que cubren [lo, hi]."""
+    if hi <= lo:
+        hi = lo + 1.0
+    raw = (hi - lo) / count
+    magnitude = 10 ** math.floor(math.log10(raw))
+    step = next(m * magnitude for m in (1, 2, 2.5, 5, 10) if m * magnitude >= raw * (1 - 1e-9))
+    tick = math.floor(lo / step + 1e-9) * step
+    ticks = [round(tick, 10)]
+    while ticks[-1] < hi - step * 1e-9:
+        ticks.append(round(ticks[-1] + step, 10))
+    return ticks
+
+
+def _y_axis(ticks: Sequence[float], y: Callable[[float], float], x0: float, x1: float,
+            fmt: str) -> list[str]:
+    out = []
+    for tick in ticks:
+        out.append(f'<line x1="{x0:.1f}" y1="{y(tick):.1f}" x2="{x1:.1f}" y2="{y(tick):.1f}" '
+                   f'stroke="currentColor" opacity="0.12"/>')
+        out.append(f'<text class="auto" x="{x0 - 8:.1f}" y="{y(tick) + 4:.1f}" '
+                   f'text-anchor="end">{tick:{fmt}}</text>')
+    return out

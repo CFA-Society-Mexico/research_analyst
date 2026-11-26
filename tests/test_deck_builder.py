@@ -462,3 +462,79 @@ class DeckTests(_Case):
             self.deck().fact("nope")
         with self.assertRaisesRegex(D.DeckError, "no tiene laminas"):
             self.deck().build()
+
+
+class ChartTests(_Case):
+
+    def _bound(self, deck: D.Deck, visual: str) -> D.DeckDocument:
+        deck.slide(title="Titulo", lede="", visual=visual, note="Nota.", source="Fuente: x.")
+        doc = D.read_deck(deck.render())
+        self.assertEqual(D.unbound_numbers(doc, deck.book.axis_years()), [])
+        return doc
+
+    def test_nice_ticks_cover_the_range_with_round_steps(self) -> None:
+        self.assertEqual(D._nice_ticks(0.0, 240.0), [0.0, 100.0, 200.0, 300.0])
+        self.assertEqual(D._nice_ticks(-2.0, 4.0), [-2.0, 0.0, 2.0, 4.0])
+        self.assertEqual(D._nice_ticks(5.0, 5.0)[0], 5.0)
+
+    def test_bars_label_only_the_requested_periods_and_mark_the_forecast(self) -> None:
+        deck = self.deck()
+        svg = deck.bars(deck.series("Annual", "Ingresos"), show=(2024, 2027))
+        self.assertEqual(svg.count("Proyectado"), 1)
+        self.assertEqual(svg.count(f'fill="{deck.design.series[0]}"'), 3)   # observados
+        self.assertEqual(svg.count(f'fill="{deck.design.series[1]}"'), 3)   # proyectados
+        doc = self._bound(deck, svg)
+        self.assertEqual([n.text for n in doc.numbers], ["150", "240"])
+
+    def test_bars_scale_and_negative_color(self) -> None:
+        deck = self.deck()
+        change = deck.series("Annual", "Cambio")
+        svg = deck.bars(change, show=change.keys, fmt="+.1f", scale=2.0)
+        self.assertEqual(svg.count(f'fill="{deck.design.negative}"'), 2)
+        doc = self._bound(deck, svg)
+        self.assertEqual(doc.numbers[1].text, "-1.0")
+        self.assertEqual(doc.numbers[1].src, "(Annual!D17/2)")
+
+    def test_weak_series_color_forces_every_label(self) -> None:
+        (self.root / "brand").mkdir()
+        (self.root / "brand" / "DESIGN.md").write_text("deck_series_2: #F2F2F2\n", encoding="utf-8")
+        deck = self.deck(design="brand/DESIGN.md")
+        doc = self._bound(deck, deck.bars(deck.series("Annual", "Ingresos")))
+        self.assertEqual(len(doc.numbers), len(YEARS))
+
+    def test_lines_name_each_series_and_shade_the_forecast(self) -> None:
+        deck = self.deck()
+        rev, ni = deck.series("Annual", "Ingresos"), deck.series("Annual", "Utilidad neta")
+        svg = deck.lines([("Margen neto", ni.over(rev))], show=(2022, 2027), fmt=".1%")
+        self.assertIn("Margen neto</text>", svg)
+        self.assertEqual(svg.count("<polyline"), 1)
+        self.assertEqual(svg.count("Proyectado"), 1)
+        self.assertEqual([n.text for n in self._bound(deck, svg).numbers], ["10.0%", "15.0%"])
+
+    def test_football_binds_low_high_mid_and_marker(self) -> None:
+        deck = self.deck()
+        svg = deck.football([("DCF", deck.cell("DCF", "Bajo"), deck.cell("DCF", "Alto"),
+                              deck.cell("DCF", "Valor por accion"))],
+                            marker=("Precio", deck.cell("DCF", "Precio")), fmt=",.1f")
+        doc = self._bound(deck, svg)
+        self.assertEqual(sorted(n.text for n in doc.numbers), ["100.0", "110.0", "120.5", "140.0"])
+
+    def test_waterfall_ends_in_the_total_read_from_the_model(self) -> None:
+        deck = self.deck()
+        low, high = deck.cell("DCF", "Bajo"), deck.cell("DCF", "Alto")
+        svg = deck.waterfall([("Base", low), ("Ajuste", high - low)], total=("Total", high))
+        self.assertEqual(svg.count("<rect"), 3)
+        self.assertEqual(self._bound(deck, svg).numbers[-1].src, "DCF!C10")
+
+    def test_heatmap_and_table_bind_their_cells(self) -> None:
+        deck = self.deck()
+        grid = deck.range("Val Sens", "C6:E8")
+        wacc = deck.cell("DCF", "WACC")
+        heat = deck.heatmap(grid, rows=[wacc - 0.01, wacc, wacc + 0.01],
+                            cols=["Bajo", "Base", "Alto"], corner="WACC", center=(1, 1))
+        self.assertEqual(heat.count("<td"), 9)
+        self.assertEqual(heat.count('class="hl"'), 1)
+        table = deck.table(["Concepto", "Valor"], [["WACC", f"{wacc:.1%}"]])
+        doc = self._bound(deck, heat + table)
+        self.assertEqual(len(doc.numbers), 9 + 3 + 1)
+        self.assertEqual(doc.numbers[-1].text, "9.0%")
