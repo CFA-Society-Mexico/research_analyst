@@ -1879,6 +1879,31 @@ def live_checks_finding(path: str) -> Finding:
     return Finding(name, True, f"{total} checks vivos evaluados, ninguno en Error")
 
 
+# El roll de caja se reconoce por label. Inicio y cierre deben EMPEZAR con
+# estas palabras: un supuesto como "Rendimiento sobre la caja de apertura" o
+# "Tasa de D&A (% del PP&E neto de apertura)" menciona apertura y no es el roll.
+CASH_LABEL_PREFIXES = ("efectivo", "caja")
+_CASH_OPEN_WORDS = ("al inicio", "inicial", "apertura")
+_CASH_CLOSE_WORDS = ("al cierre", "final")
+
+
+def cash_roll_bounds(ws: Worksheet) -> Optional[tuple[int, int]]:
+    """Filas (inicio, cierre) del roll de caja de la hoja, o None.
+
+    Regla unica para F19 (valores) y C10 (formulas, en model_check.py).
+    """
+    r_open = r_close = None
+    for r in range(1, min(ws.max_row, _MAX_SCAN_ROWS) + 1):
+        lab = str(ws.cell(row=r, column=2).value or "").strip().lower()
+        if not lab.startswith(CASH_LABEL_PREFIXES):
+            continue
+        if r_open is None and any(word in lab for word in _CASH_OPEN_WORDS):
+            r_open = r
+        elif r_close is None and any(word in lab for word in _CASH_CLOSE_WORDS):
+            r_close = r
+    return (r_open, r_close) if r_open and r_close else None
+
+
 def _cash_roll_violations(path: str) -> Optional[tuple[list[str], int, int]]:
     """F19: el roll de caja debe CERRAR en todas las columnas.
 
@@ -1903,20 +1928,15 @@ def _cash_roll_violations(path: str) -> Optional[tuple[list[str], int, int]]:
         pcols = sorted(set(ca + ce))
         if len(pcols) < 4:
             continue
-        r_open = r_close = r_change = None
+        bounds = cash_roll_bounds(wsf)
+        r_open, r_close = bounds if bounds else (None, None)
+        r_change = None
         for r in range(1, min(wsf.max_row, _MAX_SCAN_ROWS) + 1):
             lab = str(wsf.cell(row=r, column=2).value or "").lower()
-            if not lab:
-                continue
-            if r_open is None and ("al inicio" in lab or "inicial" in lab
-                                   or "apertura" in lab):
-                r_open = r
-            elif r_close is None and ("al cierre" in lab or "final" in lab):
-                r_close = r
-            elif r_change is None and ("cambio neto" in lab
-                                       or "aumento (disminucion)" in lab
-                                       or "variacion neta" in lab):
+            if ("cambio neto" in lab or "aumento (disminucion)" in lab
+                    or "variacion neta" in lab):
                 r_change = r
+                break
         if not (r_open and r_close and r_change):
             continue
         found_any = True

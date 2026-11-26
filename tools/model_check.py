@@ -178,6 +178,8 @@ def _section_rows(ws: Worksheet, title: str) -> tuple[int, int] | None:
     """Filas (primera, ultima) de una seccion: de su banda a la siguiente banda.
 
     Banda de seccion = label en columna B, bold y de 16 pt o mas (``section_header``).
+    El titulo se reconoce por PREFIJO: 'Assumptions (unica zona de input)' es
+    la seccion Assumptions.
     """
     first: int | None = None
     last_row = min(ws.max_row, B._MAX_SCAN_ROWS)
@@ -189,7 +191,7 @@ def _section_rows(ws: Worksheet, title: str) -> tuple[int, int] | None:
             continue
         if first is not None:
             return first, r - 1
-        if cell.value.strip().lower() == title:
+        if cell.value.strip().lower().startswith(title):
             first = r
     return (first, last_row) if first is not None else None
 
@@ -516,28 +518,24 @@ def audit_structure(path: str, driver_schedules: Sequence[str] | None = None) ->
 # C10 - desfase del roll de caja (escaneo de formulas)
 # ---------------------------------------------------------------------------
 
-_CASH_WORDS = ("efectivo", "caja")
-_OPEN_WORDS = ("al inicio", "inicial", "apertura")
-_CLOSE_WORDS = ("al cierre", "final")
 
 
 def _cash_rows(ws: Worksheet) -> tuple[int, int, int | None] | None:
-    """Filas (inicio, cierre, caja del balance) del roll de caja, por label."""
-    opening = closing = balance = None
+    """Filas (inicio, cierre, caja del balance) del roll de caja, por label.
+    Inicio y cierre salen de ``xlsx_builder.cash_roll_bounds`` (la misma
+    regla que usa F19)."""
+    bounds = B.cash_roll_bounds(ws)
+    if bounds is None:
+        return None
+    opening, closing = bounds
+    balance = None
     for r in range(1, min(ws.max_row, B._MAX_SCAN_ROWS) + 1):
-        label = ws.cell(row=r, column=2).value
-        if not isinstance(label, str):
-            continue
-        low = label.strip().lower()
-        if not any(word in low for word in _CASH_WORDS):
-            continue
-        if opening is None and any(word in low for word in _OPEN_WORDS):
-            opening = r
-        elif closing is None and any(word in low for word in _CLOSE_WORDS):
-            closing = r
-        elif balance is None and low.startswith(_CASH_WORDS) and "cambio" not in low:
+        low = str(ws.cell(row=r, column=2).value or "").strip().lower()
+        if (r not in bounds and low.startswith(B.CASH_LABEL_PREFIXES)
+                and "cambio" not in low):
             balance = r
-    return (opening, closing, balance) if opening and closing else None
+            break
+    return opening, closing, balance
 
 
 def _references(formula: str, sheet: str, row: int, column: int) -> bool:

@@ -160,6 +160,16 @@ class StructuralFailureTests(_DemoCase):
             wb["Operating"]["B5"] = "Supuestos"
         self.assertFails(self._structure(self._mutated(mutate))["S6"])
 
+    def test_assumptions_band_with_a_subtitle_is_still_the_section(self) -> None:
+        def retitle(wb: Workbook) -> None:
+            wb["Operating"]["B5"] = "Assumptions (unica zona de input del libro)"
+        path = self._beside_demo(retitle)
+        found = self._structure(path)
+        self.assertTrue(found["S6"].ok, found["S6"].detail)
+        self.assertTrue(found["S4"].ok, found["S4"].detail)
+        (c9,) = M.audit_capture(path)
+        self.assertTrue(c9.ok, c9.detail)
+
     def test_s7_manual_calculation_fails(self) -> None:
         def mutate(wb: Workbook) -> None:
             wb.calculation.calcMode = "manual"
@@ -256,10 +266,18 @@ class CashRollFormulaTests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.dir = Path(tmp.name)
 
-    def _book(self, opening: Callable[[str, str], str], balance: Callable[[str], str]) -> str:
+    def _book(self, opening: Callable[[str, str], str], balance: Callable[[str], str],
+              decoys: bool = False) -> str:
         styler = B.ModelStyler()
         ws = styler.new_sheet("Model")
         styler.period_header(ws, 3, 3, B.PeriodHeader(2020, 2025, 2022))
+        if decoys:
+            # Supuestos que mencionan apertura/caja y NO son el roll (caso TSM).
+            ws["B4"] = "Tasa de D&A (% del PP&E neto de apertura)"
+            ws["B5"] = "Rendimiento sobre la caja de apertura (%)"
+            for col in "CDEFGH":
+                ws[f"{col}4"] = f"={col}10/{col}6"
+                ws[f"{col}5"] = f"={col}10/{col}6"
         for row, text in ((6, "Efectivo y equivalentes"), (10, "Cambio neto en efectivo"),
                           (11, "Efectivo al inicio"), (12, "Efectivo al cierre")):
             ws.cell(row=row, column=2, value=text)
@@ -273,6 +291,14 @@ class CashRollFormulaTests(unittest.TestCase):
         path = str(self.dir / "roll.xlsx")
         styler.save(path)
         return path
+
+    def test_assumption_rows_that_mention_opening_cash_are_not_the_roll(self) -> None:
+        path = self._book(lambda col, prev: f"={prev}12", lambda col: f"={col}12",
+                          decoys=True)
+        (finding,) = M.audit_cash_roll_formulas(path)
+        self.assertTrue(finding.ok, finding.detail)
+        self.assertIn("11 celdas", finding.detail)
+        self.assertEqual(B.cash_roll_bounds(load_workbook(path)["Model"]), (11, 12))
 
     def test_well_chained_roll_passes(self) -> None:
         path = self._book(lambda col, prev: f"={prev}12", lambda col: f"={col}12")
