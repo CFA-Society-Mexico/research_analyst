@@ -432,3 +432,44 @@ def check_comps(comps: Sequence[Loaded]) -> Finding:
     return problems.finding(K4, f"{len(current)} snapshots vigentes completos")
 
 
+# ---------------------------------------------------------------------------
+# Reporte y CLI
+# ---------------------------------------------------------------------------
+
+
+def print_report(findings: Sequence[Finding]) -> int:
+    """Imprime el reporte. Exit: 1 fallas; 3 solo pendientes; 0 verde.
+    Los avisos se listan y se cuentan, pero no cambian el exit code."""
+    for finding in findings:
+        print(f"{finding.mark} {finding.check}: {finding.detail}")
+    failures = sum(1 for f in findings if f.blocking)
+    pending = sum(1 for f in findings if f.pending)
+    warnings = sum(1 for f in findings if f.warning and not f.pending)
+    ok = sum(1 for f in findings if f.ok and not f.pending)
+    print(f"Resumen: {ok} ok, {failures} fallas, {pending} pendientes, {warnings} avisos")
+    if failures:
+        print("Veredicto: FALLA")
+        return 1
+    if pending:
+        print("Veredicto: PENDIENTE - no es verde; resuelve los pendientes y re-valida")
+        return 3
+    print("Veredicto: VERDE (contratos de la cobertura)")
+    return 0
+
+
+def main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="Checks K: contratos de una cobertura contra templates/ (solo lectura).")
+    parser.add_argument("coverage", help="carpeta de la cobertura: <raiz>/<TICKER>")
+    parser.add_argument("--macro",
+                        help="macro-view.yaml (default: <raiz>/macro/macro-view.yaml)")
+    args = parser.parse_args(list(argv[1:]))
+    coverage = Path(args.coverage)
+    if not coverage.is_dir():
+        print(f"[x] no existe la carpeta de cobertura: {_ascii(args.coverage)}")
+        return 2
+    return print_report(audit_contracts(coverage, Path(args.macro) if args.macro else None))
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

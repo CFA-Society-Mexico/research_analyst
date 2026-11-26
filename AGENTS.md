@@ -73,6 +73,9 @@ SKILL.md); las demás solo leen.
   Excel o LibreOffice y evalúa además R1/R2 y los checks de fórmula viva
   (`python tools/recalc_validate.py <modelo>` hace solo ese paso). Sin
   recálculo los checks vivos quedan `[pendiente]`, nunca verdes.
+- Contratos de la cobertura (perfil, macro-view, comps, CSV canónicos):
+  `python tools/contract_check.py <raiz>/<TICKER>` — checks K, solo lectura.
+  Sin PyYAML los de YAML quedan `[pendiente]`, nunca verdes.
 - Historia financiera masiva de emisoras SEC: `python tools/xbrl_fetch.py <TICKER>`
   (companyfacts XBRL, US GAAP o IFRS en la moneda de reporte — décadas de
   anuales y trimestrales sin parsear HTML; reglas de vintage y de signo del CSV

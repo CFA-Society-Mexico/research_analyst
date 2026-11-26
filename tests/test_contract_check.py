@@ -384,5 +384,48 @@ class WithoutPyYamlTests(_Coverage):
         self.assertTrue(found["K5"].blocking)      # el CSV se valida igual
 
 
+class CliTests(_Coverage):
+
+    def _run(self, *args: str) -> tuple[int, str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = K.main(["contract_check.py", *args])
+        return code, out.getvalue()
+
+    @unittest.skipIf(K.yaml is None, "PyYAML no instalado")
+    def test_valid_coverage_exits_green(self) -> None:
+        code, out = self._run(str(self.coverage))
+        self.assertEqual(code, 0)
+        self.assertIn("[ok] K5", out)
+        self.assertIn("Veredicto: VERDE", out)
+        self.assertTrue(out.isascii())
+
+    @unittest.skipIf(K.yaml is None, "PyYAML no instalado")
+    def test_warning_does_not_change_the_exit_code(self) -> None:
+        self._write("TICK/issuer-profile.yaml", PROFILE_OK + 'listing_notes: "x"\n')
+        code, out = self._run(str(self.coverage))
+        self.assertEqual(code, 0)
+        self.assertIn("[aviso] K2", out)
+        self.assertIn("1 avisos", out)
+
+    def test_broken_contract_exits_failure(self) -> None:
+        self._write("TICK/model/inputs/canonical_annual.csv", "line_item,region\nx,y\n")
+        code, out = self._run(str(self.coverage))
+        self.assertEqual(code, 1)
+        self.assertIn("[x] K5", out)
+        self.assertIn("Veredicto: FALLA", out)
+
+    def test_without_pyyaml_exits_pending(self) -> None:
+        with mock.patch.object(K, "yaml", None):
+            code, out = self._run(str(self.coverage))
+        self.assertEqual(code, 3)
+        self.assertIn("[pendiente] K1", out)
+
+    def test_missing_folder_is_reported_without_traceback(self) -> None:
+        code, out = self._run(str(self.root / "NOEXISTE"))
+        self.assertEqual(code, 2)
+        self.assertIn("[x] no existe la carpeta de cobertura", out)
+
+
 if __name__ == "__main__":
     unittest.main()

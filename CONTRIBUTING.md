@@ -46,8 +46,9 @@ quien las secuencia es un comando.
 
 ## 3. Setup local
 
-Requisitos: Python 3.10+ y `openpyxl` (única dependencia de terceros; el resto es
-stdlib a propósito, para que los tools corran en cualquier sandbox).
+Requisitos: Python 3.10+, `openpyxl` y, opcional, `pyyaml` (solo para validar
+los contratos YAML; el resto es stdlib a propósito, para que los tools corran
+en cualquier sandbox).
 
 ```bash
 git clone https://github.com/CFA-Society-Mexico/research_analyst && cd research_analyst
@@ -115,7 +116,9 @@ reasigna su número.
 ### 4.3 Tocar un tool (`tools/*.py`)
 
 - **stdlib por default.** Una dependencia nueva necesita justificación explícita
-  en el PR; `openpyxl` es la única aceptada hoy.
+  en el PR. Aceptadas hoy: `openpyxl` (obligatoria) y `pyyaml` (opcional: solo
+  la usa `tools/contract_check.py`, que sin ella reporta sus checks de YAML
+  como `[pendiente]` en vez de tronar).
 - **stdout ASCII-only.** Sin flechas, sin acentos, sin emojis en `print()`, en la
   ayuda de argparse ni en mensajes de error: la consola de Windows es cp1252 y
   revienta con `UnicodeEncodeError`. Usa `->`, `[ok]`, `[x]`, `[aviso]`. El
