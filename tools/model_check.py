@@ -1,4 +1,4 @@
-"""Checks estructurales (S) y de escaneo contable (C10) del modelo, por codigo.
+"""Checks estructurales (S) y de escaneo contable (C9, C10) del modelo, por codigo.
 
 Doctrina: un check es determinista o no es un check. Los F ya vivian en
 ``xlsx_builder.py audit``; los S y el C10 se declaraban "escaneo por codigo"
@@ -11,8 +11,9 @@ Solo lectura: jamas modifica el libro.
 Uso:
     python tools/model_check.py <modelo.xlsx> [--driver-map driver-map.md]
                                 [--brand brand/DESIGN.md] [--external] [--recalc]
+                                [--inputs DIR] [--profile issuer-profile.yaml]
 
-Corre S (estructurales) -> C por escaneo (C10) -> F (formato, via
+Corre S (estructurales) -> C por escaneo (C9, C10) -> F (formato, via
 ``xlsx_builder.audit_format``) -> estado de los checks de formula viva (tabs
 Checks y Cover). Los D (doctrina) no son escaneo de codigo y no se reportan
 aqui.
@@ -22,6 +23,10 @@ LibreOffice (``recalc_validate``) y audita esa copia ya calculada: R1 (el
 motor acepta el libro), R2 (sin celdas en error), S10/F19 y los checks vivos
 dejan de estar pendientes. Sin ``--recalc`` y sin valores calculados, los
 checks vivos se reportan [pendiente]: SIN evaluar, nunca verdes.
+
+C9 busca la capa de captura en ``inputs/`` junto al modelo y el umbral de
+materialidad en el ``issuer-profile.yaml`` de la carpeta padre de ``model/``
+(arbol de cobertura). ``--inputs`` y ``--profile`` cambian esas rutas.
 
 Exit codes (los mismos del audit F): 0 = verde; 1 = alguna falla; 3 = sin
 fallas pero con checks [pendiente] (libro sin valores calculados: recalcular
@@ -822,6 +827,29 @@ def audit_capture(path: str, inputs_dir: str | None = None,
                     f"con la captura ({rule})")]
 
 
+@dataclass(frozen=True)
+class CaptureOptions:
+    """De donde toma C9 la capa de captura y el umbral.
+
+    Se resuelven sobre la ruta ORIGINAL del modelo: con ``--recalc`` se audita
+    una copia en un directorio temporal, que no tiene ``inputs/`` ni
+    ``issuer-profile.yaml`` a su lado.
+    """
+
+    inputs_dir: str
+    materiality_pct: float = DEFAULT_CAPTURE_MATERIALITY_PCT
+    threshold_source: str = "default"
+
+
+def capture_options(model: Path, inputs: str | None, profile: str | None) -> CaptureOptions:
+    """Rutas del arbol de cobertura (``<TICKER>/model/<modelo>.xlsx``), salvo
+    que ``--inputs`` / ``--profile`` digan otra cosa."""
+    resolved = model.resolve()
+    profile_path = Path(profile) if profile else resolved.parent.parent / "issuer-profile.yaml"
+    materiality_pct, source = materiality_pct_from_profile(profile_path)
+    return CaptureOptions(inputs or str(resolved.parent / "inputs"), materiality_pct, source)
+
+
 # ---------------------------------------------------------------------------
 # Reporte y CLI
 # ---------------------------------------------------------------------------
@@ -852,12 +880,21 @@ def print_report(groups: Sequence[tuple[str, Sequence[Finding]]]) -> int:
 
 def audit_groups(model: str, schedules: Sequence[str] | None,
                  brand: dict[str, str] | None, external: bool,
-                 live: bool = True) -> list[tuple[str, Sequence[Finding]]]:
+                 live: bool = True,
+                 capture: CaptureOptions | None = None) -> list[tuple[str, Sequence[Finding]]]:
     """Familias S, C por escaneo y F; ``live`` agrega los checks de formula
-    viva (con ``--recalc`` ya vienen en el grupo R, sobre el libro calculado)."""
+    viva (con ``--recalc`` ya vienen en el grupo R, sobre el libro calculado).
+    ``capture``: de donde lee C9; sin el, la carpeta ``inputs/`` junto a
+    ``model`` y el umbral default."""
+    if capture is None:
+        c9 = audit_capture(model, external=external)
+    else:
+        c9 = audit_capture(model, inputs_dir=capture.inputs_dir,
+                           materiality_pct=capture.materiality_pct, external=external,
+                           threshold_source=capture.threshold_source)
     groups: list[tuple[str, Sequence[Finding]]] = [
         ("Estructurales (S)", audit_structure(model, schedules)),
-        ("Contables por escaneo (C)", audit_cash_roll_formulas(model)),
+        ("Contables por escaneo (C)", [*c9, *audit_cash_roll_formulas(model)]),
         ("Formato (F)", B.audit_format(model, brand=brand, external=external)),
     ]
     if live:
@@ -867,7 +904,7 @@ def audit_groups(model: str, schedules: Sequence[str] | None,
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
-        description="Checks S, C10 y F del modelo por codigo (solo lectura).")
+        description="Checks S, C9, C10 y F del modelo por codigo (solo lectura).")
     parser.add_argument("model", help="ruta del modelo .xlsx")
     parser.add_argument("--driver-map", help="driver-map.md: exige un bloque Sch por schedule (S1)")
     parser.add_argument("--brand", help="brand/DESIGN.md: colores de marca aceptados por F4")
@@ -876,14 +913,23 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--recalc", action="store_true",
                         help="recalcular una copia con Excel/LibreOffice y auditarla "
                              "(R1, R2 y checks vivos evaluados)")
+    parser.add_argument("--inputs",
+                        help="carpeta de la capa de captura para C9 "
+                             "(default: inputs/ junto al modelo)")
+    parser.add_argument("--profile",
+                        help="issuer-profile.yaml con el umbral de C9 "
+                             "(default: el de la cobertura)")
     args = parser.parse_args(list(argv[1:]))
     if not Path(args.model).is_file():
         print(f"[x] no existe el modelo: {args.model}")
         return 2
     schedules = schedules_from_driver_map(args.driver_map) if args.driver_map else None
     brand = B.load_brand(args.brand) if args.brand else None
+    # Sobre la ruta original: --recalc audita una copia en otro directorio.
+    capture = capture_options(Path(args.model), args.inputs, args.profile)
     if not args.recalc:
-        return print_report(audit_groups(args.model, schedules, brand, args.external))
+        return print_report(audit_groups(args.model, schedules, brand, args.external,
+                                         capture=capture))
     import recalc_validate  # import tardio: solo --recalc lanza un motor externo
     with tempfile.TemporaryDirectory(prefix="ra_recalc_") as tmp:
         recalc, recalculated = recalc_validate.validate(Path(args.model), Path(tmp))
@@ -891,7 +937,7 @@ def main(argv: Sequence[str]) -> int:
         # sus checks vivos ya vienen dentro del grupo R.
         target = str(recalculated) if recalculated is not None else args.model
         groups = audit_groups(target, schedules, brand, args.external,
-                              live=recalculated is None)
+                              live=recalculated is None, capture=capture)
         return print_report([("Recalculo (R)", recalc), *groups])
 
 

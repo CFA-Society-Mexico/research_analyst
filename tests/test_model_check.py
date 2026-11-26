@@ -537,6 +537,43 @@ class CliTests(_DemoCase):
         self.assertIn("[aviso] F10", out)
         self.assertIn("1 avisos", out)
 
+    def test_c9_is_part_of_the_single_report(self) -> None:
+        _, out = self._run(str(self.demo))
+        self.assertIn("[ok] C9 historico = capa de captura", out)
+
+    def test_inputs_flag_points_at_a_capture_layer_elsewhere(self) -> None:
+        elsewhere = self._mutated(lambda wb: None)       # roto/ no tiene inputs/
+        code, out = self._run(elsewhere)
+        self.assertEqual(code, 1)
+        self.assertIn("[x] C9", out)
+        _, out = self._run(elsewhere, "--inputs", str(self.dir / "inputs"))
+        self.assertIn("[ok] C9", out)
+
+    def test_profile_threshold_turns_a_material_row_into_a_warning(self) -> None:
+        book = self._beside_demo(_unlinked_row(50))
+        code, out = self._run(book)                       # sin perfil: default 0.5%
+        self.assertEqual(code, 1)
+        self.assertIn("[x] C9", out)
+        profile = self.dir / "issuer-profile.yaml"
+        profile.write_text("materiality:\n  capture_unlinked_pct: 60\n", encoding="utf-8")
+        code, out = self._run(book, "--profile", str(profile))
+        # 3 y no 1: el aviso no bloquea; queda el pendiente de recalculo (S10).
+        self.assertEqual(code, 3)
+        self.assertIn("[aviso] C9", out)
+        self.assertIn("umbral 60%", out)
+        self.assertIn("perfil", out)
+
+    def test_capture_layer_is_resolved_from_the_original_model_path(self) -> None:
+        # --recalc audita una COPIA en un directorio temporal: C9 debe seguir
+        # leyendo la capa de captura que vive junto al modelo ORIGINAL.
+        copied_elsewhere = self._mutated(lambda wb: None)    # roto/ no tiene inputs/
+        options = M.capture_options(self.demo, None, None)
+        self.assertEqual(Path(options.inputs_dir), (self.dir / "inputs").resolve())
+        groups = dict(M.audit_groups(copied_elsewhere, None, None, False, capture=options))
+        c9 = groups["Contables por escaneo (C)"][0]
+        self.assertTrue(c9.check.startswith("C9 "))
+        self.assertTrue(c9.ok, c9.detail)
+
     def test_missing_file_is_reported_without_traceback(self) -> None:
         code, out = self._run(str(self.dir / "no-existe.xlsx"))
         self.assertEqual(code, 2)
