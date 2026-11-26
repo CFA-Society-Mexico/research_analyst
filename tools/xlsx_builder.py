@@ -26,9 +26,11 @@ Un [aviso] se lista siempre y nunca cambia el exit code.
 # ``exec_module``) sin registrarlo antes. Con anotaciones evaluadas el builder
 # carga igual por ``import`` que por ruta (tests/test_formula_lint.py).
 
+import csv
 import sys
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from datetime import date
@@ -1999,6 +2001,17 @@ def _print_report(findings: Iterable[Finding],
     return 0
 
 
+def _write_demo_capture(folder: Path, rows: list[tuple[str, str, float]]) -> None:
+    """Capa de captura minima del demo (line_item, periodo, valor): el fixture
+    contra el que corre C9. No es un artefacto de cobertura."""
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / "canonical_quarterly.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(("line_item", "period", "value", "source_doc", "source_ref", "tag"))
+        for line_item, period, value in rows:
+            writer.writerow((line_item, period, value, "demo", "xlsx_builder._demo", "observado"))
+
+
 def _demo(path: str) -> None:
     """Self-test: libro v3 minimo construido SOLO con la API del builder.
 
@@ -2040,6 +2053,13 @@ def _demo(path: str) -> None:
             "interest": 17, "ebt": 18, "tax": 19, "ni": 20,
             "cash": 23, "ar": 24, "inv": 25, "ca": 26, "ta": 27, "ap": 28,
             "cl": 29, "debt": 30, "equity": 31, "re": 32, "cfo": 35}
+    # Linea de captura de cada fila OBSERVADA del demo (contrato del C9).
+    capture_lines = {"rev": "is_ns_total", "cogs": "is_cogs_total", "da": "cf_da",
+                     "interest": "is_interest", "tax": "is_tax", "cash": "bs_cash",
+                     "ar": "bs_ar", "inv": "bs_inv", "ca": "bs_ca", "ta": "bs_ta",
+                     "ap": "bs_ap", "cl": "bs_cl", "debt": "bs_debt",
+                     "equity": "bs_equity", "re": "bs_re", "cfo": "cf_cfo"}
+    captured: list[tuple[str, str, float]] = []
 
     styler.section_header(op, 5, "Assumptions")
     for key, text, value, fmt in (("days_q", "Dias por trimestre", 91.25, NumFmt.DEC2),
@@ -2062,6 +2082,11 @@ def _demo(path: str) -> None:
         """Una serie = una fila: observado en A, formula en E (o formula en todo)."""
         r = rows[key]
         label(op, r, text)
+        if not callable(hist):
+            # Fila con historico observado: se vincula y su serie va al CSV.
+            styler.link_capture(op, r, capture_lines[key])
+            captured.extend((capture_lines[key], quarters[i][:-1], float(hist[i]))
+                            for i in range(n_act))
         for i, c in enumerate(cols):
             prev = cols[i - 1] if i else c
             if i < n_act and not callable(hist):
@@ -2153,6 +2178,7 @@ def _demo(path: str) -> None:
         styler.brand_bar(ws, name)
         styler.label_col_width(ws)
     styler.save(path)
+    _write_demo_capture(Path(path).parent / "inputs", captured)
     print(f"[ok] demo escrito: {path}")
 
 

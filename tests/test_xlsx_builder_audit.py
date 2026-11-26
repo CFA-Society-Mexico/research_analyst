@@ -6,6 +6,7 @@ Correr: python -m unittest discover -s tests -v
 from __future__ import annotations
 
 import contextlib
+import csv
 import io
 import sys
 import tempfile
@@ -196,6 +197,22 @@ class AuditTests(unittest.TestCase):
         f13 = self._audit(styler)["F13"]
         self.assertFalse(f13.ok)
         self.assertIn("sin formulas", f13.detail)
+
+    def test_demo_writes_its_capture_layer_next_to_the_book(self) -> None:
+        path = Path(self.tmp.name) / "demo.xlsx"
+        with contextlib.redirect_stdout(io.StringIO()):
+            B._demo(str(path))
+        capture = path.parent / "inputs" / "canonical_quarterly.csv"
+        with capture.open(encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        names = set(load_workbook(path)["Operating"].defined_names)
+        self.assertEqual(len(rows), 16 * 8)     # 16 filas observadas x 8 trimestres A
+        self.assertEqual({row["tag"] for row in rows}, {"observado"})
+        self.assertEqual(rows[0]["period"], "1Q2023")
+        lines = {row["line_item"] for row in rows}
+        for reserved in B.CAPTURE_REFERENCE_LINES:
+            self.assertIn(reserved, lines)
+            self.assertIn(B.CAPTURE_NAME_PREFIX + reserved, names)
 
 
 class BrokenBookTests(unittest.TestCase):
