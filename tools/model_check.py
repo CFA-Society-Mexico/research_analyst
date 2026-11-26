@@ -10,7 +10,7 @@ Solo lectura: jamas modifica el libro.
 
 Uso:
     python tools/model_check.py <modelo.xlsx> [--driver-map driver-map.md]
-                                [--brand brand/DESIGN.md]
+                                [--brand brand/DESIGN.md] [--external]
 
 Corre S (estructurales) -> C por escaneo (C10) -> F (formato, via
 ``xlsx_builder.audit_format``). Los C de formula viva (tab Checks) y los D
@@ -18,7 +18,8 @@ Corre S (estructurales) -> C por escaneo (C10) -> F (formato, via
 
 Exit codes (los mismos del audit F): 0 = verde; 1 = alguna falla; 3 = sin
 fallas pero con checks [pendiente] (libro sin valores calculados: recalcular
-con Excel y re-auditar). Un pendiente NUNCA es verde.
+con Excel y re-auditar). Un pendiente NUNCA es verde. Un [aviso] se lista
+siempre y nunca cambia el exit code.
 
 Consola ASCII-only.
 """
@@ -559,22 +560,18 @@ def audit_cash_roll_formulas(path: str) -> list[Finding]:
 
 
 def print_report(groups: Sequence[tuple[str, Sequence[Finding]]]) -> int:
-    """Imprime el reporte por familia. Exit: 1 fallas; 3 solo pendientes; 0 verde."""
-    ok = failures = pending = 0
+    """Imprime el reporte por familia. Exit: 1 fallas; 3 solo pendientes; 0 verde.
+    Los avisos se listan y se cuentan, pero no cambian el exit code."""
     for title, findings in groups:
         print(f"-- {title}")
         for finding in findings:
-            if finding.pending:
-                mark = "[pendiente]"
-                pending += 1
-            elif finding.ok:
-                mark = "[ok]"
-                ok += 1
-            else:
-                mark = "[x]"
-                failures += 1
-            print(f"{mark} {finding.check}: {finding.detail}")
-    print(f"Resumen: {ok} ok, {failures} fallas, {pending} pendientes")
+            print(f"{finding.mark} {finding.check}: {finding.detail}")
+    everything = [finding for _, findings in groups for finding in findings]
+    failures = sum(1 for f in everything if f.blocking)
+    pending = sum(1 for f in everything if f.pending)
+    warnings = sum(1 for f in everything if f.warning and not f.pending)
+    ok = sum(1 for f in everything if f.ok and not f.pending)
+    print(f"Resumen: {ok} ok, {failures} fallas, {pending} pendientes, {warnings} avisos")
     if failures:
         print("Veredicto: FALLA")
         return 1
@@ -591,6 +588,8 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("model", help="ruta del modelo .xlsx")
     parser.add_argument("--driver-map", help="driver-map.md: exige un bloque Sch por schedule (S1)")
     parser.add_argument("--brand", help="brand/DESIGN.md: colores de marca aceptados por F4")
+    parser.add_argument("--external", action="store_true",
+                        help="modelo que no construyo el plugin: la falta de sello (F10) es aviso")
     args = parser.parse_args(list(argv[1:]))
     if not Path(args.model).is_file():
         print(f"[x] no existe el modelo: {args.model}")
@@ -600,7 +599,7 @@ def main(argv: Sequence[str]) -> int:
     return print_report([
         ("Estructurales (S)", audit_structure(args.model, schedules)),
         ("Contables por escaneo (C)", audit_cash_roll_formulas(args.model)),
-        ("Formato (F)", B.audit_format(args.model, brand=brand)),
+        ("Formato (F)", B.audit_format(args.model, brand=brand, external=args.external)),
     ])
 
 

@@ -11,10 +11,13 @@ Console output policy: ASCII only ([ok]/[x], no unicode symbols).
 
 Usage as CLI:
     python tools/xlsx_builder.py audit <path.xlsx>     -> run checks F
+        [brand/DESIGN.md]  colores de marca aceptados por F4
+        [--external]       modelo que NO construyo el plugin: F10 es aviso
     python tools/xlsx_builder.py demo  <path.xlsx>     -> build a v3 skeleton (self-test)
 
 Exit codes: 0 = verde; 1 = alguna falla; 3 = sin fallas pero con checks
 [pendiente] (p. ej. libro sin valores calculados: recalcular y re-auditar).
+Un [aviso] se lista siempre y nunca cambia el exit code.
 """
 
 from __future__ import annotations
@@ -649,12 +652,31 @@ _MAX_SCAN_COLS = 400
 @dataclass(frozen=True)
 class Finding:
     """Resultado de un check F. ``pending`` = no se pudo evaluar (p. ej. libro
-    sin valores calculados): NO es verde ni falla; se reporta [pendiente]."""
+    sin valores calculados): NO es verde ni falla; se reporta [pendiente].
+    ``warning`` = el check NO se cumple pero la doctrina lo declara "aviso,
+    no bloqueo": se reporta [aviso], se lista siempre y no cambia el exit
+    code. ``ok`` sigue diciendo el hecho (False); ``blocking`` dice si tumba
+    el veredicto."""
 
     check: str
     ok: bool
     detail: str
     pending: bool = False
+    warning: bool = False
+
+    @property
+    def blocking(self) -> bool:
+        """True si el hallazgo es una falla que tumba el veredicto."""
+        return not self.ok and not self.pending and not self.warning
+
+    @property
+    def mark(self) -> str:
+        """Marca de consola: una sola regla para todo reporte."""
+        if self.pending:
+            return "[pendiente]"
+        if self.ok:
+            return "[ok]"
+        return "[aviso]" if self.warning else "[x]"
 
 
 def _scan_fonts_fills_formats(ws: Worksheet) -> tuple[set[str], set[str], set[str], set[str]]:
@@ -944,11 +966,16 @@ def _series_continuity_violations(ws: Worksheet) -> list[str]:
     return violations
 
 
-def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Finding]:
+def audit_format(path: str, brand: Optional[dict[str, str]] = None,
+                 external: bool = False) -> list[Finding]:
     """Run checks F (F1-F20) on a workbook. Pure read; returns findings.
 
     ``brand``: output of load_brand(brand/DESIGN.md) — its values extend the
     fill whitelist (F4) so a branded model audits green with its own DESIGN.md.
+    ``external``: quien audita declara que el modelo NO lo construyo el plugin
+    (modo auditoria de /model-check sobre un modelo propio del analista).
+    Entonces la falta de sello (F10) es [aviso]; en el pipeline del plugin,
+    donde el sello es obligatorio, sigue siendo falla.
     """
     allowed_fills = _ALLOWED_FILLS | set((brand or {}).values())
     wb = load_workbook(path, data_only=False)
@@ -1056,7 +1083,8 @@ def audit_format(path: str, brand: Optional[dict[str, str]] = None) -> list[Find
     kw = wb.properties.keywords or ""
     stamped = BUILDER_STAMP_KEY in kw
     findings.append(Finding("F10 sello del builder", stamped,
-                            kw if stamped else "sin sello (no construido por xlsx_builder)"))
+                            kw if stamped else "sin sello (no construido por xlsx_builder)",
+                            warning=external and not stamped))
     # F11 series continuity: input-series rows span the whole horizon
     all_violations: list[str] = []
     for ws in visible:
@@ -1405,21 +1433,17 @@ def _split_series_violations(ws: Worksheet) -> list[str]:
 
 
 def _print_report(findings: Iterable[Finding]) -> int:
-    """Imprime el reporte. Exit: 1 si hay fallas; 3 si solo hay pendientes."""
+    """Imprime el reporte. Exit: 1 si hay fallas; 3 si solo hay pendientes.
+    Los avisos se listan y se cuentan, pero no cambian el exit code."""
     findings = list(findings)
-    failures = pending = 0
     for f in findings:
-        if f.pending:
-            mark = "[pendiente]"
-            pending += 1
-        elif f.ok:
-            mark = "[ok]"
-        else:
-            mark = "[x]"
-            failures += 1
-        print(f"{mark} {f.check}: {f.detail}")
+        print(f"{f.mark} {f.check}: {f.detail}")
+    failures = sum(1 for f in findings if f.blocking)
+    pending = sum(1 for f in findings if f.pending)
+    warnings = sum(1 for f in findings if f.warning and not f.pending)
     ok_count = sum(1 for f in findings if f.ok and not f.pending)
-    print(f"Resumen F: {ok_count} ok, {failures} fallas, {pending} pendientes")
+    print(f"Resumen F: {ok_count} ok, {failures} fallas, {pending} pendientes, "
+          f"{warnings} avisos")
     if failures:
         return 1
     if pending:
@@ -1586,13 +1610,16 @@ def _demo(path: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if argv[1:2] == ["audit"] and len(argv) in (3, 4):
-        brand = load_brand(argv[3]) if len(argv) == 4 else None
-        return _print_report(audit_format(argv[2], brand=brand))
-    if len(argv) == 3 and argv[1] == "demo":
-        _demo(argv[2])
-        return _print_report(audit_format(argv[2]))
-    print("uso: python xlsx_builder.py audit <path.xlsx> [brand/DESIGN.md] | demo <path.xlsx>")
+    external = "--external" in argv[1:]
+    args = [a for a in argv if a != "--external"]
+    if args[1:2] == ["audit"] and len(args) in (3, 4):
+        brand = load_brand(args[3]) if len(args) == 4 else None
+        return _print_report(audit_format(args[2], brand=brand, external=external))
+    if len(args) == 3 and args[1] == "demo" and not external:
+        _demo(args[2])
+        return _print_report(audit_format(args[2]))
+    print("uso: python xlsx_builder.py audit <path.xlsx> [brand/DESIGN.md] [--external]"
+          " | demo <path.xlsx>")
     return 2
 
 

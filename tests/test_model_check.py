@@ -301,6 +301,19 @@ class CliTests(_DemoCase):
         self.assertEqual(code, 1)
         self.assertIn("[x] S9", out)
 
+    def test_external_flag_turns_missing_stamp_into_a_warning(self) -> None:
+        def drop_stamp(wb: Workbook) -> None:
+            wb.properties.keywords = ""
+        unstamped = self._mutated(drop_stamp)
+        code, out = self._run(unstamped)
+        self.assertEqual(code, 1)
+        self.assertIn("[x] F10", out)
+        code, out = self._run(unstamped, "--external")
+        # 3 y no 1: el aviso no bloquea; queda el pendiente de recalculo (S10).
+        self.assertEqual(code, 3)
+        self.assertIn("[aviso] F10", out)
+        self.assertIn("1 avisos", out)
+
     def test_missing_file_is_reported_without_traceback(self) -> None:
         code, out = self._run(str(self.dir / "no-existe.xlsx"))
         self.assertEqual(code, 2)

@@ -105,7 +105,9 @@ Un check nuevo llega completo o no llega:
    positivos es peor que no tenerlo: si el caso legítimo existe (año de
    transición, serie descontinuada), la excepción va escrita en la misma fila.
 4. Prueba en los dos sentidos: un libro que debe fallarlo y el `demo` que debe
-   pasarlo.
+   pasarlo. Para un check F, el libro roto es una mutación del demo registrada
+   en `BREAKING_MUTATIONS` (`tests/test_xlsx_builder_audit.py`); la suite falla
+   si un check F emitido por el audit no tiene la suya.
 
 Los IDs no se reciclan. Un check derogado se marca derogado, no se borra ni se
 reasigna su número.
