@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -49,6 +50,7 @@ from typing import Callable, Iterator, Optional, Sequence, Union
 
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.worksheet.worksheet import Worksheet
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -58,13 +60,24 @@ import xlsx_builder as B  # noqa: E402
 from xlsx_builder import Finding  # noqa: E402
 
 
-class DeckError(Exception):
-    """El deck no se puede generar o auditar; el mensaje dice que corregir."""
-
-
 def _ascii(text: object) -> str:
     """Texto seguro para la consola cp1252 (CONTRIBUTING 4.3)."""
     return str(text).encode("ascii", "replace").decode("ascii")
+
+
+class DeckError(Exception):
+    """El deck no se puede generar o auditar; el mensaje dice que corregir.
+    Siempre ASCII: termina en la consola aunque cite una etiqueta con acento."""
+
+    def __init__(self, message: object) -> None:
+        super().__init__(_ascii(message))
+
+
+def _read_text(path: Path, what: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise DeckError(f"{what} no esta en UTF-8: {path.name}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +91,11 @@ _M_NUM, _M_LIT, _M_SEP, _M_END = "\ue000", "\ue001", "\ue002", "\ue003"
 _MARKER = re.compile(
     f"{_M_NUM}([^{_M_SEP}]*){_M_SEP}([^{_M_SEP}]*){_M_SEP}([^{_M_END}]*){_M_END}"
     f"|{_M_LIT}([^{_M_SEP}]*){_M_SEP}([^{_M_END}]*){_M_END}")
+
+
+# Solo signo, separador de miles, decimales (0-19) y tipo. Sin relleno, ancho ni
+# alineacion: un relleno como '9>6' inyecta digitos que no vienen del modelo.
+_FORMAT_SPEC = re.compile(r"[-+ ]?[,_]?(?:\.1?\d)?[fFeEgG%]?")
 
 
 def _const(value: float) -> str:
@@ -101,11 +119,17 @@ class Num:
         else:
             return NotImplemented
         left, right = (pair, (self.value, self.src)) if reverse else ((self.value, self.src), pair)
+        expression = f"({left[1]}{symbol}{right[1]})"
         try:
             result = fn(left[0], right[0])
         except ZeroDivisionError as exc:
-            raise DeckError(f"division entre cero: {left[1]}{symbol}{right[1]}") from exc
-        return Num(result, f"({left[1]}{symbol}{right[1]})")
+            raise DeckError(f"division entre cero: {expression}") from exc
+        except OverflowError as exc:
+            raise DeckError(f"resultado fuera de rango: {expression}") from exc
+        if isinstance(result, complex) or not math.isfinite(result):
+            raise DeckError(f"el resultado no es un numero real finito (p. ej. raiz de un "
+                            f"negativo): {expression}")
+        return Num(result, expression)
 
     def __add__(self, other: object) -> "Num":
         return self._combine(other, "+", lambda a, b: a + b)
@@ -144,6 +168,9 @@ class Num:
         return float(self.value)
 
     def __format__(self, spec: str) -> str:
+        if not _FORMAT_SPEC.fullmatch(spec):
+            raise DeckError(f"formato {spec!r} no admitido: solo signo, separador de miles, "
+                            f"decimales y tipo (p. ej. '+,.1f' o '.0%')")
         return f"{_M_NUM}{self.src}{_M_SEP}{spec}{_M_SEP}{format(self.value, spec)}{_M_END}"
 
     def __str__(self) -> str:
@@ -231,8 +258,8 @@ class Series:
 
     def __getitem__(self, key: PeriodKey) -> Num:
         if key not in self._points:
-            raise DeckError(f"'{self.label}' no tiene valor en {key!r}; "
-                            f"periodos: {self.keys[0]!r}..{self.keys[-1]!r}")
+            span = f"{self.keys[0]!r}..{self.keys[-1]!r}" if self._points else "ninguno"
+            raise DeckError(f"'{self.label}' no tiene valor en {key!r}; periodos: {span}")
         return self._points[key]
 
     def __len__(self) -> int:
@@ -247,20 +274,37 @@ class Series:
     def growth(self) -> "Series":
         """Crecimiento contra el periodo anterior (desde el segundo)."""
         keys = self.keys
+        if len(keys) < 2:
+            raise DeckError(f"'{self.label}': el crecimiento necesita al menos dos periodos")
         return self._derived(f"{self.label} (crecimiento)", {
             key: self._points[key] / self._points[prev] - 1
             for prev, key in zip(keys, keys[1:])})
 
     def over(self, other: "Series") -> "Series":
         """Razon periodo a periodo contra otra serie (p. ej. un margen)."""
+        common = [key for key in self.keys if key in other.keys]
+        if not common:
+            raise DeckError(f"'{self.label}' y '{other.label}' no comparten periodos")
         return self._derived(f"{self.label} / {other.label}", {
-            key: self._points[key] / other[key] for key in self.keys if key in other.keys})
+            key: self._points[key] / other[key] for key in common})
 
     def cagr(self, first: int, last: int) -> Num:
         """Crecimiento compuesto anual entre dos anios del eje."""
         if not (isinstance(first, int) and isinstance(last, int) and last > first):
             raise DeckError(f"cagr: se esperan dos anios en orden, no {first!r}, {last!r}")
         return (self[last] / self[first]) ** (1.0 / (last - first)) - 1
+
+
+_COORD = re.compile(r"\$?([A-Za-z]{1,3})\$?([1-9]\d{0,6})")
+MAX_ROW = 1048576
+
+
+def _coordinate(coord: str) -> str:
+    """'c5' y '$C$5' -> 'C5'. Lo que no es una celda es un error, no un traceback."""
+    match = _COORD.fullmatch(str(coord).strip())
+    if match is None or int(match.group(2)) > MAX_ROW:
+        raise DeckError(f"referencia de celda invalida: {coord!r}")
+    return f"{match.group(1).upper()}{match.group(2)}"
 
 
 class ModelBook:
@@ -270,8 +314,12 @@ class ModelBook:
         if not path.is_file():
             raise DeckError(f"no existe el modelo: {_ascii(path)}")
         self.path = path
-        self._values = load_workbook(path, data_only=True)
-        self._formulas = load_workbook(path, data_only=False)
+        try:
+            self._values = load_workbook(path, data_only=True)
+            self._formulas = load_workbook(path, data_only=False)
+        except (InvalidFileException, zipfile.BadZipFile, KeyError, ValueError) as exc:
+            raise DeckError(f"modelo ilegible ({path.name}): no es un xlsx valido "
+                            f"({type(exc).__name__})") from exc
 
     def _sheet(self, sheet: str) -> Worksheet:
         if sheet not in self._values.sheetnames:
@@ -279,6 +327,7 @@ class ModelBook:
         return self._values[sheet]
 
     def num(self, sheet: str, coord: str) -> Num:
+        coord = _coordinate(coord)
         value = self._sheet(sheet)[coord].value
         if value is None:
             formula = self._formulas[sheet][coord].value
@@ -337,6 +386,8 @@ class ModelBook:
         ws = self._sheet(sheet)
         row = self._row_of(sheet, label, section)
         if column is not None:
+            if not re.fullmatch(r"[A-Za-z]{1,3}", column):
+                raise DeckError(f"column debe ser la letra de una columna, no {column!r}")
             return self.num(sheet, f"{column.upper()}{row}")
         numeric = [c.coordinate for c in ws[row][2:]
                    if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)]
@@ -346,7 +397,13 @@ class ModelBook:
         return self.num(sheet, numeric[0])
 
     def range(self, sheet: str, ref: str) -> list[list[Num]]:
-        return [[self.num(sheet, c.coordinate) for c in row] for row in self._sheet(sheet)[ref]]
+        ends = ref.split(":")
+        try:
+            first, last = (_coordinate(end) for end in ends)
+        except (DeckError, ValueError) as exc:
+            raise DeckError(f"rango invalido: {ref!r} (se espera p. ej. 'C6:G10')") from exc
+        return [[self.num(sheet, c.coordinate) for c in row]
+                for row in self._sheet(sheet)[f"{first}:{last}"]]
 
     def axis_years(self) -> set[int]:
         """Anios presentes en algun encabezado de periodos del libro."""
@@ -359,7 +416,17 @@ class ModelBook:
 
 FACT_TAGS = ("observado", "guidance")
 TEXT_SOURCES = frozenset({".md", ".txt", ".html", ".htm", ".csv", ".json"})
-_FACT_KEY = re.compile(r"[A-Za-z0-9_.\-]+")
+# Sin '.' ni '-': en una expresion de origen 'fact:a-b' seria ambiguo con una resta.
+_FACT_KEY = re.compile(r"[A-Za-z0-9_]+")
+MIN_QUOTE_CHARS = 2
+
+
+def _inside(root: Path, relative: str, what: str) -> Path:
+    """Ruta dentro de la cobertura; '..' o una ruta absoluta que salga es error."""
+    target = (root / relative).resolve()
+    if not target.is_relative_to(root.resolve()):
+        raise DeckError(f"{what}: la ruta sale de la cobertura: {relative}")
+    return target
 
 
 @dataclass(frozen=True)
@@ -378,28 +445,37 @@ def load_facts(path: Path, root: Path) -> dict[str, Fact]:
     """Lee y valida el registro de hechos. ``root`` = carpeta de la cobertura."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise DeckError(f"hechos ilegibles ({_ascii(path)}): {_ascii(exc)}") from exc
+    except (OSError, ValueError) as exc:   # JSON invalido o archivo que no es UTF-8
+        raise DeckError(f"hechos ilegibles ({path.name}): {exc}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("facts", []), list):
+        raise DeckError(f"hechos ({path.name}): se espera un objeto con la lista 'facts'")
     facts: dict[str, Fact] = {}
     for raw in payload.get("facts", []):
+        if not isinstance(raw, dict):
+            raise DeckError(f"hechos ({path.name}): cada hecho debe ser un objeto, no {raw!r}")
         missing = [k for k in ("key", "value", "unit", "tag", "doc", "locator", "quote")
                    if k not in raw or raw[k] in ("", None)]
         key = str(raw.get("key", "?"))
         if missing:
             raise DeckError(f"hecho '{_ascii(key)}': faltan campos {missing}")
         if not _FACT_KEY.fullmatch(key):
-            raise DeckError(f"hecho '{_ascii(key)}': la clave solo admite letras, digitos, _ . -")
+            raise DeckError(f"hecho '{_ascii(key)}': la clave solo admite letras, digitos y _")
+        if not isinstance(raw["doc"], str):
+            raise DeckError(f"hecho '{_ascii(key)}': doc debe ser texto (ruta en la cobertura)")
+        if len(str(raw["quote"]).strip()) < MIN_QUOTE_CHARS:
+            raise DeckError(f"hecho '{_ascii(key)}': cita demasiado corta para cotejarla")
         if key in facts:
             raise DeckError(f"hecho '{_ascii(key)}' duplicado")
         if raw["tag"] not in FACT_TAGS:
             raise DeckError(f"hecho '{_ascii(key)}': tag debe ser uno de {FACT_TAGS}")
         if isinstance(raw["value"], bool) or not isinstance(raw["value"], (int, float)):
             raise DeckError(f"hecho '{_ascii(key)}': value debe ser un numero")
-        doc = root / raw["doc"]
+        doc = _inside(root, raw["doc"], f"hecho '{key}'")
         if not doc.is_file():
             raise DeckError(f"hecho '{_ascii(key)}': no existe el documento {_ascii(raw['doc'])}")
         manual = doc.suffix.lower() not in TEXT_SOURCES
-        if not manual and raw["quote"] not in doc.read_text(encoding="utf-8", errors="replace"):
+        if not manual and str(raw["quote"]) not in doc.read_text(encoding="utf-8",
+                                                                  errors="replace"):
             raise DeckError(f"hecho '{_ascii(key)}': la cita {_ascii(raw['quote'])!r} no "
                             f"aparece en {_ascii(raw['doc'])}")
         facts[key] = Fact(key, float(raw["value"]), str(raw["unit"]), raw["tag"],
@@ -468,7 +544,7 @@ def load_design(path: Optional[Path], root: Optional[Path] = None) -> Design:
     if path is None or not path.is_file():
         return Design()
     slots: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in _read_text(path, "DESIGN.md").splitlines():
         match = _SLOT_LINE.match(line)
         if match:
             slots[match.group(1)] = re.sub(r"\s+#\s.*$", "", match.group(2)).strip()
@@ -494,11 +570,15 @@ def load_design(path: Optional[Path], root: Optional[Path] = None) -> Design:
                 raise DeckError(f"{slot}: nombre de fuente invalido {_ascii(value)!r}")
             values[name] = value
         elif name == "logo":
-            logo = (root or path.parent.parent) / value
+            logo = _inside(root or path.parent.parent, value, slot)
             mime = {".svg": "image/svg+xml", ".png": "image/png"}.get(logo.suffix.lower())
             if mime is None or not logo.is_file():
                 raise DeckError(f"{slot}: se espera un .svg o .png existente, no {_ascii(value)!r}")
             values["logo"] = f"data:{mime};base64," + base64.b64encode(logo.read_bytes()).decode("ascii")
+        else:
+            raise DeckError(f"{slot}: slot desconocido; validos: deck_background, deck_text, "
+                            f"deck_muted, deck_negative, deck_series_1..6, deck_font_heading, "
+                            f"deck_font_body, deck_margin, deck_gap_max, deck_logo")
     return Design(series=tuple(series), **values)  # type: ignore[arg-type]
 
 
@@ -533,6 +613,9 @@ _VOID = frozenset({"br", "hr", "img", "meta", "link", "input", "col", "wbr"})
 _BLOCK = frozenset({"h1", "h2", "h3", "h4", "p", "li", "td", "th", "figcaption",
                     "div", "aside", "header", "footer", "text"})
 _EXEMPT_CLASSES = frozenset({"auto", "source"})
+# Etiquetas que cierran un <p> abierto, como hace el navegador.
+_CLOSES_P = frozenset({"p", "div", "ul", "ol", "table", "h1", "h2", "h3", "h4", "section",
+                       "aside", "header", "footer", "figure", "blockquote", "pre"})
 CLAIM_TAGS = frozenset({"h1", "h2", "h3", "h4", "p", "li", "figcaption"})
 
 
@@ -575,26 +658,31 @@ class DeckDocument(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
         if tag in _VOID:
             return
+        if tag in _CLOSES_P and any(open_tag == "p" for open_tag, _, _, _ in self._stack):
+            self.handle_endtag("p")
         attr = {k: (v or "") for k, v in attrs}
         classes = set(attr.get("class", "").split())
         if tag == "html" and attr.get("data-gap-max", "").isdigit():
             self.gap_max = int(attr["data-gap-max"])
         if tag == "section" and "slide" in classes:
-            self._slide = int(attr.get("data-n", "0") or 0)
+            self._slide = int(attr["data-n"]) if attr.get("data-n", "").isdigit() else 0
         if tag == "svg":
             self._svg += 1
-        if tag in ("style", "script", "title"):
+        capturing = any(kind in ("num", "lit") for _, kind, _, _ in self._stack)
+        if tag in ("style", "script", "head"):
             kind = "skip"
+        elif capturing:
+            kind = ""       # dentro de una cifra todo su texto cuenta, sin excepciones
         elif "n" in classes and "data-src" in attr:
             kind, self._capture = "num", []
-        elif "lit" in classes:
+        elif "lit" in classes and attr.get("data-why", "").strip():
             kind, self._capture = "lit", []
         elif classes & _EXEMPT_CLASSES:
             kind = "exempt"
         else:
             kind = ""
         block = None
-        if tag in _BLOCK and kind == "":
+        if tag in _BLOCK and kind == "" and not capturing:
             block = Block(self._slide, tag, self._svg > 0)
             self.blocks.append(block)
         self._stack.append((tag, kind, block, attr))
@@ -625,12 +713,22 @@ class DeckDocument(HTMLParser):
     def _current_block(self) -> Optional[Block]:
         return next((b for _, _, b, _ in reversed(self._stack) if b is not None), None)
 
+    def unknown_decl(self, data: str) -> None:
+        if data.startswith("CDATA["):       # el navegador muestra un CDATA dentro de un SVG
+            self.handle_data(data[len("CDATA["):])
+
+    def handle_comment(self, data: str) -> None:
+        if data.startswith("[CDATA[") and data.endswith("]]"):   # otras versiones del parser
+            self.handle_data(data[len("[CDATA["):-2])
+
     def handle_data(self, data: str) -> None:
         kinds = [kind for _, kind, _, _ in self._stack]
-        if "skip" in kinds or "exempt" in kinds:
+        if "skip" in kinds:
             return
-        if kinds and kinds[-1] in ("num", "lit"):
+        if "num" in kinds or "lit" in kinds:    # antes que la exencion: es una cifra atada
             self._capture.append(data)
+            return
+        if "exempt" in kinds:
             return
         owner = self._current_block()
         if owner is not None:
@@ -647,25 +745,78 @@ def read_deck(document: str) -> DeckDocument:
     return parser
 
 
-# Numero suelto = palabra que, sin puntuacion ni simbolo de moneda, es un
-# numero con sufijo de unidad opcional. 'N2', '20-F', '3nm' y '10-K' no lo
-# son; '38%', '11x', '2,150' y 'US$5' si.
-_WORD_SPLIT = re.compile(r"[\s/\u2013\u2014]+|(?<=\d)-(?=\d)")
+# Numero suelto = palabra con digitos que no es un identificador. Los simbolos
+# (~ > < = % * $ ...) no la salvan; un sufijo de unidad o un codigo de moneda
+# tampoco ('38%', '11x', '180pbs', 'US$5', 'USD5'). Si pasan: letras pegadas que no
+# son unidad ('N2', '3nm', 'IFRS16', '1Q2026E') y digitos-guion-letras ('20-F',
+# '10-K', 'COVID-19').
+_WORD_SPLIT = re.compile(r"[\s/=\u2013\u2014]+")
 _EDGE_PUNCT = "()[]{}.,;:!?\u00bf\u00a1\"'\u201c\u201d\u2018\u2019\u00ab\u00bb"
-_CURRENCY = re.compile(r"^(?:[A-Za-z]{0,3}\$|\u20ac|\u00a3|\u00a5)")
-_NUMERIC_WORD = re.compile(r"[-+\u2212]?\d[\d.,]*(?:%|x|pp|pb|bps?|k|m|mm|mn|bn)?", re.IGNORECASE)
+_HYPHENS = "-\u2010\u2011\u2212"
+_CURRENCY_SIGNS = "$\u20ac\u00a3\u00a5"
+_CURRENCY_CODES = frozenset({"US", "USD", "NT", "TWD", "MX", "MXN", "EUR", "GBP", "JPY",
+                             "CAD", "BRL"})
+_UNIT_SUFFIXES = frozenset({"x", "pp", "pb", "pbs", "bp", "bps", "k", "m", "mm", "mn", "bn",
+                            "b", "mil", "mdd", "mdp", "mmdd", "mmdp"})
+
+
+def _shape(word: str) -> list[tuple[str, str]]:
+    """(clase, caracter) por caracter util: 'd' digito, 'a' letra, '-' guion.
+    Simbolos, separadores y caracteres invisibles se descartan."""
+    out = []
+    for ch in word:
+        kind = "d" if ch.isnumeric() else "a" if ch.isalpha() else "-" if ch in _HYPHENS else ""
+        if kind:
+            out.append((kind, ch))
+    return out
+
+
+def _pieces(word: str) -> list[str]:
+    """Parte la palabra por sus guiones internos ('10%-12%' son dos numeros).
+    Un identificador digitos-guion-letras o letras-guion-digitos no se parte ni se revisa."""
+    if re.fullmatch(r"d+-+a+|a+-+d+", "".join(kind for kind, _ in _shape(word))):
+        return []
+    out, current, started = [], "", False
+    for ch in word:
+        if ch in _HYPHENS and started:
+            out.append(current)
+            current, started = "", False
+            continue
+        current += ch
+        started = started or ch.isalnum()
+    out.append(current)
+    return [piece for piece in out if piece]
+
+
+def _is_number(piece: str) -> bool:
+    pairs = [(kind, ch) for kind, ch in _shape(piece) if kind != "-"]
+    shape = "".join(kind for kind, _ in pairs)
+    if "d" not in shape:
+        return False
+    first, last = shape.index("d"), shape.rindex("d")
+    if "a" in shape[first:last]:
+        return False                                    # 1Q2026E, 4T2025
+    lead = "".join(ch for _, ch in pairs[:first])
+    trail = "".join(ch for _, ch in pairs[last + 1:])
+    has_sign = any(sign in piece for sign in _CURRENCY_SIGNS)
+    if lead and not (lead.upper() in _CURRENCY_CODES or (has_sign and len(lead) <= 3)):
+        return False                                    # N2, A14, IFRS16
+    if trail and trail.lower() not in _UNIT_SUFFIXES:
+        return False                                    # 3nm
+    return True
 
 
 def loose_numbers(text: str, years: set[int]) -> list[str]:
-    """Palabras numericas de ``text`` que no son un anio del eje del modelo."""
+    """Numeros de ``text`` que no son un anio del eje escrito solo (sin simbolos)."""
     hits: list[str] = []
     for word in _WORD_SPLIT.split(text):
-        core = _CURRENCY.sub("", word.strip(_EDGE_PUNCT)).strip(_EDGE_PUNCT)
-        if not core or not _NUMERIC_WORD.fullmatch(core):
-            continue
-        if re.fullmatch(r"\d{4}", core) and int(core) in years:
-            continue
-        hits.append(word.strip(_EDGE_PUNCT))
+        for piece in _pieces(word):
+            if not _is_number(piece):
+                continue
+            shown = piece.strip(_EDGE_PUNCT)
+            if re.fullmatch(r"[0-9]{4}", shown) and int(shown) in years:
+                continue
+            hits.append(shown)
     return hits
 
 
@@ -690,6 +841,8 @@ DEFAULT_LEGAL = ("Documento con fines informativos. No constituye una recomendac
                  "inversión ni una oferta. Los supuestos y las conclusiones son del "
                  "analista que lo firma; las cifras proyectadas pueden no cumplirse.")
 _AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
+# Un <style> propio puede pintar numeros con ::after{content}; un <script>, con codigo.
+_FORBIDDEN_MARKUP = re.compile(r"<\s*(?:style|script|iframe|object|embed)\b", re.IGNORECASE)
 _TICKER = re.compile(r"[A-Za-z0-9.\-]+")
 
 _CSS = """
@@ -750,6 +903,7 @@ if(shot!==null){
 function clip(t){return (t||'').replace(/\\s+/g,' ').trim().slice(0,40);}
 var out=slides.map(function(s){
  var kind=s.getAttribute('data-kind'),r={n:Number(s.getAttribute('data-n')),kind:kind};
+ r.clipped=s.scrollHeight>s.clientHeight+1||s.scrollWidth>s.clientWidth+1;
  if(kind!=='content'&&kind!=='raw'){return r;}
  var body=s.querySelector('.body'),foot=s.querySelector('footer'),vis=s.querySelector('.visual');
  var sr=s.getBoundingClientRect(),pad=parseFloat(getComputedStyle(s).paddingLeft)||0;
@@ -835,6 +989,7 @@ class Deck:
                             ("source", source)):
             if not value.strip():
                 raise DeckError(f"slide '{_ascii(title)[:40]}': falta {name}")
+        self._check_markup(visual)
         self._slides.append(("content", (
             f"<header><h2>{_esc(title)}</h2>"
             + (f'<p class="lede">{_esc(lede)}</p>' if lede else "") + "</header>"
@@ -846,11 +1001,19 @@ class Deck:
         """Lamina a medida: HTML/SVG propio. Pasa por bloqueo y medicion."""
         if not source.strip():
             raise DeckError("raw: falta source")
+        self._check_markup(content)
         self._slides.append(("raw", f'<div class="body">{content}</div>'
                              + self._footer(source, takeaway)))
 
     def legal(self, text: str = DEFAULT_LEGAL) -> None:
         self._slides.append(("legal", f"<p>{_esc(text)}</p>"))
+
+    @staticmethod
+    def _check_markup(content: str) -> None:
+        if _FORBIDDEN_MARKUP.search(content):
+            raise DeckError("el contenido de una lamina no admite style ni script propios, ni "
+                            "iframe, object o embed: usa atributos style= y las primitivas "
+                            "del tool")
 
     def _footer(self, source: str, takeaway: str) -> str:
         return ("<footer>"
@@ -891,7 +1054,14 @@ class Deck:
     def build(self) -> Path:
         """Escribe el deck. Un numero sin origen lo impide (regla de bloqueo)."""
         document = self.render()
-        loose = unbound_numbers(read_deck(document), self.book.axis_years())
+        parsed = read_deck(document)
+        # La misma comprobacion que hara audit: un origen inventado o un texto
+        # retocado despues de formatear no llegan al archivo.
+        wrong = mismatches(parsed.numbers, self.book, self.facts)
+        if wrong:
+            raise DeckError(f"{len(wrong)} cifra(s) no coinciden con su origen:\n  "
+                            + "\n  ".join(wrong[:20]))
+        loose = unbound_numbers(parsed, self.book.axis_years())
         if loose:
             lines = [f"  lamina {slide}: {_ascii(number)!r} en '{_ascii(context)}'"
                      for slide, number, context in loose[:20]]
@@ -949,7 +1119,7 @@ class Deck:
             out.append(f'<text class="auto" x="{x + slot * 0.35:.1f}" y="{h - 10}" '
                        f'text-anchor="middle">{html.escape(str(key))}</text>')
             if label_all or key in show:
-                ly = y0 - 5 if v >= 0 else y1 + 14
+                ly = y0 - 5     # sobre la barra; en una negativa, sobre la linea de cero
                 out.append(f'<text class="val" x="{x + slot * 0.35:.1f}" y="{ly:.1f}" '
                            f'text-anchor="middle">{value:{fmt}}</text>')
         out.append("</svg>")
@@ -961,6 +1131,8 @@ class Deck:
               w: int = 1100, h: int = 320) -> str:
         """Lineas de una o varias series sobre el mismo eje; la zona
         proyectada va sombreada y cada linea lleva su nombre al final."""
+        if not named:
+            raise DeckError("lines: falta al menos una serie")
         first = named[0][1]
         keys = list(keys or first.keys)
         flat = [float(s[k]) for _, s in named for k in keys]
@@ -1009,6 +1181,11 @@ class Deck:
                  w: int = 1100, h: Optional[int] = None) -> str:
         """Football field: por fila (metodo, minimo, maximo, punto central);
         ``marker`` = (rotulo, valor) de la linea vertical (precio actual)."""
+        if not rows:
+            raise DeckError("football: falta al menos una fila")
+        for label, low, high, _ in rows:
+            if float(low) > float(high):
+                raise DeckError(f"football '{label}': el minimo es mayor que el maximo")
         h = h or 60 * len(rows) + 60
         values = [float(v) for _, low, high, mid in rows for v in (low, high, mid)]
         if marker is not None:
@@ -1087,6 +1264,11 @@ class Deck:
                 center: Optional[tuple[int, int]] = None) -> str:
         """Cuadricula de sensibilidad como tabla; el fondo crece con el valor
         y ``center`` (fila, columna) marca el caso base."""
+        if not grid or not grid[0]:
+            raise DeckError("heatmap: la cuadricula esta vacia")
+        if len(rows) != len(grid) or any(len(line) != len(cols) for line in grid):
+            raise DeckError(f"heatmap: {len(rows)} rotulos de fila y {len(cols)} de columna "
+                            f"no corresponden a la cuadricula")
         flat = [float(v) for line in grid for v in line]
         lo, span = min(flat), (max(flat) - min(flat)) or 1.0
 
@@ -1127,16 +1309,15 @@ def _svg_open(w: int, h: int, label: str) -> str:
 
 def _nice_ticks(lo: float, hi: float, count: int = 4) -> list[float]:
     """Marcas de eje redondas que cubren [lo, hi]."""
-    if hi <= lo:
-        hi = lo + 1.0
+    if hi - lo <= max(abs(lo), abs(hi)) * 1e-9:     # iguales o casi: un eje de ancho 0
+        hi = lo + (abs(lo) * 0.1 or 1.0)
     raw = (hi - lo) / count
     magnitude = 10 ** math.floor(math.log10(raw))
     step = next(m * magnitude for m in (1, 2, 2.5, 5, 10) if m * magnitude >= raw * (1 - 1e-9))
-    tick = math.floor(lo / step + 1e-9) * step
-    ticks = [round(tick, 10)]
-    while ticks[-1] < hi - step * 1e-9:
-        ticks.append(round(ticks[-1] + step, 10))
-    return ticks
+    first = math.floor(lo / step + 1e-9)
+    last = max(math.ceil(hi / step - 1e-9), first + 1)
+    # Por indice, no acumulando: sumar un paso diminuto puede no avanzar nunca.
+    return [float(f"{index * step:.12g}") for index in range(first, last + 1)]
 
 
 def _y_axis(ticks: Sequence[float], y: Callable[[float], float], x0: float, x1: float,
@@ -1156,7 +1337,8 @@ def _y_axis(ticks: Sequence[float], y: Callable[[float], float], x0: float, x1: 
 
 _SRC_TOKEN = re.compile(
     r"(?:'(?P<quoted>[^']+)'|(?P<sheet>[A-Za-z_][A-Za-z0-9_.]*))!(?P<coord>[A-Z]{1,3}\d+)"
-    r"|fact:(?P<fact>[A-Za-z0-9_.\-]+)")
+    r"|fact:(?P<fact>[A-Za-z0-9_]+)")
+MAX_SRC_CHARS = 4000
 _BINARY = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b,
            ast.Mult: lambda a, b: a * b, ast.Div: lambda a, b: a / b,
            ast.Pow: lambda a, b: a ** b}
@@ -1165,6 +1347,8 @@ _BINARY = {ast.Add: lambda a, b: a + b, ast.Sub: lambda a, b: a - b,
 def evaluate(src: str, book: ModelBook, facts: dict[str, Fact]) -> float:
     """Re-evalua la expresion de origen de una cifra. Solo admite referencias
     a celdas, ``fact:clave``, constantes, + - * / ** y abs()."""
+    if len(src) > MAX_SRC_CHARS:
+        raise DeckError(f"origen demasiado largo ({len(src)} caracteres)")
     names: dict[str, float] = {}
 
     def bind(match: re.Match[str]) -> str:
@@ -1181,8 +1365,8 @@ def evaluate(src: str, book: ModelBook, facts: dict[str, Fact]) -> float:
 
     try:
         tree = ast.parse(_SRC_TOKEN.sub(bind, src), mode="eval")
-    except SyntaxError as exc:
-        raise DeckError(f"origen ilegible: {_ascii(src)!r}") from exc
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        raise DeckError(f"origen ilegible: {_ascii(src)[:80]!r}") from exc
 
     def walk(node: ast.AST) -> float:
         if isinstance(node, ast.Expression):
@@ -1203,28 +1387,46 @@ def evaluate(src: str, book: ModelBook, facts: dict[str, Fact]) -> float:
         raise DeckError(f"origen con una operacion no admitida: {_ascii(src)!r}")
 
     try:
-        return walk(tree)
-    except ZeroDivisionError as exc:
-        raise DeckError(f"origen con division entre cero: {_ascii(src)!r}") from exc
+        result = walk(tree)
+    except (ZeroDivisionError, OverflowError, RecursionError, ValueError) as exc:
+        raise DeckError(f"origen que no se puede calcular ({type(exc).__name__}): "
+                        f"{_ascii(src)[:80]!r}") from exc
+    if isinstance(result, complex) or not math.isfinite(result):
+        raise DeckError(f"origen cuyo resultado no es un numero real finito: "
+                        f"{_ascii(src)[:80]!r}")
+    return result
+
+
+def mismatches(numbers: Sequence[BoundNumber], book: ModelBook,
+               facts: dict[str, Fact]) -> list[str]:
+    """Cifras cuyo texto no es el de su origen: sin referencia, con un formato
+    no admitido, que no se pueden calcular, o que dan otro valor."""
+    wrong: list[str] = []
+    for number in numbers:
+        try:
+            if not _SRC_TOKEN.search(number.src):
+                raise DeckError(f"origen sin referencia al modelo ni a un hecho: "
+                                f"{number.src[:60]!r}")
+            if not _FORMAT_SPEC.fullmatch(number.fmt):
+                raise DeckError(f"formato no admitido: {number.fmt[:30]!r}")
+            expected = format(evaluate(number.src, book, facts), number.fmt)
+        except DeckError as exc:
+            wrong.append(f"lamina {number.slide}: {exc}")
+            continue
+        if expected != number.text:
+            wrong.append(f"lamina {number.slide}: muestra {_ascii(number.text)!r}, "
+                         f"el origen da {_ascii(expected)!r} ({_ascii(number.src)})")
+    return wrong
 
 
 def audit_deck(deck_html: Path, model: Path, facts_path: Optional[Path] = None,
                root: Optional[Path] = None) -> tuple[list[Finding], DeckDocument, dict[str, Fact]]:
     """P1 a P4: cifras atadas, sin numeros sueltos, literales y hechos manuales."""
-    doc = read_deck(deck_html.read_text(encoding="utf-8"))
+    doc = read_deck(_read_text(deck_html, "el deck"))
     book = ModelBook(model)
     root = root or model.resolve().parent.parent
     facts = load_facts(facts_path, root) if facts_path else {}
-    stale: list[str] = []
-    for number in doc.numbers:
-        try:
-            expected = format(evaluate(number.src, book, facts), number.fmt)
-        except DeckError as exc:
-            stale.append(f"lamina {number.slide}: {exc}")
-            continue
-        if expected != number.text:
-            stale.append(f"lamina {number.slide}: muestra {_ascii(number.text)!r}, "
-                         f"el origen da {_ascii(expected)!r} ({_ascii(number.src)})")
+    stale = mismatches(doc.numbers, book, facts)
     loose = unbound_numbers(doc, book.axis_years())
     used = {m.group("fact") for n in doc.numbers for m in _SRC_TOKEN.finditer(n.src)
             if m.group("fact")}
@@ -1362,6 +1564,9 @@ def measure_findings(data: Sequence[dict[str, object]], gap_max: int) -> list[Fi
     measured = [d for d in data if d.get("kind") in MEASURED_KINDS]
     overlap = [f"lamina {d['n']}: {float(d['gap']):.0f} px" for d in measured
                if float(d["gap"]) <= 0]
+    # Toda lamina (tambien portada, acto y aviso legal): texto que el marco corta.
+    overlap += [f"lamina {d['n']}: contenido cortado" for d in data
+                if d.get("clipped") and not (d in measured and float(d["gap"]) <= 0)]
     empty = []
     for d in measured:
         gap = float(d["gap"])
@@ -1388,7 +1593,7 @@ def measure_findings(data: Sequence[dict[str, object]], gap_max: int) -> list[Fi
 
 def measure_deck(deck_html: Path, shots: Optional[Path] = None) -> list[Finding]:
     """Mide el deck. Sin navegador: [pendiente], nunca verde."""
-    doc = read_deck(deck_html.read_text(encoding="utf-8"))
+    doc = read_deck(_read_text(deck_html, "el deck"))
     gap_max = doc.gap_max if doc.gap_max is not None else Design().gap_max
     browser = find_browser()
     if browser is None:
@@ -1576,6 +1781,8 @@ def main(argv: Sequence[str]) -> int:
                 Path(args.root) if args.root else None)
             groups = [("Cifras", findings)]
             if args.design:
+                if not Path(args.design).is_file():
+                    raise DeckError(f"no existe el archivo de diseno: {args.design}")
                 groups.append(("Diseno", design_findings(load_design(Path(args.design)))))
             if args.report:
                 write_report(Path(args.report), deck, groups, doc, facts)
@@ -1584,12 +1791,15 @@ def main(argv: Sequence[str]) -> int:
         if args.command == "measure":
             return _report([("Espacio", measure_deck(
                 Path(args.deck), Path(args.shots) if args.shots else None))])
-        doc = read_deck(Path(args.deck).read_text(encoding="utf-8"))
+        doc = read_deck(_read_text(Path(args.deck), "el deck"))
         Path(args.out).write_text(claims_table(doc), encoding="utf-8", newline="\n")
         print(f"[ok] {len(claims(doc))} frases -> {_ascii(args.out)}")
         return 0
     except (DeckError, OSError) as exc:
         print(f"[x] {_ascii(exc)}")
+        return 1
+    except Exception as exc:   # ultimo recurso: un traceback no es un reporte
+        print(f"[x] error inesperado ({type(exc).__name__}): {_ascii(exc)}")
         return 1
 
 

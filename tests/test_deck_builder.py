@@ -142,11 +142,21 @@ class NumTests(unittest.TestCase):
             '<p>Crece <span class="n" data-src="((Annual!D6/Annual!C6)-1)" '
             'data-fmt="+.0%">+38%</span> en el periodo</p>')
 
-    def test_alignment_format_specs_do_not_break_the_markup(self) -> None:
-        n = D.Num(5.0, "S!A1")
-        rendered = D.render_markers(f"<p>{n:>6.1f}|{n:<6.1f}</p>")
-        self.assertIn('data-fmt="&gt;6.1f">   5.0</span>', rendered)
-        self.assertIn('data-fmt="&lt;6.1f">5.0   </span>', rendered)
+    def test_format_spec_is_restricted_to_sign_grouping_precision_and_type(self) -> None:
+        n = D.Num(240.0, "Annual!H6")
+        for spec in ("9>6,.0f", ">8.1f", "<6.1f", "08.1f", "10", ".25f", "s", "zz"):
+            with self.subTest(spec=spec), self.assertRaisesRegex(D.DeckError, "formato"):
+                format(n, spec)
+        for spec in ("", ",.0f", "+.1%", ".2f", "_.0f", " .1f", ".3g", "e"):
+            with self.subTest(spec=spec):
+                self.assertIn("\ue000", format(n, spec))
+
+    def test_results_outside_the_real_numbers_are_deck_errors(self) -> None:
+        for operation in (lambda: D.Num(-4.0, "S!A1") ** 0.5,
+                          lambda: D.Num(1e200, "S!A1") * 1e200,
+                          lambda: D.Num(10.0, "S!A1") ** 4000):
+            with self.assertRaises(D.DeckError):
+                operation()
 
     def test_inside_svg_the_number_is_a_tspan(self) -> None:
         n = D.Num(7.0, "S!A1")
@@ -278,7 +288,12 @@ class FactsTests(_Case):
         for facts, message in (([bad_tag], "tag debe ser"), ([no_locator], "faltan campos"),
                                ([text_value], "value debe ser un numero"),
                                ([ok, ok], "duplicado"),
-                               ([dict(ok, key="a b")], "la clave solo admite")):
+                               ([dict(ok, key="a b")], "la clave solo admite"),
+                               ([dict(ok, key="a-b")], "la clave solo admite"),
+                               ([dict(ok, key="a.b")], "la clave solo admite"),
+                               ([dict(ok, quote=" ")], "cita demasiado corta"),
+                               ([dict(ok, doc=7)], "doc debe ser texto"),
+                               (["share"], "cada hecho debe ser un objeto")):
             with self.subTest(message=message), self.assertRaisesRegex(D.DeckError, message):
                 self._load(facts)
 
@@ -361,10 +376,42 @@ class ScanTests(unittest.TestCase):
             "1Q2026E fue mejor": [],
             "tres plantas": [],
             "cae -4.2 pp.": ["-4.2"],
+            "entre 10%-12%, $5-$6 y 5x-6x": ["10%", "12%", "$5", "$6", "5x", "6x"],
         }
         for text, expected in cases.items():
             with self.subTest(text=text):
                 self.assertEqual(D.loose_numbers(text, years), expected)
+
+    def test_symbols_units_and_odd_digits_do_not_hide_a_number(self) -> None:
+        blocked = ("~38%", ">38%", "<38%", "\u224838%", "\u00b15%", "38%*", "n=30", "-$5",
+                   "+$5", "5\u20ac", "5$", "USD5", "$3B", "1.5B", "180pbs", "11\u00d7",
+                   "5\u2030", "12mil", "5mdd", "\uff13\uff18\uff05", "38\u200b%", "3\u00ad8%",
+                   "10\u00b2", "1'000", "$2025", "A$5")
+        for word in blocked:
+            with self.subTest(word=ascii(word)):
+                self.assertTrue(D.loose_numbers(f"vale {word} hoy", {2025}))
+
+    def test_identifiers_and_bare_axis_years_still_pass(self) -> None:
+        for word in ("N2", "A14", "3nm", "20-F", "10-K", "COVID-19", "1Q2026E", "4T2025",
+                     "IFRS16", "2025", "(2025)", "2025."):
+            with self.subTest(word=word):
+                self.assertEqual(D.loose_numbers(f"el {word} sigue", {2025}), [])
+
+    def test_reader_follows_what_a_browser_would_show(self) -> None:
+        doc = D.read_deck(
+            '<html><head><title>X 99</title></head><body>'
+            '<section class="slide raw" data-n="x">'
+            '<p class="auto">nota<p>Margen 38%</p>'
+            '<span class="lit">44</span>'
+            '<svg><title>Vale 55</title><text><![CDATA[66]]></text></svg>'
+            '<span class="n" data-src="Annual!C6" data-fmt=".0f">1<i class="auto">00</i></span>'
+            '<p class="source">Fuente: <span class="n" data-src="Annual!D6" data-fmt=".0f">'
+            '120</span> en p. 45</p>'
+            '</section></body></html>')
+        self.assertEqual([number for _, number, _ in D.unbound_numbers(doc, set())],
+                         ["38%", "44", "55", "66"])
+        self.assertEqual([n.text for n in doc.numbers], ["100", "120"])
+        self.assertEqual(doc.literals, [])
 
     def test_document_separates_bound_literal_and_plain_text(self) -> None:
         n = D.Num(0.38, "Annual!D6")
@@ -795,6 +842,252 @@ class CliTests(_Case):
         missing = _cli(["audit", str(self.root / "nope.html"), str(self.root / MODEL_REL)])
         self.assertEqual(missing.returncode, 1)
         self.assertIn(b"[x]", missing.stdout)
+
+
+class HardeningTests(_Case):
+    """Defectos que encontro la revision independiente del PR."""
+
+    def _audit(self, html_path: Path) -> B.Finding:
+        findings, _, _ = D.audit_deck(html_path, self.root / MODEL_REL, self.root / FACTS_REL)
+        return findings[0]
+
+    def test_ticks_end_on_equal_and_nearly_equal_values(self) -> None:
+        for lo, hi in ((0.3, 0.30000000000000004), (0.0, 3e-11), (5.0, 5.0), (-2.0, -2.0),
+                       (1e9, 1e9 + 1e-6)):
+            with self.subTest(lo=lo, hi=hi):
+                ticks = D._nice_ticks(lo, hi)
+                self.assertTrue(2 <= len(ticks) <= 12, ticks)
+                self.assertLessEqual(ticks[0], lo)
+                self.assertGreaterEqual(ticks[-1], hi)
+
+    def test_flat_series_can_be_charted(self) -> None:
+        deck = self.deck()
+        flat = D.Series("Margen", {y: D.Num(0.1 + 0.2 if y == 2022 else 0.3, f"Annual!C{y}")
+                                   for y in (2022, 2023)}, {2022: True, 2023: True})
+        self.assertIn("<polyline", deck.lines([("Margen", flat)]))
+        self.assertIn("<rect", deck.bars(flat))
+
+    def test_fact_on_the_left_of_an_operation_audits_green(self) -> None:
+        deck = self.deck()
+        rev = deck.series("Annual", "Ingresos")
+        deck.raw(f"<p>Diferencia {deck.fact('share') - rev[2022]:.1f} y "
+                 f"{deck.fact('share') - 1:.1f}.</p>", source="Fuente: x.")
+        first = self._audit(deck.build())
+        self.assertTrue(first.ok, first.detail)
+
+    def test_number_in_the_source_line_audits_green(self) -> None:
+        deck = self.deck()
+        rev = deck.series("Annual", "Ingresos")
+        deck.raw("<p>Texto.</p>", source=f"Fuente: modelo, ventas de {rev[2027]:,.0f}.")
+        first = self._audit(deck.build())
+        self.assertTrue(first.ok, first.detail)
+
+    def test_cell_references_are_normalised_or_rejected(self) -> None:
+        book = D.ModelBook(self.root / MODEL_REL)
+        self.assertEqual(book.num("DCF", "c5").src, "DCF!C5")
+        self.assertEqual(book.num("DCF", "$C$5").src, "DCF!C5")
+        for bad in ("hola", "C", "5", "C0", "A99999999"):
+            with self.subTest(coord=bad), self.assertRaisesRegex(D.DeckError, "celda invalida"):
+                book.num("DCF", bad)
+        with self.assertRaisesRegex(D.DeckError, "column debe ser"):
+            book.cell("DCF", "WACC", column="5")
+        for bad in ("C5", "C", "C5:D"):
+            with self.subTest(ref=bad), self.assertRaisesRegex(D.DeckError, "rango invalido"):
+                book.range("DCF", bad)
+
+    def test_origin_without_a_reference_is_rejected_at_build_and_audit(self) -> None:
+        deck = self.deck()
+        deck.raw(f"<p>Vale {D.Num(0.38, '0.38'):.0%}.</p>", source="Fuente: x.")
+        with self.assertRaisesRegex(D.DeckError, "sin referencia"):
+            deck.build()
+        good = self.deck()
+        good.raw(f"<p>Vale {good.cell('DCF', 'WACC'):.0%}.</p>", source="Fuente: x.")
+        path = good.build()
+        path.write_text(path.read_text(encoding="utf-8").replace(
+            'data-src="DCF!C5"', 'data-src="0.09"'), encoding="utf-8")
+        first = self._audit(path)
+        self.assertTrue(first.blocking)
+        self.assertIn("sin referencia", first.detail)
+
+    def test_build_checks_every_number_against_its_origin(self) -> None:
+        fake = self.deck()
+        fake.raw(f"<p>Vale {D.Num(0.38, 'Annual!C6'):.0%}.</p>", source="Fuente: x.")
+        with self.assertRaisesRegex(D.DeckError, "no coinciden con su origen"):
+            fake.build()
+        edited = self.deck()
+        rev = edited.series("Annual", "Ingresos")
+        edited.raw("<p>Vale " + f"{rev[2027]:,.1f}".replace("240", "999") + ".</p>",
+                   source="Fuente: x.")
+        with self.assertRaisesRegex(D.DeckError, "muestra '999.0', el origen da '240.0'"):
+            edited.build()
+        self.assertFalse(edited.output_path.exists())
+
+    def test_embedded_documents_are_not_slide_content(self) -> None:
+        for content in ("<iframe srcdoc='38%'></iframe>", "<object data='x.svg'></object>",
+                        "<embed src='x.svg'>"):
+            with self.subTest(content=content[:8]), \
+                    self.assertRaisesRegex(D.DeckError, "style ni script"):
+                self.deck().raw(content, source="Fuente: x.")
+
+    def test_audit_reports_hostile_origins_and_formats_instead_of_crashing(self) -> None:
+        deck = self.deck()
+        deck.raw(f"<p>Vale {deck.cell('DCF', 'WACC'):.0%}.</p>", source="Fuente: x.")
+        path = deck.build()
+        original = path.read_text(encoding="utf-8")
+        cases = (('data-fmt=".0%"', 'data-fmt="9&gt;6,.0f"'),
+                 ('data-fmt=".0%"', 'data-fmt="999999999999"'),
+                 ('data-fmt=".0%"', 'data-fmt="zz"'),
+                 ('data-src="DCF!C5"', 'data-src="DCF!C5**9**9**9"'),
+                 ('data-src="DCF!C5"', 'data-src="Annual!A99999999"'),
+                 ('data-src="DCF!C5"', 'data-src="DCF!C5' + "+1" * 3000 + '"'),
+                 ('data-src="DCF!C5"', 'data-src="(0-DCF!C5)**0.5"'))
+        for old, new in cases:
+            with self.subTest(new=new[:40]):
+                self.assertIn(old, original)
+                path.write_text(original.replace(old, new), encoding="utf-8")
+                self.assertTrue(self._audit(path).blocking)
+
+    def test_paths_cannot_leave_the_coverage(self) -> None:
+        cover = self.root / "cov"
+        _coverage(cover)
+        (self.root / "fuera.md").write_text("Dato: 42 unidades.", encoding="utf-8")
+        (self.root / "fuera.svg").write_text("<svg/>", encoding="utf-8")
+        facts = cover / FACTS_REL
+        for doc in ("../fuera.md", str(self.root / "fuera.md")):
+            with self.subTest(doc=doc[:12]):
+                facts.write_text(json.dumps({"facts": [_fact("x", 42, doc, "42 unidades")]}),
+                                 encoding="utf-8")
+                with self.assertRaisesRegex(D.DeckError, "sale de la cobertura"):
+                    D.load_facts(facts, cover)
+        (cover / "brand").mkdir()
+        design = cover / "brand" / "DESIGN.md"
+        design.write_text("deck_logo: ../fuera.svg" + chr(10), encoding="utf-8")
+        with self.assertRaisesRegex(D.DeckError, "sale de la cobertura"):
+            D.load_design(design, cover)
+
+    def test_facts_file_must_be_an_object_with_a_list(self) -> None:
+        path = self.root / FACTS_REL
+        path.write_text("[]", encoding="utf-8")
+        with self.assertRaisesRegex(D.DeckError, "se espera un objeto"):
+            D.load_facts(path, self.root)
+        path.write_bytes("{\"facts\": \"a\u00f1o\"}".encode("cp1252"))
+        with self.assertRaisesRegex(D.DeckError, "hechos ilegibles"):
+            D.load_facts(path, self.root)
+
+    def test_unknown_design_slot_is_an_error(self) -> None:
+        path = self.root / "DESIGN.md"
+        path.write_text("deck_backgroud: #FFFFFF" + chr(10), encoding="utf-8")
+        with self.assertRaisesRegex(D.DeckError, "slot desconocido"):
+            D.load_design(path, self.root)
+
+    def test_slide_content_cannot_carry_style_or_script(self) -> None:
+        deck = self.deck()
+        with self.assertRaisesRegex(D.DeckError, "style ni script"):
+            deck.raw("<STYLE>p::after{content:'38%'}</STYLE><p>x</p>", source="Fuente: x.")
+        with self.assertRaisesRegex(D.DeckError, "style ni script"):
+            deck.slide(title="T", lede="", visual="<script>1</script>", note="Nota.",
+                       source="Fuente: x.")
+
+    def test_charts_reject_degenerate_input(self) -> None:
+        deck = self.deck()
+        low, high = deck.cell("DCF", "Bajo"), deck.cell("DCF", "Alto")
+        grid = deck.range("Val Sens", "C6:E8")
+        single = D.Series("Uno", {2022: low}, {2022: True})
+        for call in (lambda: deck.lines([]), lambda: deck.football([]),
+                     lambda: deck.football([("DCF", high, low, low)]),
+                     lambda: deck.heatmap([], rows=[], cols=[]),
+                     lambda: deck.heatmap(grid, rows=["a"], cols=["a", "b", "c"]),
+                     lambda: single.growth(),
+                     lambda: single.over(D.Series("Otro", {2023: high}, {2023: True}))):
+            with self.assertRaises(D.DeckError):
+                call()
+
+    def test_negative_bar_label_stays_clear_of_the_period_label(self) -> None:
+        deck = self.deck()
+        change = deck.series("Annual", "Cambio")
+        svg = D.render_markers(deck.bars(change, show=change.keys, fmt="+.1f", h=320))
+        import re
+        ys = [float(y) for y in re.findall(r'<text class="val" x="[0-9.]+" y="([0-9.]+)"', svg)]
+        self.assertEqual(len(ys), len(YEARS))
+        self.assertTrue(all(y < 320 - 30 for y in ys), ys)
+
+    def test_unreadable_inputs_are_deck_errors(self) -> None:
+        fake = self.root / "model" / "roto.xlsx"
+        fake.write_text("no es un xlsx", encoding="utf-8")
+        with self.assertRaisesRegex(D.DeckError, "modelo ilegible"):
+            D.ModelBook(fake)
+        other = self.root / "model" / "modelo.txt"
+        other.write_text("x", encoding="utf-8")
+        with self.assertRaisesRegex(D.DeckError, "modelo ilegible"):
+            D.ModelBook(other)
+        deck = self.deck()
+        deck.raw("<p>Texto.</p>", source="Fuente: x.")
+        path = deck.build()
+        path.write_bytes(path.read_text(encoding="utf-8").replace("Texto", "A\u00f1o")
+                         .encode("cp1252"))
+        with self.assertRaisesRegex(D.DeckError, "no esta en UTF-8"):
+            D.audit_deck(path, self.root / MODEL_REL)
+        with self.assertRaisesRegex(D.DeckError, "no esta en UTF-8"):
+            D.measure_deck(path)
+
+    def test_deck_errors_are_ascii_by_construction(self) -> None:
+        with self.assertRaises(D.DeckError) as caught:
+            D.ModelBook(self.root / MODEL_REL).series("Annual", "Utilidad de operaci\u00f3n")
+        self.assertTrue(str(caught.exception).isascii())
+
+    def test_clipped_fixed_slide_fails_p5(self) -> None:
+        findings = D.measure_findings([{"n": 1, "kind": "cover", "clipped": True},
+                                       _slide(2, 40.0, clipped=False)], 90)
+        self.assertTrue(findings[0].blocking)
+        self.assertIn("lamina 1: contenido cortado", findings[0].detail)
+
+
+class CliHardeningTests(_Case):
+
+    def _demo(self) -> tuple[Path, Path]:
+        self.assertEqual(_cli(["demo", str(self.root)]).returncode, 0)
+        return (self.root / "demo" / "research" / "notes" / f"demo-deck_{D.DEMO_AS_OF}.html",
+                self.root / "demo" / "model" / f"demo-model_{D.DEMO_AS_OF}_v1.xlsx")
+
+    def test_missing_design_file_is_an_error_not_a_green_palette(self) -> None:
+        deck, model = self._demo()
+        done = _cli(["audit", str(deck), str(model), "--design", str(self.root / "NOPE.md")])
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(b"[x]", done.stdout)
+        self.assertNotIn(b"P9", done.stdout)
+
+    def test_broken_inputs_never_end_in_a_traceback(self) -> None:
+        deck, model = self._demo()
+        corrupt = self.root / "roto.xlsx"
+        corrupt.write_bytes(b"PK no es un zip")
+        facts = self.root / "hechos.json"
+        facts.write_text("[]", encoding="utf-8")
+        ansi = self.root / "ansi.html"
+        ansi.write_bytes("<p>a\u00f1o</p>".encode("cp1252"))
+        for args in (["audit", str(deck), str(corrupt)],
+                     ["audit", str(deck), str(model), "--facts", str(facts)],
+                     ["audit", str(ansi), str(model)],
+                     ["claims", str(ansi), str(self.root / "f.md")],
+                     ["measure", str(ansi)]):
+            with self.subTest(args=args[0] + " " + Path(args[1]).name):
+                done = _cli(args)
+                self.assertEqual(done.returncode, 1, done.stdout.decode("ascii", "replace"))
+                self.assertIn(b"[x]", done.stdout)
+                self.assertNotIn(b"Traceback", done.stderr)
+                self.assertTrue(done.stdout.isascii())
+
+
+@unittest.skipUnless(REAL_BROWSER, REAL_BROWSER_REASON)
+class ClippedBrowserTests(_Case):
+    """Portada con mas texto del que cabe: el navegador lo corta; P5 lo dice."""
+
+    def test_overfull_cover_fails_p5(self) -> None:
+        deck = self.deck()
+        deck.cover("Titulo de portada demasiado largo " * 14)
+        deck.raw("<p style='height:520px'>Texto.</p>", source="Fuente: x.")
+        marks = {f.check.split()[0]: f for f in D.measure_deck(deck.build())}
+        self.assertIn("lamina 1: contenido cortado", marks["P5"].detail)
+        self.assertNotIn("lamina 2", marks["P5"].detail)
 
 
 @unittest.skipUnless(REAL_BROWSER, REAL_BROWSER_REASON)
