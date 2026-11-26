@@ -722,3 +722,91 @@ class BrowserTests(_Case):
         self.assertIn("lamina 2", marks["P6"].detail)
         self.assertIn("lamina 3", marks["P7"].detail)
         self.assertIn("lamina 4", marks["P8"].detail)
+
+
+def _cli(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
+    full = dict(os.environ, PYTHONIOENCODING="ascii:strict", **(env or {}))
+    return subprocess.run([sys.executable, str(ROOT / "tools" / "deck_builder.py"), *args],
+                          cwd=ROOT, env=full, capture_output=True, timeout=180)
+
+
+class CliTests(_Case):
+
+    def test_demo_builds_audits_green_and_prints_ascii(self) -> None:
+        done = _cli(["demo", str(self.root)])
+        self.assertEqual(done.returncode, 0, done.stdout.decode("ascii", "replace")
+                         + done.stderr.decode("ascii", "replace"))
+        self.assertTrue(done.stdout.isascii())
+        self.assertIn(b"Veredicto: VERDE", done.stdout)
+        self.assertTrue((self.root / "demo" / "research" / "notes"
+                         / f"demo-deck_{D.DEMO_AS_OF}.html").is_file())
+
+    def test_audit_exit_code_follows_the_verdict_and_writes_the_report(self) -> None:
+        self.assertEqual(_cli(["demo", str(self.root)]).returncode, 0)
+        notes = self.root / "demo" / "research" / "notes"
+        deck = notes / f"demo-deck_{D.DEMO_AS_OF}.html"
+        model = self.root / "demo" / "model" / f"demo-model_{D.DEMO_AS_OF}_v1.xlsx"
+        facts = notes / f"demo-facts_{D.DEMO_AS_OF}.json"
+        report = notes / f"demo-deck-verify_{D.DEMO_AS_OF}.md"
+        args = ["audit", str(deck), str(model), "--facts", str(facts), "--report", str(report)]
+        self.assertEqual(_cli(args).returncode, 0)
+        self.assertIn("## Afirmaciones", report.read_text(encoding="utf-8"))
+        deck.write_text(deck.read_text(encoding="utf-8").replace(">1,380<", ">1,999<"),
+                        encoding="utf-8")
+        broken = _cli(args)
+        self.assertEqual(broken.returncode, 1)
+        self.assertIn(b"[x] P1 cifras iguales a su origen", broken.stdout)
+
+    def test_audit_with_design_lists_contrast_warnings_without_failing(self) -> None:
+        self.assertEqual(_cli(["demo", str(self.root)]).returncode, 0)
+        notes = self.root / "demo" / "research" / "notes"
+        design = self.root / "DESIGN.md"
+        design.write_text("deck_text: #BBBBBB" + chr(10), encoding="utf-8")
+        done = _cli(["audit", str(notes / f"demo-deck_{D.DEMO_AS_OF}.html"),
+                     str(self.root / "demo" / "model" / f"demo-model_{D.DEMO_AS_OF}_v1.xlsx"),
+                     "--facts", str(notes / f"demo-facts_{D.DEMO_AS_OF}.json"),
+                     "--design", str(design)])
+        self.assertEqual(done.returncode, 0)
+        self.assertIn(b"-- Diseno", done.stdout)
+        self.assertIn(b"[aviso] P9 contraste del texto", done.stdout)
+
+    def test_measure_without_a_browser_exits_pending(self) -> None:
+        self.assertEqual(_cli(["demo", str(self.root)]).returncode, 0)
+        deck = self.root / "demo" / "research" / "notes" / f"demo-deck_{D.DEMO_AS_OF}.html"
+        done = _cli(["measure", str(deck)], env={"RA_BROWSER": str(self.root / "nope.exe")})
+        self.assertEqual(done.returncode, 3)
+        self.assertIn(b"[pendiente] P5-P8 medicion de espacio", done.stdout)
+        self.assertTrue(done.stdout.isascii())
+
+    def test_claims_writes_the_table(self) -> None:
+        self.assertEqual(_cli(["demo", str(self.root)]).returncode, 0)
+        deck = self.root / "demo" / "research" / "notes" / f"demo-deck_{D.DEMO_AS_OF}.html"
+        out = self.root / "frases.md"
+        done = _cli(["claims", str(deck), str(out)])
+        self.assertEqual(done.returncode, 0)
+        self.assertTrue(done.stdout.isascii())
+        self.assertIn("| 3 | El crecimiento se modera, no se detiene. |  |",
+                      out.read_text(encoding="utf-8"))
+
+    def test_usage_errors_exit_two_and_missing_files_exit_one(self) -> None:
+        self.assertEqual(_cli([]).returncode, 2)
+        self.assertEqual(_cli(["audit", "solo-un-argumento"]).returncode, 2)
+        self.assertEqual(_cli(["--help"]).returncode, 0)
+        missing = _cli(["audit", str(self.root / "nope.html"), str(self.root / MODEL_REL)])
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn(b"[x]", missing.stdout)
+
+
+@unittest.skipUnless(REAL_BROWSER, REAL_BROWSER_REASON)
+class DemoBrowserTests(_Case):
+    """El deck demo, medido con el navegador de verdad."""
+
+    def test_demo_measures_green_and_writes_one_shot_per_slide(self) -> None:
+        deck, _, _ = D.build_demo(self.root)
+        findings = D.measure_deck(deck, shots=self.root / "shots")
+        self.assertTrue(all(f.ok for f in findings), [f.detail for f in findings])
+        self.assertEqual(len(list((self.root / "shots").glob("slide-*.png"))), 7)
+
+
+if __name__ == "__main__":
+    unittest.main()

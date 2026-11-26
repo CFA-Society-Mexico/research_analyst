@@ -1409,3 +1409,189 @@ def measure_deck(deck_html: Path, shots: Optional[Path] = None) -> list[Finding]
     except MeasureError as exc:
         return [Finding("P5-P8 medicion de espacio", False, str(exc))]
     return findings
+
+
+# ---------------------------------------------------------------------------
+# Demo y CLI
+# ---------------------------------------------------------------------------
+
+DEMO_AS_OF = "2026-01-01"
+_DEMO_ROWS = (
+    ("Ingresos", (820.0, 905.0, 1010.0, 1140.0, 1265.0, 1380.0)),
+    ("Utilidad de operacion", (148.0, 172.0, 202.0, 239.0, 272.0, 304.0)),
+    ("Flujo libre", (96.0, 110.0, 131.0, 150.0, 176.0, 201.0)),
+)
+
+
+def _demo_model(path: Path) -> None:
+    """Libro sintetico de valores (sin formulas: no hace falta recalcular)."""
+    styler = B.ModelStyler()
+    styler.set_periodicity("annual")
+    ws = styler.new_sheet("Model")
+    styler.brand_bar(ws, "Modelo demo")
+    styler.label_col_width(ws)
+    styler.period_header(ws, 4, 3, B.PeriodHeader(2022, 2027, 2024))
+    for offset, (label, values) in enumerate(_DEMO_ROWS):
+        row = 6 + offset
+        styler.set_cell(ws, f"B{row}", label, B.CellRole.LABEL, numfmt=B.NumFmt.GENERAL)
+        for i, value in enumerate(values):
+            styler.set_cell(ws, f"{get_column_letter(3 + i)}{row}", value, B.CellRole.OBSERVED)
+    val = styler.new_sheet("Valuation", freeze=None)
+    styler.brand_bar(val, "Valuacion demo")
+    styler.label_col_width(val)
+    for row, (label, value, numfmt) in enumerate((
+            ("WACC", 0.09, B.NumFmt.PCT1), ("Valor por accion", 48.0, B.NumFmt.DEC2),
+            ("Rango bajo", 41.0, B.NumFmt.DEC2), ("Rango alto", 56.0, B.NumFmt.DEC2),
+            ("Precio actual", 44.0, B.NumFmt.DEC2)), start=5):
+        styler.set_cell(val, f"B{row}", label, B.CellRole.LABEL, numfmt=B.NumFmt.GENERAL)
+        styler.set_cell(val, f"C{row}", value, B.CellRole.OBSERVED, numfmt=numfmt)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    styler.save(str(path))
+
+
+def build_demo(folder: Path) -> tuple[Path, Path, Path]:
+    """Cobertura sintetica minima y su deck. Devuelve (deck, modelo, hechos)."""
+    root = folder / "demo"
+    model = root / "model" / f"demo-model_{DEMO_AS_OF}_v1.xlsx"
+    _demo_model(model)
+    report = root / "research" / "industry" / f"industry-report_{DEMO_AS_OF}.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("# Industria demo\n\nParticipacion de la emisora: 31.5% del mercado.\n",
+                      encoding="utf-8", newline="\n")
+    facts = root / "research" / "notes" / f"demo-facts_{DEMO_AS_OF}.json"
+    facts.parent.mkdir(parents=True, exist_ok=True)
+    facts.write_text(json.dumps({"as_of": DEMO_AS_OF, "facts": [{
+        "key": "share", "value": 31.5, "unit": "%", "tag": "observado",
+        "doc": f"research/industry/industry-report_{DEMO_AS_OF}.md",
+        "locator": "parrafo unico", "quote": "31.5%"}]}, indent=1), encoding="utf-8", newline="\n")
+
+    deck = Deck(root=root, model=str(model.relative_to(root)), ticker="DEMO", as_of=DEMO_AS_OF,
+                facts=str(facts.relative_to(root)))
+    rev = deck.series("Model", "Ingresos")
+    ebit = deck.series("Model", "Utilidad de operacion")
+    fcf = deck.series("Model", "Flujo libre")
+    margin, growth = ebit.over(rev), rev.growth()
+    wacc = deck.cell("Valuation", "WACC")
+    value = deck.cell("Valuation", "Valor por accion")
+    price = deck.cell("Valuation", "Precio actual")
+    src = "Fuente: modelo demo y reporte de industria demo."
+    deck.cover("Emisora demo", "Deck de ejemplo generado por deck_builder",
+               figures=[("Ventas 2024", f"{rev[2024]:,.0f}"),
+                        ("Margen de operación", f"{margin[2024]:.1%}"),
+                        ("Participación de mercado", f"{deck.fact('share'):.1f}%")])
+    deck.section("Crecimiento", "¿De dónde sale el crecimiento?")
+    deck.slide(
+        title=f"Las ventas crecen {rev.cagr(2024, 2027):.1%} al año hasta 2027",
+        lede="El ritmo proyectado es menor al observado.",
+        visual=deck.bars(rev, show=(2022, 2024, 2027), h=330),
+        note=(f"Entre 2022 y 2024 las ventas crecieron {rev.cagr(2022, 2024):.1%} anual. "
+              f"El modelo supone {growth[2027]:.1%} en 2027."),
+        source=src, takeaway="El crecimiento se modera, no se detiene.")
+    deck.slide(
+        title=f"El margen de operación llega a {margin[2027]:.1%} en 2027",
+        lede="La escala explica la mejora.",
+        visual=deck.lines([("Margen de operación", margin)], show=(2022, 2027),
+                          fmt=".1%", h=350),
+        note=(f"El margen pasó de {margin[2022]:.1%} a {margin[2024]:.1%}. "
+              f"El flujo libre proyectado para 2027 es {fcf[2027]:,.0f}."),
+        source=src)
+    deck.section("Valuación")
+    deck.slide(
+        title=f"El valor estimado es {value:,.0f} por acción contra un precio de {price:,.0f}",
+        lede=f"Descontado al {wacc:.1%}.",
+        visual=deck.football(
+            [("Flujos descontados", deck.cell("Valuation", "Rango bajo"),
+              deck.cell("Valuation", "Rango alto"), value)],
+            marker=("Precio", price), h=200)
+        + deck.table(["Concepto", "Valor"],
+                     [["Tasa de descuento", f"{wacc:.1%}"],
+                      ["Valor por acción", f"{value:,.2f}"],
+                      ["Precio actual", f"{price:,.2f}"],
+                      ["Diferencia", f"{value / price - 1:+.1%}"]]),
+        note=(f"El rango refleja la sensibilidad a la tasa de descuento. El punto central "
+              f"queda {value / price - 1:.0%} arriba del precio."),
+        source=src, takeaway="El precio está dentro del rango, debajo del punto central.")
+    deck.legal()
+    return deck.build(), model, facts
+
+
+def _report(groups: Sequence[tuple[str, Sequence[Finding]]]) -> int:
+    """Imprime por familia. Exit: 1 fallas; 3 solo pendientes; 0 verde."""
+    for title, findings in groups:
+        print(f"-- {title}")
+        for finding in findings:
+            print(f"{finding.mark} {finding.check}: {_ascii(finding.detail)}")
+    everything = [f for _, findings in groups for f in findings]
+    failures = sum(1 for f in everything if f.blocking)
+    pending = sum(1 for f in everything if f.pending)
+    warnings = sum(1 for f in everything if f.warning and not f.pending)
+    passed = sum(1 for f in everything if f.ok and not f.pending)
+    print(f"Resumen: {passed} ok, {failures} fallas, {pending} pendientes, {warnings} avisos")
+    if failures:
+        print("Veredicto: FALLA")
+        return 1
+    if pending:
+        print("Veredicto: PENDIENTE - no es verde; resuelve los pendientes y vuelve a correr")
+        return 3
+    print("Veredicto: VERDE")
+    return 0
+
+
+def main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="deck_builder.py",
+        description="Deck de cobertura por codigo: demo, auditoria de cifras, medicion "
+                    "de espacio y lista de afirmaciones.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    demo = sub.add_parser("demo", help="genera un deck sintetico y lo audita")
+    demo.add_argument("folder")
+    audit = sub.add_parser("audit", help="cada cifra del deck contra el modelo")
+    audit.add_argument("deck")
+    audit.add_argument("model")
+    audit.add_argument("--facts", help="registro de hechos (JSON)")
+    audit.add_argument("--root", help="carpeta de la cobertura (default: dos niveles "
+                                      "arriba del modelo)")
+    audit.add_argument("--design", help="brand/DESIGN.md: agrega los avisos de contraste")
+    audit.add_argument("--report", help="escribe el reporte de verificacion (Markdown)")
+    measure = sub.add_parser("measure", help="mide el espacio de cada lamina")
+    measure.add_argument("deck")
+    measure.add_argument("--shots", help="carpeta para una captura por lamina")
+    claim = sub.add_parser("claims", help="lista las frases del deck en un Markdown")
+    claim.add_argument("deck")
+    claim.add_argument("out")
+    try:
+        args = parser.parse_args(list(argv[1:]))
+    except SystemExit as exc:
+        return 2 if exc.code not in (0, None) else 0
+    try:
+        if args.command == "demo":
+            deck, model, facts = build_demo(Path(args.folder))
+            print(f"[ok] deck demo -> {_ascii(deck)}")
+            findings, _, _ = audit_deck(deck, model, facts)
+            return _report([("Cifras", findings)])
+        if args.command == "audit":
+            deck = Path(args.deck)
+            findings, doc, facts = audit_deck(
+                deck, Path(args.model), Path(args.facts) if args.facts else None,
+                Path(args.root) if args.root else None)
+            groups = [("Cifras", findings)]
+            if args.design:
+                groups.append(("Diseno", design_findings(load_design(Path(args.design)))))
+            if args.report:
+                write_report(Path(args.report), deck, groups, doc, facts)
+                print(f"[ok] reporte -> {_ascii(args.report)}")
+            return _report(groups)
+        if args.command == "measure":
+            return _report([("Espacio", measure_deck(
+                Path(args.deck), Path(args.shots) if args.shots else None))])
+        doc = read_deck(Path(args.deck).read_text(encoding="utf-8"))
+        Path(args.out).write_text(claims_table(doc), encoding="utf-8", newline="\n")
+        print(f"[ok] {len(claims(doc))} frases -> {_ascii(args.out)}")
+        return 0
+    except (DeckError, OSError) as exc:
+        print(f"[x] {_ascii(exc)}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
