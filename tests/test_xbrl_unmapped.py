@@ -44,11 +44,11 @@ def _payload(extra_ifrs: dict | None = None, other: dict | None = None) -> dict:
         "Revenue": _node("TWD", _annual(2894, 2024, ACCN_2024, "2025-04-17")),
         "ProfitLoss": _node("TWD", _annual(1173, 2024, ACCN_2024, "2025-04-17")),
         # Reportados por la emisora, fuera del mapa:
-        "DepreciationExpense": _node(
+        "OtherReserves": _node(
             "TWD", _annual(600, 2023, ACCN_2024, "2025-04-17"),
-            _annual(650, 2024, ACCN_2024, "2025-04-17"), label="Depreciation expense"),
-        "AmortisationExpense": _node(
-            "TWD", _annual(9, 2024, ACCN_2024, "2025-04-17"), label="Amortisation expense"),
+            _annual(650, 2024, ACCN_2024, "2025-04-17"), label="Other reserves"),
+        "MergerReserve": _node(
+            "TWD", _annual(9, 2024, ACCN_2024, "2025-04-17"), label="Merger reserve"),
         "OldDiscontinuedLine": _node("TWD", _annual(1, 2019, "0001-20-000001", "2020-04-15")),
         # En el mapa pero SIN datos: no es "sin mapear".
         "CostOfSales": {"units": {}},
@@ -81,18 +81,18 @@ class UnmappedConceptsTests(unittest.TestCase):
 
     def test_lists_only_concepts_with_data_that_the_map_does_not_cover(self) -> None:
         self.assertEqual(set(self.by_name),
-                         {"DepreciationExpense", "AmortisationExpense", "OldDiscontinuedLine"})
+                         {"OtherReserves", "MergerReserve", "OldDiscontinuedLine"})
 
     def test_reports_fact_count_span_units_and_label(self) -> None:
-        dep = self.by_name["DepreciationExpense"]
+        dep = self.by_name["OtherReserves"]
         self.assertEqual((dep.facts, dep.first_end, dep.last_end), (2, "2023-12-31", "2024-12-31"))
-        self.assertEqual((dep.units, dep.label, dep.last_form), ("TWD", "Depreciation expense", "20-F"))
+        self.assertEqual((dep.units, dep.label, dep.last_form), ("TWD", "Other reserves", "20-F"))
         self.assertEqual(dep.last_filed, "2025-04-17")
 
     def test_most_recent_and_most_reported_come_first(self) -> None:
         # Lo vigente antes que lo descontinuado; a igual cierre, mas hechos primero.
         self.assertEqual([u.concept for u in self.found],
-                         ["DepreciationExpense", "AmortisationExpense", "OldDiscontinuedLine"])
+                         ["OtherReserves", "MergerReserve", "OldDiscontinuedLine"])
 
 
 class FetchDiagnosticsTests(unittest.TestCase):
@@ -109,15 +109,15 @@ class FetchDiagnosticsTests(unittest.TestCase):
         rows = files["xbrl_unmapped_TEST.csv"]
         self.assertEqual(list(rows[0]), list(X.UNMAPPED_FIELDNAMES))
         self.assertEqual([r["concept"] for r in rows],
-                         ["DepreciationExpense", "AmortisationExpense", "OldDiscontinuedLine"])
+                         ["OtherReserves", "MergerReserve", "OldDiscontinuedLine"])
         self.assertEqual(rows[0]["taxonomy"], "ifrs-full")
         self.assertEqual(rows[0]["facts"], "2")
-        self.assertIn("DepreciationExpense", out)
+        self.assertIn("OtherReserves", out)
         self.assertIn("xbrl_unmapped_TEST.csv", out)
 
     def test_no_unmapped_concepts_says_so_and_writes_an_empty_list(self) -> None:
         payload = _payload()
-        for name in ("DepreciationExpense", "AmortisationExpense", "OldDiscontinuedLine"):
+        for name in ("OtherReserves", "MergerReserve", "OldDiscontinuedLine"):
             del payload["facts"]["ifrs-full"][name]
         out, files = _fetch(payload, unmapped=True)
         self.assertIn("0 conceptos con datos sin mapear", out)
@@ -143,6 +143,70 @@ class FetchDiagnosticsTests(unittest.TestCase):
         out, _ = _fetch(_payload(other=other), taxonomy="ifrs-full")
         self.assertIn("cierres anuales posteriores", out)
         self.assertIn("us-gaap", out)
+
+
+class TsmReportedConceptsTests(unittest.TestCase):
+    """Conceptos que TSMC reporta de verdad (lista --unmapped, 2026-11-25)."""
+
+    FLOWS = {
+        "Revenue": 2894, "SalesAndMarketingExpense": 13, "GeneralAndAdministrativeExpense": 70,
+        "FinanceCosts": 10, "DepreciationExpense": 650, "AmortisationExpense": 9,
+        "IncomeTaxesPaidClassifiedAsOperatingActivities": 198,
+        "ProceedsFromIssueOfBondsNotesAndDebentures": 40, "ProceedsFromNoncurrentBorrowings": 15,
+        "RepaymentsOfBondsNotesAndDebentures": 12,
+        "InterestPaidClassifiedAsFinancingActivities": 9,
+    }
+    STOCKS = {"PropertyPlantAndEquipment": 3200, "CurrentTradeReceivables": 270,
+              "TradeAndOtherCurrentPayablesToTradeSuppliers": 74,
+              "NoncurrentPortionOfNoncurrentBondsIssued": 900, "LongtermBorrowings": 30}
+    EXPECTED = {
+        ("is_sm", "FY2024"): 13, ("is_ga", "FY2024"): 70, ("is_finance_costs", "FY2024"): 10,
+        ("cf_depreciation", "FY2024"): 650, ("cf_amortisation", "FY2024"): 9,
+        ("cf_taxes_paid", "FY2024"): 198, ("cf_bonds_issued", "FY2024"): 40,
+        ("cf_borrowings_lt_issued", "FY2024"): 15, ("cf_bonds_repaid", "FY2024"): 12,
+        ("cf_interest_paid", "FY2024"): 9, ("bs_ppe", "4Q2024"): 3200,
+        ("bs_ar", "4Q2024"): 270, ("bs_ap", "4Q2024"): 74,
+        ("bs_bonds_lt", "4Q2024"): 900, ("bs_borrowings_lt", "4Q2024"): 30,
+    }
+
+    def setUp(self) -> None:
+        ifrs = {name: _node("TWD", _annual(v, 2024, ACCN_2024, "2025-04-17"))
+                for name, v in self.FLOWS.items()}
+        for name, v in self.STOCKS.items():
+            ifrs[name] = _node("TWD", {"end": "2024-12-31", "val": v, "accn": ACCN_2024,
+                                       "filed": "2025-04-17", "form": "20-F"})
+        ifrs["BasicEarningsLossPerShare"] = _node(
+            "TWD/shares", _annual(45.25, 2024, ACCN_2024, "2025-04-17"))
+        self.out, files = _fetch({"facts": {"ifrs-full": ifrs}})
+        self.rows = {(r["canon"], r["period"]): r for r in files["xbrl_facts_TEST.csv"]}
+
+    def test_each_reported_concept_lands_on_its_canon_line(self) -> None:
+        got = {key: float(self.rows[key]["value"]) for key in self.EXPECTED if key in self.rows}
+        self.assertEqual(got, {k: float(v) for k, v in self.EXPECTED.items()})
+
+    def test_additive_concepts_never_share_a_canon(self) -> None:
+        # Depreciacion + amortizacion y bonos + prestamos se SUMAN: si
+        # compartieran canon, una pisaria a la otra dentro del mismo filing.
+        canon = X.IFRS_CONCEPT_MAP
+        for a, b in (("DepreciationExpense", "AmortisationExpense"),
+                     ("ProceedsFromIssueOfBondsNotesAndDebentures", "ProceedsFromNoncurrentBorrowings"),
+                     ("NoncurrentPortionOfNoncurrentBondsIssued", "LongtermBorrowings"),
+                     ("SalesAndMarketingExpense", "GeneralAndAdministrativeExpense")):
+            with self.subTest(pair=(a, b)):
+                self.assertNotEqual(canon[a], canon[b])
+
+    def test_payments_carry_the_outflow_sign_flag(self) -> None:
+        for canon in ("cf_taxes_paid", "cf_bonds_repaid", "cf_interest_paid"):
+            with self.subTest(canon=canon):
+                self.assertEqual(self.rows[(canon, "FY2024")]["sign"], X.SIGN_OUTFLOW_POSITIVE)
+        self.assertEqual(self.rows[("cf_bonds_issued", "FY2024")]["sign"], "")
+
+    def test_basic_eps_is_never_derived_for_the_fourth_quarter(self) -> None:
+        self.assertIn("is_eps_basic", X.NON_ADDITIVE)
+        self.assertIn(("is_eps_basic", "FY2024"), self.rows)
+
+    def test_console_states_how_far_companyfacts_reaches(self) -> None:
+        self.assertIn("ultimo cierre anual en companyfacts (ifrs-full): 2024-12-31", self.out)
 
 
 class CliTests(unittest.TestCase):

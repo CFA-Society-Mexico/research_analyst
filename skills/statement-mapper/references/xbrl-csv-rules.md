@@ -56,8 +56,24 @@ El tool lo reporta en dos líneas de consola — no las ignores:
 - `[aviso] el payload trae cierres anuales posteriores al último capturado` —
   el CSV termina antes que los filings de la emisora: falta un año entero.
 
+- `[i] último cierre anual en companyfacts` — siempre. companyfacts puede ir
+  atrasado respecto a los filings: un año ya presentado que no llega al
+  payload se captura desde el filing, con cita.
+
 Prueba en vivo con TSM (2026-11-25): la captura salió sin D&A, sin impuestos
-pagados y sin FY2025. Antes de capturar a mano una línea que falta, corre con
-`--unmapped`: si la emisora la reporta bajo otro concepto, se agrega al mapa de
-su taxonomía en `tools/xbrl_fetch.py` (con prueba), no al canónico de una sola
-cobertura. Lo que de verdad no esté en XBRL se captura del filing, con cita.
+pagados y sin deuda porque TSMC los reporta bajo otros conceptos (ya en el
+mapa), y sin FY2025 porque companyfacts terminaba en 2024-12-31 con el 20-F
+de FY2025 ya presentado. Antes de capturar a mano una línea que falta, corre
+con `--unmapped`: si la emisora la reporta bajo otro concepto, se agrega al
+mapa de su taxonomía en `tools/xbrl_fetch.py` (con prueba), no al canónico de
+una sola cobertura.
+
+## 5. Líneas que se suman
+
+Dos conceptos que se SUMAN llevan canon propio y esta skill los agrega, con
+gate, al mapear: `cf_depreciation` + `cf_amortisation` = D&A; `is_sm` +
+`is_ga` (+ `is_rd`) = gastos de operación (contrastar con `is_opex_total`);
+`bs_bonds_lt` + `bs_borrowings_lt` = deuda de largo plazo; `bs_bonds_st` +
+`bs_borrowings_lt_current` = porción circulante; `cf_bonds_issued` +
+`cf_borrowings_lt_issued` = deuda emitida. Solo comparten canon los conceptos
+que son alternativas de una misma línea (un emisor usa uno u otro).

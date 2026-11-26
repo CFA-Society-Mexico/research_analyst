@@ -188,6 +188,40 @@ IFRS_CONCEPT_MAP = {
     "ProceedsFromIssuingShares": "cf_stock_issued",
     "ProceedsFromBorrowingsClassifiedAsFinancingActivities": "cf_debt_issued",
     "RepaymentsOfBorrowingsClassifiedAsFinancingActivities": "cf_debt_repaid",
+    # --- Conceptos que TSMC SI reporta (lista --unmapped de la corrida en vivo
+    # del 2026-11-25; el mapa inicial, armado sin payload real, dejaba la
+    # captura sin D&A, sin impuestos pagados y sin deuda). Regla: dos conceptos
+    # que se SUMAN (depreciacion y amortizacion; bonos y prestamos) llevan
+    # canon propio y statement-mapper los agrega con gate; solo comparten canon
+    # los que son alternativas de una misma linea (impuestos pagados).
+    "SalesAndMarketingExpense": "is_sm",
+    "GeneralAndAdministrativeExpense": "is_ga",
+    "OperatingExpenseExcludingCostOfSales": "is_opex_total",
+    "FinanceCosts": "is_finance_costs",
+    "ShareOfProfitLossOfAssociatesAccountedForUsingEquityMethod": "is_equity_method_income",
+    "ProfitLossAttributableToNoncontrollingInterests": "is_ni_nci",
+    "BasicEarningsLossPerShare": "is_eps_basic",
+    "PropertyPlantAndEquipment": "bs_ppe",
+    "IntangibleAssetsAndGoodwill": "bs_intangibles_goodwill",
+    "RightofuseAssets": "bs_rou_assets",
+    "CurrentTradeReceivables": "bs_ar",
+    "TradeAndOtherCurrentPayablesToTradeSuppliers": "bs_ap",
+    "NoncontrollingInterests": "bs_nci",
+    "NoncurrentPortionOfNoncurrentBondsIssued": "bs_bonds_lt",
+    "CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued": "bs_bonds_st",
+    "LongtermBorrowings": "bs_borrowings_lt",
+    "CurrentPortionOfLongtermBorrowings": "bs_borrowings_lt_current",
+    "NoncurrentLeaseLiabilities": "bs_lease_lt",
+    "DepreciationExpense": "cf_depreciation",
+    "AmortisationExpense": "cf_amortisation",
+    "IncomeTaxesPaidClassifiedAsOperatingActivities": "cf_taxes_paid",
+    "PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities": "cf_capex_intangibles",
+    "ProceedsFromSalesOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities": "cf_ppe_disposals",
+    "ProceedsFromIssueOfBondsNotesAndDebentures": "cf_bonds_issued",
+    "RepaymentsOfBondsNotesAndDebentures": "cf_bonds_repaid",
+    "ProceedsFromNoncurrentBorrowings": "cf_borrowings_lt_issued",
+    "InterestPaidClassifiedAsFinancingActivities": "cf_interest_paid",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities": "cf_lease_payments",
 }
 
 # Mapas por taxonomia, en orden de preferencia: dentro de un mismo accession
@@ -223,6 +257,11 @@ OUTFLOW_POSITIVE_CONCEPTS = frozenset({
     "DividendsPaidClassifiedAsFinancingActivities",
     "PaymentsToAcquireOrRedeemEntitysShares",
     "RepaymentsOfBorrowingsClassifiedAsFinancingActivities",
+    "IncomeTaxesPaidClassifiedAsOperatingActivities",
+    "PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities",
+    "RepaymentsOfBondsNotesAndDebentures",
+    "InterestPaidClassifiedAsFinancingActivities",
+    "PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities",
 })
 
 # Seleccion de vintage: el accession primario de un (estado, periodo) es el mas
@@ -237,7 +276,7 @@ _VINTAGE_MIX_KEY = "_vintage_mix"
 # Flujos que se desacumulan y cuyo 4Q se deriva FY - acumulado a 3Q. La UPA no
 # es aditiva entre trimestres (cambia el conteo de acciones): nunca se deriva.
 FLOW_PREFIXES = ("is_", "cf_")
-NON_ADDITIVE = frozenset({"is_eps_diluted"})
+NON_ADDITIVE = frozenset({"is_eps_diluted", "is_eps_basic"})
 YTD_UNRESOLVED_TAG = "acumulado YTD sin desacumular"
 
 FIELDNAMES = ("canon", "period", "value", "months", "start", "end",
@@ -887,6 +926,12 @@ def fetch(ticker: str, dest: Path, user_agent: str,
     if missing:
         print(f"[!] conceptos sin datos en esta emisora ({len(missing)}): "
               + ", ".join(missing[:6]) + (" ..." if len(missing) > 6 else ""))
+    # companyfacts puede ir atrasado respecto a los filings (TSM, 2026-11-25:
+    # ultimo cierre 2024-12-31 con el 20-F de FY2025 ya presentado): el
+    # analista debe ver hasta donde llega el payload, no deducirlo del CSV.
+    print(f"[i] ultimo cierre anual en companyfacts ({taxonomy_used}): "
+          f"{latest_annual_end(facts)[0] or 'ninguno'} - un anio posterior ya "
+          "presentado se captura desde el filing")
     for line in period_gaps(all_facts, taxonomy_used, rows):
         print(line)
     outside = unmapped_concepts(facts, concepts)
