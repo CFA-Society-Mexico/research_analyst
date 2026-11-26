@@ -22,6 +22,7 @@ recomendaciones de inversión.
 | Actualizar por trimestre nuevo / evento relevante | `commands/update-quarter.md` |
 | Refrescar el análisis de industria ("la industria se movió", "actualiza el landscape con diff") | `commands/update-industry.md` |
 | Actualizar el house view macro desde fuentes del analista ("actualiza el macro-view con mi research") | `commands/update-macro.md` |
+| Presentar la cobertura: deck de la tesis desde el modelo ("arma el deck", "presenta la cobertura") | `commands/present-coverage.md` |
 | Auditar un modelo / correr checks | `commands/model-check.md` |
 | Crear carpetas, archivar un filing | `skills/coverage-folders/SKILL.md` |
 | Saber qué norma gobierna una línea, marco de la emisora, perfil contable | `skills/framework-mapper/SKILL.md` |
@@ -31,6 +32,7 @@ recomendaciones de inversión.
 | Construir el modelo xlsx, pestañas de valuación | `skills/model-standards/SKILL.md` |
 | Escribir/formatear cualquier xlsx, audit de formato | `skills/xlsx-building/SKILL.md` |
 | Clasificar materialidad de un hallazgo | `skills/impact-triage/SKILL.md` |
+| Guion del deck, hechos citados, escribir o verificar el deck de una cobertura | `skills/research-note/SKILL.md` |
 
 ## Estilo de reporte (todos los runtimes)
 
@@ -76,6 +78,13 @@ SKILL.md); las demás solo leen.
 - Contratos de la cobertura (perfil, macro-view, comps, CSV canónicos):
   `python tools/contract_check.py <raiz>/<TICKER>` — checks K, solo lectura.
   Sin PyYAML los de YAML quedan `[pendiente]`, nunca verdes.
+- Deck solo vía `tools/deck_builder.py` (skill research-note) — ninguna cifra
+  tecleada: cada número sale del modelo recalculado o de un hecho citado, y uno
+  sin origen impide generar el deck. Verificación:
+  `python tools/deck_builder.py audit <deck.html> <modelo>` (checks P1 a P4) y
+  `python tools/deck_builder.py measure <deck.html> --shots <carpeta>` (P5 a
+  P8, con el navegador ya instalado). Sin navegador la medición queda
+  `[pendiente]`, nunca verde. El HTML del deck no se edita a mano.
 - Historia financiera masiva de emisoras SEC: `python tools/xbrl_fetch.py <TICKER>`
   (companyfacts XBRL, US GAAP o IFRS en la moneda de reporte — décadas de
   anuales y trimestrales sin parsear HTML; reglas de vintage y de signo del CSV

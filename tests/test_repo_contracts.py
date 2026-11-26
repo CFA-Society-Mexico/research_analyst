@@ -22,6 +22,9 @@ CHECKS_DOC = SKILLS_DIR / "model-standards" / "references" / "integrity-checks.m
 BUILDER = ROOT / "tools" / "xlsx_builder.py"
 CHECKER = ROOT / "tools" / "model_check.py"
 CONTRACT_CHECKER = ROOT / "tools" / "contract_check.py"
+DECK_BUILDER = ROOT / "tools" / "deck_builder.py"
+# Los checks P (deck) se documentan con su skill duena, no en integrity-checks.
+DECK_DOC = SKILLS_DIR / "research-note" / "references" / "deck-format.md"
 # Checks C que son escaneo por codigo (el resto son formulas de la tab Checks).
 SCANNED_C_CHECKS = {"C9", "C10", "C11"}
 # Checks D que son escaneo por codigo: los de vigencia. El resto de los D son
@@ -34,6 +37,10 @@ ROUTED_DOCS = ("AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/architecture.m
 _REPO_PATH = re.compile(r"`((?:commands|skills|templates|tools|docs|tests)/[^`\s]+)`")
 _CHECK_ROW = re.compile(r"^\| ([SCDFK]\d+[a-z]?) \|", re.MULTILINE)
 _FINDING_ID = re.compile(r'Finding\(\s*"(F\d+)[ "]')
+_P_ROW = re.compile(r"^\| (P\d+) \|", re.MULTILINE)
+# "P5-P8 medicion de espacio" (sin navegador) es un estado, no un check: el
+# guion tras el ID lo deja fuera.
+_P_FINDING = re.compile(r'Finding\(\s*"(P\d+) ')
 
 
 def _read(rel: str) -> str:
@@ -155,6 +162,14 @@ class IntegrityCheckTests(unittest.TestCase):
         emitted = set(re.findall(r'"(D\d+) ', CHECKER.read_text(encoding="utf-8")))
         self.assertEqual(emitted, SCANNED_D_CHECKS, "checks D emitidos por tools/model_check.py")
         self.assertLessEqual(emitted, documented, "check D emitido sin fila en integrity-checks")
+
+    def test_documented_p_checks_are_exactly_the_emitted_ones(self) -> None:
+        documented = _P_ROW.findall(DECK_DOC.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(set(documented)), sorted(documented),
+                         "los IDs de check P no se repiten")
+        emitted = set(_P_FINDING.findall(DECK_BUILDER.read_text(encoding="utf-8")))
+        self.assertEqual(set(documented), emitted,
+                         "checks P documentados vs emitidos por tools/deck_builder.py")
 
 
 class ContractCheckTests(unittest.TestCase):

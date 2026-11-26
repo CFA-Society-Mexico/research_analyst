@@ -64,8 +64,15 @@ subcarpeta intermedia (`workspace/`, `coberturas/`, etc.).
     │   │   ├── sources/          # research de industria del analista y de
     │   │   │                     #   terceros (insumo de /update-industry)
     │   │   └── industry-report_YYYY-MM-DD.md   # generados; vigente = más reciente
-    │   ├── notes/
-    │   │   └── <ticker>-note_YYYY-MM-DD.md     # notas de inversión (etapa 7)
+    │   ├── notes/                # etapa 7 (research-note escribe; nadie más)
+    │   │   ├── <ticker>-deck-outline_YYYY-MM-DD.md  # guion aprobado (gate 1)
+    │   │   ├── <ticker>-facts_YYYY-MM-DD.json       # hechos externos citados
+    │   │   ├── build_deck.py                        # script VIGENTE del deck
+    │   │   ├── build_deck_YYYY-MM-DD.py             # copia del script anterior
+    │   │   ├── <ticker>-deck_YYYY-MM-DD.html        # el deck (cifras atadas
+    │   │   │                                        #   al modelo y a hechos)
+    │   │   ├── <ticker>-deck-verify_YYYY-MM-DD.md   # verificación (gate 2)
+    │   │   └── shots_YYYY-MM-DD/                    # una captura por lámina
     │   └── sell-side/            # consenso y notas de terceros, FECHADOS
     │       └── <fuente>_YYYY-MM-DD.md   # GATE: se leen DESPUÉS de que el
     │                             #   analista pobló sus drivers, nunca antes
@@ -90,6 +97,12 @@ Excepción para artefactos consumidos por CÓDIGO (`macro/macro-view.yaml`): el
 vigente mantiene NOMBRE FIJO (los contratos y checks lo referencian por ruta) y
 la historia vive en `history/` como snapshots fechados escritos ANTES de cada
 actualización.
+
+Mismo trato para `research/notes/build_deck.py`: el vigente tiene nombre fijo
+(es lo que se corre) y, antes de reescribirlo para un deck con fecha nueva, se
+guarda la copia `build_deck_YYYY-MM-DD.py` con la fecha del deck que
+reproducía. La nota de inversión en .docx (`<ticker>-note_<tipo>_YYYY-MM-DD.docx`)
+está reservada; todavía no la genera ninguna skill.
 
 ### Fuentes de terceros (`macro/sources/`, `research/industry/sources/`)
 
@@ -216,3 +229,29 @@ Solo esos 3 slots son rebrandeables. Los colores SEMÁNTICOS no se tocan jamás:
 azul input `FF0000FF`, verde link `FF00CC00`, rojo warn, fill amarillo de input
 — son el contrato de trazabilidad, no decoración. El audit F acepta la marca
 pasándole el mismo DESIGN.md.
+
+### Slots del deck (opcionales)
+
+El mismo archivo fija el estilo del deck (`tools/deck_builder.py::load_design`).
+Mismo formato `slot: valor`; todos opcionales; sin archivo o sin slot, estilo
+neutro. El repo no trae ninguna marca.
+
+```
+deck_background: #FFFFFF
+deck_text:       #1A1A1A
+deck_muted:      #5B6670      # texto secundario, ejes
+deck_negative:   #B03A2E      # barras negativas
+deck_series_1:   #1F4E79      # hasta deck_series_6
+deck_font_heading: Georgia
+deck_font_body:    Arial
+deck_margin:     56           # px
+deck_gap_max:    90           # px, umbral de lámina vacía (check P6)
+deck_logo:       brand/logo.svg   # .svg o .png dentro de la cobertura
+```
+
+Cada lector ignora los slots del otro: `load_brand` solo lee los tres `brand_*`
+y `load_design` solo las líneas `deck_*`. Un slot `deck_*` desconocido o con
+valor mal formado es error, no se adivina. Al auditar con `--design`, el tool
+avisa si el texto contrasta poco con el fondo (P9) o si dos colores de serie se
+confunden con daltonismo (P10); un color de serie con poco contraste obliga a
+etiquetar todos los valores de la gráfica.

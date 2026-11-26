@@ -8,8 +8,9 @@ esqueleto de la skill. La nota .docx tiene spec propio, después.
 
 Actualizado el mismo día tras implementar el tool (PR 1), una revisión
 independiente y el dogfood con dos coberturas: D2 y D3 describen el tool como
-quedó. D1 (skill), D4 (comando) y los contratos de D5 siguen siendo diseño:
-van en el PR 2.
+quedó. D1 (skill), D4 (comando) y los contratos de D5 se implementaron en el
+PR 2 (plan: `docs/superpowers/plans/2026-11-26-research-note-skill.md`, con lo
+que cambió al ejecutar).
 
 ## El problema
 
@@ -398,7 +399,7 @@ prueba con `find_engine` simulado, como en `tests/test_recalc_validate.py`.
 | `docs/architecture.md` | Dueña de la etapa 7; fila en la tabla de dueñas; fila en decisiones (novena skill y por qué una sola para dos formatos) |
 | `templates/coverage-tree.md` | Archivos de `research/notes/`; slots `deck_*` en la sección de `brand/DESIGN.md` |
 | `commands/update-quarter.md` | Post-run: `audit` del deck vigente |
-| `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` | v0.8.0, en commit propio |
+| `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json` | v0.9.0, en commit propio (v0.8.0 ya la tomó el check C11) |
 
 Coberturas existentes: nada se rompe. `research/notes/` ya existe y hoy está
 vacío o con archivos que ningún tool lee.
@@ -422,6 +423,14 @@ Estado al 2026-11-26:
   líneas y a agregar la detección de etiquetas encimadas. Ese cambio entró
   antes de fusionar, como pedía el criterio.
 - Criterio 3: cumplido para el PR 1.
+- PR 2: la skill se ejecutó de punta a punta con un agente sin contexto sobre
+  una copia de TSMC (12 láminas, 104 cifras auditadas, 24 hechos, cero
+  `lit()`, tres rondas de medición, gates simulados). El bloqueo no se disparó
+  ni una vez con quien no conocía la regla de antemano. Lo que la skill no
+  decía, y hoy dice, está en el plan del PR 2. Pendientes del tool que esa
+  corrida destapó: listar etiquetas del modelo, validar hechos sin construir,
+  `measure --report`, conservar la evidencia entre corridas, incluir tablas en
+  `claims`, y un `football` que reparta sus filas.
 
 ### Entrega
 
@@ -465,10 +474,10 @@ segundo. El #55 queda abierto y se actualiza con la decisión P1.
 - El umbral de 90 px salió de un solo deck.
 - La medición dice que no hay hueco ni encimado, no que la lámina se vea bien.
 
-## Pendiente de quien mantiene el repo
+## Enmienda de 8 a 9 skills
 
-La enmienda de 8 a 9 skills (CONTRIBUTING §4.6). Conviene registrarla en el
-#54 antes de abrir el primer PR.
+Aprobada por quien mantiene el repo el 2026-11-26 (CONTRIBUTING §4.6). Queda
+documentada en `docs/architecture.md` con el PR 2.
 
 ## Fuera de alcance
 

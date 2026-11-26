@@ -39,6 +39,11 @@ crítico puede cambiar QUÉ se actualiza y si amerita nota inmediata.
 - forecast-accuracy.md con el trimestre appendeado.
 - Entrada de thesis-journal del gate de impact-triage (¿confirma o erosiona?).
 - Check rojo = **FALLA**, con la versión respaldada señalada como vigente.
+- Si hay un deck vigente en `research/notes/`: `python tools/deck_builder.py
+  audit <deck.html> <modelo nuevo> --facts <hechos.json>`. P1 en `[x]` = el deck
+  quedó desactualizado contra el modelo: se reporta y se recomienda
+  `/present-coverage` (el guion anterior sirve de base). Este comando no
+  regenera el deck.
 
 ## Reporte final
 

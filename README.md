@@ -4,7 +4,7 @@ Autor: [Alan Vazquez, CFA](https://www.linkedin.com/in/alan-vazquez-cfa-38515414
 
 > Copiloto de análisis bursátil: acompaña a un analista desde "me asignaron
 > cubrir esta empresa" hasta "publiqué mi reporte".
-> Open source · **CFA Society México · AI for Finance** · v0.8.0 (en dogfood).
+> Open source · **CFA Society México · AI for Finance** · v0.9.0 (en dogfood).
 
 Un analista de acciones pasa semanas leyendo reportes, armando un Excel y
 escribiendo su nota. Este plugin **organiza, redacta, verifica y cuestiona** ese
@@ -44,7 +44,7 @@ enruta cada tarea a la skill correcta. Codex también lee el marketplace:
 
 ## El flujo completo
 
-Cinco comandos orquestan todo. Antes de correr verifican que nada falte
+Seis comandos orquestan todo. Antes de correr verifican que nada falte
 (incluida la confirmación de que no hay información privilegiada); si algo
 falla, se detienen — nunca dejan trabajo a medias.
 
@@ -53,6 +53,7 @@ falla, se detienen — nunca dejan trabajo a medias.
 /update-quarter AAPL ./nuevo-10q.pdf   # actualizarla cada trimestre
 /update-industry AAPL                  # refrescar la vista de industria, con diff
 /update-macro                          # actualizar el view macro desde tus fuentes
+/present-coverage AAPL                 # armar el deck de la tesis desde el modelo
 /model-check                           # auditar el Excel en cualquier momento
 ```
 
@@ -97,6 +98,13 @@ cuando el reporte lleva más de 6 meses sin tocarse — el plugin te avisa): esc
 un reporte NUEVO fechado, muestra el **diff contra la versión anterior**, y el
 triage clasifica qué deltas tocan tus supuestos.
 
+`/present-coverage` arma el deck de la tesis (`research-note`): propone el guion
+y tú lo apruebas antes de construir nada; cada cifra de cada lámina viene de una
+celda del modelo o de un hecho con su cita, y una cifra sin origen impide
+generar el deck (`tools/deck_builder.py`). Cierra con la verificación: cifras
+contra el modelo, espacio de cada lámina, evidencia frase por frase y capturas
+que revisas una por una.
+
 ## Cómo se ve una cobertura en disco
 
 Cada empresa vive en su carpeta, organizada en cuatro categorías. Regla general:
@@ -120,18 +128,18 @@ reciente y nada se borra jamás (retención de 7 años).
     ├── filings/               # ENTRADAS · reportes oficiales (SEC y BMV), organizados
     ├── transcripts/           # ENTRADAS · earnings calls — si están, se usan como guidance
     ├── comps/                 # ENTRADAS · fotos fechadas de cada comparable
-    ├── brand/                 # CONFIG · tus colores de marca para el Excel (opcional)
+    ├── brand/                 # CONFIG · tus colores de marca para el Excel y el deck (opcional)
     ├── model/                 # SALIDAS · el Excel versionado por fecha
     │   └── inputs/            #   cifras capturadas de los filings, con su cita
     ├── research/              # SALIDAS · análisis fechados
     │   ├── industry/          #   reportes de industria (historia completa, con diffs)
     │   │   └── sources/       #     tu research del sector y el de terceros
-    │   └── notes/             #   notas de inversión publicadas
+    │   └── notes/             #   el deck de la tesis: guion, hechos citados, verificación
     └── journal/               # REGISTRO · solo se agrega, nunca se borra:
                                #   diario de tesis · decisiones · aciertos de forecast
 ```
 
-## Las 8 skills — y cuándo usarlas sueltas
+## Las 9 skills — y cuándo usarlas sueltas
 
 No hace falta correr el flujo completo ni memorizar nombres: cada skill también
 responde a lenguaje natural, sobre coberturas del plugin o trabajo tuyo previo.
@@ -146,6 +154,7 @@ responde a lenguaje natural, sobre coberturas del plugin o trabajo tuyo previo.
 | `model-standards` | El Excel: estructura, fórmulas, checks, valuación | "revisa mi modelo", "corre los checks" — funciona también sobre modelos que no creó el plugin |
 | `xlsx-building` | Formato del Excel por código (colores, fuentes, checks F) | "el modelo salió feo", "corre el audit de formato" |
 | `impact-triage` | Clasificar hallazgos: crítico / relevante / cosmético | "salió este evento, ¿es material?" |
+| `research-note` | El deck de la cobertura en `research/notes/`: guion, hechos citados, script y verificación | "arma el deck", "¿de dónde salió esta cifra del deck?" |
 
 ## Qué empresas cubre
 
@@ -159,7 +168,9 @@ responde a lenguaje natural, sobre coberturas del plugin o trabajo tuyo previo.
 ## Extras que el analista controla
 
 - **`brand/DESIGN.md`** — pon tus colores de marca y el Excel se genera con
-  ellos (los colores de trazabilidad no se tocan).
+  ellos (los colores de trazabilidad no se tocan). El mismo archivo fija el
+  estilo del deck con los slots `deck_*` (colores, fuentes, márgenes, logo); sin
+  él, el deck sale en un estilo neutro, sin marca de nadie.
 - **`macro/`** — los supuestos macro de la casa (tasa, FX, PIB) viven una sola
   vez a nivel workspace y alimentan todas las coberturas. Deja tu research en
   `macro/sources/` y `/update-macro` te propone la actualización campo por

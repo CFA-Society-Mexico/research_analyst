@@ -34,7 +34,7 @@ commands/            orquestadores: preflight + secuencia de skills + gates. CER
 skills/*/SKILL.md    unidades de conocimiento: una skill hace UNA cosa y no llama a otra.
 skills/*/references/ material largo que la skill carga bajo demanda (checks, mapeo normativo).
 templates/           CONTRATOS entre skills (yaml y specs). Cambiarlos rompe consumidores: ver 4.4.
-tools/*.py           lo determinista: descarga de datos y construcción/audit del xlsx.
+tools/*.py           lo determinista: descarga de datos y construcción/audit del xlsx y del deck.
   xlsx_builder.py    fachada del xlsx (import y CLI) sobre xlsx_contract (paleta, NumFmt,
                      roles), xlsx_formulas (lint F21, fórmulas de valuación), xlsx_styler
                      (ModelStyler), xlsx_scan (lectores del libro) y xlsx_audit (checks F).
@@ -90,7 +90,7 @@ mayoría de los bugs de este plugin solo aparecen con un filing de verdad.
 
 ### 4.2 Agregar o cambiar un check de integridad
 
-Es la contribución más valiosa y la más regulada. Cuatro familias:
+Es la contribución más valiosa y la más regulada. Cinco familias:
 
 | Familia | Dónde vive la lógica | Cómo se verifica |
 |---|---|---|
@@ -98,6 +98,7 @@ Es la contribución más valiosa y la más regulada. Cuatro familias:
 | **C** (contables) | fórmulas en la tab `Checks` del modelo; los de escaneo (C9, C10, C11) en `tools/model_check.py` | la fórmula la escribe el builder, no el analista |
 | **D** (doctrina) | reglas del plugin (drivers, staleness, reconciliación) | avisa o bloquea: declara cuál de los dos |
 | **F** (formato) | `tools/xlsx_builder.py audit` (código en `tools/xlsx_audit.py`) | debe fallar en un libro malo y pasar en el `demo` |
+| **P** (presentación) | `tools/deck_builder.py` (`audit`, `measure`); su lista vive en [`skills/research-note/references/deck-format.md`](skills/research-note/references/deck-format.md), no en `integrity-checks.md` | debe fallar en un deck malo y pasar en el `demo`; documentados = emitidos lo vigila `tests/test_repo_contracts.py` |
 
 Un check nuevo llega completo o no llega:
 
@@ -169,8 +170,9 @@ que ninguna.
 
 ### 4.6 Agregar una skill nueva
 
-Alto costo, gate alto. El repo tiene 8 skills por diseño (el tope original era 6
-y la enmienda está documentada en `docs/architecture.md`). Abre issue ANTES de
+Alto costo, gate alto. El repo tiene 9 skills por diseño (el tope original era 6;
+cada enmienda está documentada en `docs/architecture.md`, con su porqué: la
+novena, `research-note`, entró porque la etapa 7 no tenía dueña). Abre issue ANTES de
 escribir código y responde: de qué artefacto es dueña, por qué no cabe en una
 existente, qué gate propio tiene. Si la respuesta es "para no inflar otra skill",
 el problema real probablemente es que la otra skill necesita `references/`.

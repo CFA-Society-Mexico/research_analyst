@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -496,6 +497,18 @@ class DeckTests(_Case):
         self.assertIn('<span class="n" data-src="Annual!H6" data-fmt=",.0f">240</span>', text)
         self.assertIn('<div class="num auto">01</div>', text)
         self.assertIn("data-measure", text)
+
+    def test_act_number_uses_the_body_font(self) -> None:
+        # La fuente de encabezado por defecto (Georgia) trae numerales de estilo
+        # antiguo: en el separador de acto "01" se lee "O1".
+        deck = self.deck()
+        self._minimal(deck)
+        css = deck.render().split("<style>", 1)[1].split("</style>", 1)[0]
+        rule = re.search(r"\.act \.num\{([^}]*)\}", css)
+        self.assertIsNotNone(rule)
+        assert rule is not None
+        self.assertIn("font-family:Arial", rule.group(1))
+        self.assertNotIn("Georgia", rule.group(1))
 
     def test_same_input_gives_the_same_bytes(self) -> None:
         outputs = []

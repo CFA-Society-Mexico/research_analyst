@@ -921,7 +921,7 @@ body{margin:0;font-family:%(body)s,Arial,sans-serif;color:%(text)s}
 .figs div{border-top:3px solid %(s1)s;padding-top:10px;min-width:180px}
 .figs b{display:block;font-size:34px;font-family:%(head)s,Georgia,serif}
 .figs span.lbl{font-size:13px;color:%(muted)s}
-.act .num{font-size:96px;font-family:%(head)s,Georgia,serif;color:%(s1)s;line-height:1}
+.act .num{font-size:96px;font-weight:bold;font-family:%(body)s,Arial,sans-serif;color:%(s1)s;line-height:1}
 .act .q{font-size:20px;color:%(muted)s;margin:12px 0 0}
 .legal p{font-size:14px;line-height:1.5;color:%(muted)s;max-width:900px}
 svg text{font-family:%(body)s,Arial,sans-serif;font-size:13px;fill:%(text)s}
