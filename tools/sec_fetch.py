@@ -516,7 +516,11 @@ class _Run:
         except SecHttpError as exc:
             print(f"[aviso] exhibits no listados para {row.accession}: {exc}")
             docs = []
-        self._note(exhausted=False)
+        # Un listado que responde NO reinicia la racha: solo la reinicia un
+        # documento bajado. Si el indice contesta pero los documentos agotan
+        # reintentos (126 s cada uno), la corrida tiene que cortarse igual; con
+        # el reinicio aqui, tres fallas seguidas de un mismo 6-K no la cortaban
+        # (visto contra un servidor HTTP real, issue #48).
         return docs
 
     def _document(self, row: FilingRow, form: str, doc: str, new_name: str,
@@ -560,7 +564,8 @@ class _Run:
         return True
 
     def _note(self, exhausted: bool) -> None:
-        """Circuit breaker: cuenta solicitudes SEGUIDAS con reintentos agotados."""
+        """Circuit breaker: fallas SEGUIDAS con reintentos agotados (documento o
+        listado de exhibits). Solo un documento bajado reinicia la racha."""
         self._streak = self._streak + 1 if exhausted else 0
         if self._streak >= BREAKER_LIMIT:
             raise _CircuitOpen
