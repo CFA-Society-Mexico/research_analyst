@@ -263,6 +263,63 @@ class BrokenBookTests(unittest.TestCase):
         self.assertTrue(self._audit(discontinue)["F17"].ok)
 
 
+class ExternalModelTests(unittest.TestCase):
+    """F10 en un modelo que no construyo el builder: falla en el pipeline del
+    plugin, [aviso] cuando quien audita declara que el modelo es externo."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.unstamped = str(Path(tmp.name) / "externo.xlsx")
+        with contextlib.redirect_stdout(io.StringIO()):
+            B._demo(self.unstamped)
+        wb = load_workbook(self.unstamped)
+        _no_stamp(wb)
+        wb.save(self.unstamped)
+
+    def _f10(self, **kwargs: bool) -> B.Finding:
+        return next(f for f in B.audit_format(self.unstamped, **kwargs)
+                    if f.check.startswith("F10 "))
+
+    def _cli(self, *args: str) -> tuple[int, str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = B.main(["xlsx_builder.py", *args])
+        return code, out.getvalue()
+
+    def test_missing_stamp_blocks_by_default(self) -> None:
+        f10 = self._f10()
+        self.assertFalse(f10.ok)
+        self.assertTrue(f10.blocking)
+
+    def test_missing_stamp_on_declared_external_model_is_a_warning(self) -> None:
+        f10 = self._f10(external=True)
+        self.assertFalse(f10.ok)          # el hecho no cambia: no hay sello
+        self.assertTrue(f10.warning)
+        self.assertFalse(f10.blocking)
+
+    def test_stamped_model_is_plain_ok_even_if_declared_external(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "demo.xlsx")
+            with contextlib.redirect_stdout(io.StringIO()):
+                B._demo(path)
+            f10 = next(f for f in B.audit_format(path, external=True)
+                       if f.check.startswith("F10 "))
+        self.assertTrue(f10.ok)
+        self.assertFalse(f10.warning)
+
+    def test_cli_external_flag_reports_warning_and_exits_green(self) -> None:
+        code, out = self._cli("audit", self.unstamped, "--external")
+        self.assertEqual(code, 0)
+        self.assertIn("[aviso] F10", out)
+        self.assertIn("1 avisos", out)
+
+    def test_cli_without_flag_still_fails_on_missing_stamp(self) -> None:
+        code, out = self._cli("audit", self.unstamped)
+        self.assertEqual(code, 1)
+        self.assertIn("[x] F10", out)
+
+
 class BuilderTests(unittest.TestCase):
 
     def test_define_constant_supports_two_letter_columns(self) -> None:
@@ -280,6 +337,16 @@ class BuilderTests(unittest.TestCase):
             self.assertEqual(B._print_report([ok]), 0)
             self.assertEqual(B._print_report([ok, pending]), 3)
             self.assertEqual(B._print_report([ok, pending, fail]), 1)
+
+    def test_warning_never_changes_the_exit_code(self) -> None:
+        ok = B.Finding("F1", True, "")
+        warn = B.Finding("F10", False, "", warning=True)
+        pending = B.Finding("F19", False, "", pending=True)
+        fail = B.Finding("F2", False, "")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(B._print_report([ok, warn]), 0)
+            self.assertEqual(B._print_report([warn, pending]), 3)
+            self.assertEqual(B._print_report([warn, fail]), 1)
 
 
 if __name__ == "__main__":
