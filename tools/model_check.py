@@ -662,6 +662,166 @@ def materiality_pct_from_profile(path: Path | None) -> tuple[float, str]:
     return DEFAULT_CAPTURE_MATERIALITY_PCT, "default"
 
 
+@dataclass
+class _UnbackedRow:
+    """Fila con cifras historicas que la capa de captura no respalda."""
+
+    label: str
+    reason: str
+    cells: int = 0
+    material: int = 0
+    unmeasurable: bool = False
+
+    def describe(self, where: str) -> str:
+        note = "; sin referencia de materialidad" if self.unmeasurable else ""
+        return f"{where} ({self.label}): {self.cells} cifras {self.reason}{note}"
+
+
+@dataclass
+class _CaptureScan:
+    """Acumulado del escaneo de C9 sobre todas las hojas de periodo."""
+
+    figures: int = 0
+    matched: int = 0
+    matched_rows: int = 0
+    mismatches: list[str] = field(default_factory=list)
+    unbacked: dict[str, _UnbackedRow] = field(default_factory=dict)
+
+
+def _period_key(period: PeriodColumn) -> str:
+    """Llave de periodo del CSV canonico: '3Q2016' o 'FY2016'."""
+    if period.quarter is not None:
+        return f"{period.quarter}Q{period.year}"
+    return f"FY{period.year}"
+
+
+def _matches(value: float, scale: float, captured: float) -> bool:
+    """valor_xlsx * scale = valor_csv, salvo error de punto flotante."""
+    if captured == 0:
+        return abs(value * scale) <= 1e-9 * scale
+    return abs(value * scale - captured) <= MATCH_RELATIVE_TOLERANCE * abs(captured)
+
+
+def _materiality_threshold(captured: dict[tuple[str, str], float], period: str,
+                           materiality_pct: float) -> float | None:
+    """X% de la MENOR entre ventas y activos totales del periodo, leidas del
+    CSV (no del libro: asi C9 no depende de que este recalculado). None si
+    falta cualquiera de las dos: la cifra no se puede medir."""
+    sales, assets = (captured.get((line, period)) for line in B.CAPTURE_REFERENCE_LINES)
+    if sales is None or assets is None:
+        return None
+    return materiality_pct / 100 * min(abs(sales), abs(assets))
+
+
+def _money_scale(links: dict[int, CaptureLink]) -> float | None:
+    """Escala monetaria de la hoja: la del vinculo de ventas (o activos).
+    Una fila sin vinculo no tiene escala propia y hereda esta."""
+    by_line = {link.line_item: link.scale for link in links.values()}
+    for line in B.CAPTURE_REFERENCE_LINES:
+        if line in by_line:
+            return by_line[line]
+    return None
+
+
+def _scan_capture_sheet(ws: Worksheet, book: Book, folder: Path,
+                        materiality_pct: float, scan: _CaptureScan) -> None:
+    axis = [period for period in _period_axis(ws) if period.actual]
+    if not axis:
+        return
+    source = folder / CAPTURE_FILES[any(period.quarter is not None for period in axis)]
+    captured = load_capture(source) if source.is_file() else {}
+    links = capture_links(ws)
+    money = _money_scale(links)
+    assumptions = _section_rows(ws, ASSUMPTIONS_TITLE) if ws is book.core_sheet else None
+    header_row = max(period.row for period in axis)
+    for r in range(header_row + 1, min(ws.max_row, B._MAX_SCAN_ROWS) + 1):
+        if assumptions and assumptions[0] <= r <= assumptions[1]:
+            continue  # Assumptions: supuestos del analista, no historico de filing
+        link = links.get(r)
+        row_matched = False
+        for period in axis:
+            cell = ws.cell(row=r, column=period.column)
+            value = cell.value
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue  # vacia, texto o formula: no es una cifra tecleada
+            scan.figures += 1
+            key = _period_key(period)
+            backing = captured.get((link.line_item, key)) if link is not None else None
+            if link is not None and backing is not None:
+                if _matches(value, link.scale, backing):
+                    scan.matched += 1
+                    row_matched = True
+                else:
+                    scan.mismatches.append(
+                        f"{ws.title}!{cell.coordinate} ({link.line_item} {key}): "
+                        f"libro {value * link.scale:,.2f} vs captura {backing:,.2f}")
+                continue
+            where = f"{ws.title}!fila {r}"
+            entry = scan.unbacked.get(where)
+            if entry is None:
+                label = str(ws.cell(row=r, column=2).value or "").strip()[:30]
+                reason = ("sin vinculo" if link is None else
+                          f"de {link.line_item} sin periodo en la captura (desde {key})")
+                entry = scan.unbacked[where] = _UnbackedRow(label, reason)
+            entry.cells += 1
+            threshold = _materiality_threshold(captured, key, materiality_pct)
+            scale = link.scale if link is not None else money
+            if threshold is None or scale is None:
+                entry.unmeasurable = True
+                entry.material += 1
+            elif abs(value) * scale > threshold:
+                entry.material += 1
+        if row_matched:
+            scan.matched_rows += 1
+
+
+def audit_capture(path: str, inputs_dir: str | None = None,
+                  materiality_pct: float = DEFAULT_CAPTURE_MATERIALITY_PCT,
+                  external: bool = False, threshold_source: str = "default") -> list[Finding]:
+    """C9: toda cifra historica tecleada del modelo coincide con la capa de
+    captura (model/inputs/canonical_*.csv). Lectura pura.
+
+    Divergencia en una fila vinculada = falla siempre. Cifra sin respaldo
+    (fila sin vinculo, o periodo ausente en el CSV) = falla si es material,
+    [aviso] si no. ``external``: modelo que no construyo el plugin; sin capa
+    de captura el check no aplica.
+    """
+    name = "C9 historico = capa de captura"
+    folder = Path(inputs_dir) if inputs_dir else Path(path).parent / "inputs"
+    if not folder.is_dir():
+        if external:
+            return [Finding(name, True, "n/a (modelo externo sin capa de captura)")]
+        return [Finding(name, False,
+                        f"sin capa de captura: no existe {folder} (usa --inputs)")]
+    book = load_book(path)
+    scan = _CaptureScan()
+    try:
+        for ws in book.formulas.worksheets:
+            if ws.title in PERIOD_GRID_SHEETS:
+                _scan_capture_sheet(ws, book, folder, materiality_pct, scan)
+    except CaptureError as exc:
+        return [Finding(name, False, str(exc))]
+    rule = f"umbral {materiality_pct:g}% de min(ventas, activos), {threshold_source}"
+    material = [row.describe(where) for where, row in scan.unbacked.items() if row.material]
+    minor = [row.describe(where) for where, row in scan.unbacked.items() if not row.material]
+    if scan.mismatches or material:
+        parts: list[str] = []
+        if scan.mismatches:
+            parts.append("DIVERGENCIAS: " + _examples(scan.mismatches))
+        if material:
+            parts.append("SIN RESPALDO sobre el umbral: " + _examples(material))
+        return [Finding(name, False, "; ".join(parts) + f" ({rule})")]
+    if minor:
+        return [Finding(name, False,
+                        f"{len(minor)} filas con cifras sin respaldo bajo el umbral ({rule}): "
+                        + _examples(minor), warning=True)]
+    if not scan.figures:
+        return [Finding(name, True, "n/a (sin cifras historicas tecleadas)")]
+    return [Finding(name, True,
+                    f"{scan.matched} cifras en {scan.matched_rows} filas coinciden "
+                    f"con la captura ({rule})")]
+
+
 # ---------------------------------------------------------------------------
 # Reporte y CLI
 # ---------------------------------------------------------------------------

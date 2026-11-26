@@ -15,6 +15,7 @@ import io
 import sys
 import tempfile
 import unittest
+from copy import copy
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +32,19 @@ import xlsx_builder as B  # noqa: E402
 VERSIONED = "demo_2026-01-01_v1.xlsx"
 # Celda de forecast de "Ventas" en el demo (fila 12, primer trimestre E = col K).
 FORECAST_CELL = "L12"
+CAPTURE_COLUMNS = ("line_item", "period", "value", "source_doc", "source_ref", "tag")
+
+
+def _unlinked_row(value: float) -> Callable[[Workbook], None]:
+    """Mutacion: una fila sin vinculo con una cifra historica tecleada (1Q2023).
+    Copia la fuente de una celda del demo para no disparar F2."""
+    def mutate(wb: Workbook) -> None:
+        ws = wb["Operating"]
+        ws["B200"] = "Otros activos"
+        ws["B200"].font = copy(ws["B12"].font)
+        ws["C200"] = value
+        ws["C200"].font = copy(ws["C12"].font)
+    return mutate
 
 
 class _DemoCase(unittest.TestCase):
@@ -49,6 +63,15 @@ class _DemoCase(unittest.TestCase):
         mutate(wb)
         out = self.dir / "roto" / name
         out.parent.mkdir(exist_ok=True)
+        wb.save(out)
+        return str(out)
+
+    def _beside_demo(self, mutate: Callable[[Workbook], None] | None = None) -> str:
+        """Guarda el demo (mutado) JUNTO al original: comparte su inputs/."""
+        wb = load_workbook(self.demo)
+        if mutate is not None:
+            mutate(wb)
+        out = self.dir / "caso_2026-01-02_v1.xlsx"
         wb.save(out)
         return str(out)
 
@@ -345,6 +368,127 @@ class CaptureLayerTests(unittest.TestCase):
         ws = styler.new_sheet("Model")
         styler.period_header(ws, 3, 3, B.PeriodHeader(2020, 2025, 2022))
         self.assertEqual({period.row for period in M._period_axis(ws)}, {3})
+
+
+class CaptureCheckTests(_DemoCase):
+    """C9 en los dos sentidos: el demo lo pasa, cada libro roto lo falla."""
+
+    def _c9(self, mutate: Callable[[Workbook], None] | None = None,
+            **kwargs: object) -> B.Finding:
+        (finding,) = M.audit_capture(self._beside_demo(mutate), **kwargs)  # type: ignore[arg-type]
+        return finding
+
+    def _rewrite_capture(self, transform: Callable[[list[dict[str, str]]],
+                                                   list[dict[str, str]]]) -> None:
+        path = self.dir / "inputs" / "canonical_quarterly.csv"
+        with path.open(encoding="utf-8", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CAPTURE_COLUMNS)
+            writer.writeheader()
+            writer.writerows(transform(rows))
+
+    @staticmethod
+    def _is(row: dict[str, str], line_item: str, period: str | None = None) -> bool:
+        return row["line_item"] == line_item and period in (None, row["period"])
+
+    def test_demo_matches_its_capture_layer(self) -> None:
+        finding = self._c9()
+        self.assertTrue(finding.ok, finding.detail)
+        self.assertFalse(finding.warning)
+        self.assertIn("128 cifras en 16 filas coinciden", finding.detail)
+        self.assertIn("umbral 0.5%", finding.detail)
+
+    def test_linked_figure_that_differs_from_the_capture_always_fails(self) -> None:
+        def mutate(wb: Workbook) -> None:
+            wb["Operating"]["D12"] = 999
+        # Ni un umbral del 100% perdona una divergencia.
+        finding = self._c9(mutate, materiality_pct=100.0)
+        self.assertTrue(finding.blocking)
+        self.assertIn("DIVERGENCIAS", finding.detail)
+        self.assertIn("Operating!D12 (is_ns_total 2Q2023)", finding.detail)
+
+    def test_material_figure_without_a_link_fails(self) -> None:
+        finding = self._c9(_unlinked_row(50))
+        self.assertTrue(finding.blocking)
+        self.assertIn("SIN RESPALDO sobre el umbral", finding.detail)
+        self.assertIn("Operating!fila 200 (Otros activos): 1 cifras sin vinculo", finding.detail)
+
+    def test_immaterial_figure_without_a_link_is_a_warning(self) -> None:
+        finding = self._c9(_unlinked_row(0.2))
+        self.assertFalse(finding.ok)
+        self.assertTrue(finding.warning)
+        self.assertFalse(finding.blocking)
+        self.assertIn("bajo el umbral", finding.detail)
+        self.assertIn("Operating!fila 200", finding.detail)
+
+    def test_threshold_decides_between_failure_and_warning(self) -> None:
+        self.assertTrue(self._c9(_unlinked_row(50)).blocking)                       # 50 > 0.5
+        self.assertTrue(self._c9(_unlinked_row(50), materiality_pct=60.0).warning)  # 50 <= 60
+
+    def test_linked_row_missing_a_period_in_the_capture_fails(self) -> None:
+        self._rewrite_capture(lambda rows: [r for r in rows if not self._is(r, "bs_ar", "3Q2023")])
+        finding = self._c9()
+        self.assertTrue(finding.blocking)
+        self.assertIn("Operating!fila 24", finding.detail)
+        self.assertIn("bs_ar sin periodo en la captura (desde 3Q2023)", finding.detail)
+
+    def test_guidance_row_does_not_back_a_historical_figure(self) -> None:
+        def retag(tag: str) -> Callable[[list[dict[str, str]]], list[dict[str, str]]]:
+            return lambda rows: [dict(r, tag=tag) if self._is(r, "bs_ar", "3Q2023") else r
+                                 for r in rows]
+        self._rewrite_capture(retag("guidance"))
+        self.assertTrue(self._c9().blocking)
+        self._rewrite_capture(retag("derivado"))
+        self.assertTrue(self._c9().ok)
+
+    def test_scale_converts_model_units_to_source_units(self) -> None:
+        def rescale(wb: Workbook) -> None:
+            wb["Operating"].defined_names["CAPTURE.bs_cash"].comment = "scale=1000.0"
+        # Solo cambia la escala del vinculo: el libro ya no coincide con el CSV.
+        self.assertIn("DIVERGENCIAS", self._c9(rescale).detail)
+        # El CSV pasa a la unidad de la fuente (x1000): vuelve a coincidir.
+        self._rewrite_capture(lambda rows: [
+            dict(r, value=str(float(r["value"]) * 1000)) if self._is(r, "bs_cash") else r
+            for r in rows])
+        self.assertTrue(self._c9(rescale).ok)
+
+    def test_unbacked_figure_without_materiality_reference_fails(self) -> None:
+        self._rewrite_capture(lambda rows: [r for r in rows if not self._is(r, "bs_ta")])
+        finding = self._c9(materiality_pct=100.0)
+        self.assertTrue(finding.blocking)
+        self.assertIn("Operating!fila 27", finding.detail)
+        self.assertIn("sin referencia de materialidad", finding.detail)
+
+    def test_assumptions_section_is_out_of_scope(self) -> None:
+        def rename_section(wb: Workbook) -> None:
+            wb["Operating"]["B5"] = "Supuestos"
+        # Sin la banda "Assumptions", sus constantes tecleadas (365 dias) cuentan.
+        finding = self._c9(rename_section)
+        self.assertTrue(finding.blocking)
+        self.assertIn("Operating!fila 7", finding.detail)
+
+    def test_missing_capture_folder_fails_unless_the_model_is_external(self) -> None:
+        elsewhere = self._mutated(lambda wb: None)       # roto/ no tiene inputs/
+        (strict,) = M.audit_capture(elsewhere)
+        self.assertTrue(strict.blocking)
+        self.assertIn("sin capa de captura", strict.detail)
+        (external,) = M.audit_capture(elsewhere, external=True)
+        self.assertTrue(external.ok)
+        self.assertIn("n/a", external.detail)
+        (pointed,) = M.audit_capture(elsewhere, inputs_dir=str(self.dir / "inputs"))
+        self.assertTrue(pointed.ok, pointed.detail)
+
+    def test_unreadable_capture_is_reported_as_a_failure_not_a_traceback(self) -> None:
+        capture = self.dir / "inputs" / "canonical_quarterly.csv"
+        capture.write_text("line_item,period,value\nbs_ap,1Q2023,20\n", encoding="utf-8")
+        finding = self._c9()
+        self.assertTrue(finding.blocking)
+        self.assertIn("faltan columnas tag", finding.detail)
+
+    def test_detail_is_ascii(self) -> None:
+        for finding in (self._c9(), self._c9(_unlinked_row(50)), self._c9(_unlinked_row(0.2))):
+            self.assertTrue(finding.detail.isascii(), finding.detail)
 
 
 class DriverMapTests(unittest.TestCase):
