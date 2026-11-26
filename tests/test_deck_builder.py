@@ -171,6 +171,18 @@ class NumTests(unittest.TestCase):
         self.assertEqual(D.render_markers(f'<p title="vale {n:.0f}">x</p>'),
                          '<p title="vale 7">x</p>')
 
+    def test_str_is_readable_ascii_and_the_fstring_still_binds(self) -> None:
+        n = D.Num(240.0, "Annual!H6")
+        self.assertEqual(str(n), "240.0 [Annual!H6]")
+        str(D.Num(1.0, "'A\u00f1o'!C5")).encode("cp1252")          # no revienta
+        self.assertTrue(str(D.Num(1.0, "'Hoja \u4e2d'!C5")).isascii())
+        self.assertEqual(str(D.Num(1e16, "Annual!H6")), "10000000000000000 [Annual!H6]")
+        self.assertEqual(str(D.Num(1e-7, "Annual!H6")), "0.0000001 [Annual!H6]")
+        for text in (f"{n}", f"{n:,.0f}", "{}".format(n), format(n, "")):
+            self.assertIn('data-src="Annual!H6"', D.render_markers(f"<p>{text}</p>"))
+        self.assertEqual(repr(n), "Num(value=240.0, src='Annual!H6')")
+        self.assertTrue(repr(D.Num(1.0, "'\u0394 WC'!C5")).isascii())
+
     def test_lit_needs_a_reason_and_is_marked(self) -> None:
         with self.assertRaises(D.DeckError):
             D.lit("4", why=" ")
@@ -526,6 +538,16 @@ class DeckTests(_Case):
         self.assertIn("lamina 3: '38%'", str(caught.exception))
         self.assertFalse(deck.output_path.exists())
 
+    def test_a_number_passed_through_str_is_not_bound_and_blocks(self) -> None:
+        for value in (240.0, 1e16, 1e-7, 2027.0):
+            for show in (str, repr):
+                deck = self.deck()
+                deck.raw(f"<p>Ventas de {show(D.Num(value, 'Annual!H6'))}.</p>",
+                         source="Fuente: propia.")
+                with self.subTest(value=value, show=show.__name__), \
+                        self.assertRaisesRegex(D.DeckError, "sin origen"):
+                    deck.build()
+
     def test_loose_number_inside_custom_svg_blocks_too(self) -> None:
         deck = self.deck()
         deck.raw("<svg viewBox='0 0 10 10'><text>72.5</text></svg>", source="Fuente: propia.")
@@ -626,6 +648,63 @@ class ChartTests(_Case):
         doc = self._bound(deck, deck.football([("Un solo punto", value, value, value)],
                                               fmt=",.1f"))
         self.assertEqual([n.text for n in doc.numbers], ["120.5"])
+
+    def _football_rows(self, deck: D.Deck) -> list[tuple[str, D.Num, D.Num, D.Num]]:
+        low, high = deck.cell("DCF", "Bajo"), deck.cell("DCF", "Alto")
+        mid = deck.cell("DCF", "Valor por accion")
+        return [("Flujos", low, high, mid), ("Multiplos", low, mid, low)]
+
+    def test_football_spreads_its_rows_over_the_height(self) -> None:
+        deck = self.deck()
+        rows = self._football_rows(deck)
+
+        def centers(svg: str) -> list[float]:
+            return [float(v) for v in re.findall(r'<circle cx="[0-9.]+" cy="([0-9.]+)"', svg)]
+
+        def bar_heights(svg: str) -> list[float]:
+            return [float(v) for v in re.findall(r'height="([0-9.]+)" fill=', svg)]
+
+        default = deck.football(rows)
+        self.assertIn('viewBox="0 0 1100 180"', default)
+        self.assertEqual(centers(default), [56.0, 116.0])
+        self.assertEqual(bar_heights(default), [24.0, 24.0])
+        tall = deck.football(rows, h=420)
+        self.assertIn('viewBox="0 0 1100 420"', tall)
+        self.assertEqual(centers(tall), [116.0, 296.0])     # paso de 180: (420 - 60) / 2
+        self.assertTrue(all(height > 24.0 for height in bar_heights(tall)))
+        self._bound(deck, tall)
+
+    def test_football_rejects_a_height_that_does_not_fit_its_rows(self) -> None:
+        deck = self.deck()
+        with self.assertRaisesRegex(D.DeckError, r"football: h=100 .* 2 fila\(s\); minimo 168"):
+            deck.football(self._football_rows(deck), h=100)
+        # En el minimo, la etiqueta del primer punto no toca el rotulo del marcador.
+        value = deck.cell("DCF", "Valor por accion")
+        svg = deck.football([("Uno", value, value, value)], marker=("Precio", value), h=114)
+        label_y = float(re.search(r'<text class="val" x="[0-9.]+" y="([0-9.]+)" '
+                                  r'text-anchor="middle">(?!Precio)', svg).group(1))
+        marker_y = float(re.search(r'y="([0-9.]+)" text-anchor="middle">Precio', svg).group(1))
+        self.assertGreaterEqual(label_y - marker_y, 16.0)
+
+    def test_table_text_columns_are_not_right_aligned(self) -> None:
+        deck = self.deck()
+        wacc = deck.cell("DCF", "WACC")
+        table = deck.table(["Concepto", "Unidad", "Valor", "Lectura"],
+                           [["Tasa de descuento", "tasa anual", f"{wacc:.1%}", "Sin cambio"],
+                            ["Condiciones", "conteo", D.lit("3", why="condiciones"), "n/a"]])
+        self.assertIn('<th class="t">Unidad</th>', table)
+        self.assertIn('<td class="t">tasa anual</td>', table)
+        self.assertIn('<td class="t">Sin cambio</td>', table)
+        self.assertIn("<th>Valor</th>", table)             # columna de cifras: a la derecha
+        self.assertIn("<th>Concepto</th>", table)          # la primera ya va a la izquierda
+        deck.slide(title="Titulo", lede="", visual=table, note="Nota.", source="Fuente: x.")
+        css = deck.render().split("<style>", 1)[1].split("</style>", 1)[0]
+        self.assertIn("table.grid th.t,table.grid td.t{text-align:left}", css)
+
+    def test_table_accepts_rows_from_an_iterator(self) -> None:
+        deck = self.deck()
+        table = deck.table(["Concepto", "Valor"], zip(["Uno", "Dos"], ["a", "b"]))
+        self.assertEqual(table.count("<td"), 4)
 
     def test_forecast_tag_sits_above_the_plot_clear_of_value_labels(self) -> None:
         import re
@@ -776,25 +855,314 @@ class AuditTests(_Case):
     def test_claims_list_every_sentence_in_order(self) -> None:
         doc = D.read_deck(self._built().read_text(encoding="utf-8"))
         self.assertEqual(D.claims(doc), [
-            (1, "Emisora X"),
-            (2, "Ventas crecen +14.3% en 2027"),
-            (2, "Menos que antes."),
-            (2, "Sigue creciendo."),
-            (2, "Participa con 31.5% del mercado."),
+            (1, "texto", "Emisora X"),
+            (2, "texto", "Ventas crecen +14.3% en 2027"),
+            (2, "texto", "Menos que antes."),
+            (2, "texto", "Sigue creciendo."),
+            (2, "texto", "Participa con 31.5% del mercado."),
         ])
-        self.assertIn("| 2 | Sigue creciendo. |  |", D.claims_table(doc))
+        table = D.claims_table(doc)
+        self.assertIn("| L\u00e1mina | D\u00f3nde | Frase | Evidencia |", table)
+        self.assertIn("| 2 | texto | Sigue creciendo. |  |", table)
+
+    def _rich(self) -> Path:
+        deck = self.deck()
+        rev, ni = deck.series("Annual", "Ingresos"), deck.series("Annual", "Utilidad neta")
+        wacc = deck.cell("DCF", "WACC")
+        deck.cover("Emisora X", figures=[("Ventas del periodo", f"{rev[2024]:,.0f}")])
+        deck.slide(title="Margen estable", lede="", note="Nota de la lamina.",
+                   source="Fuente: modelo.",
+                   visual=deck.lines([("Margen neto", ni.over(rev))], show=(2027,), fmt=".1%")
+                   + deck.football([("Flujos", deck.cell("DCF", "Bajo"), deck.cell("DCF", "Alto"),
+                                     deck.cell("DCF", "Valor por accion"))],
+                                   marker=("Precio", deck.cell("DCF", "Precio")))
+                   + deck.table(["Concepto", "Valor"],
+                                [["Tasa de descuento", f"{wacc:.1%}"],
+                                 ["Ventas", f"{rev[2027]:,.0f} mm"]]))
+        deck.raw("<div>Texto en un div.</div><svg viewBox='0 0 10 10'>"
+                 "<text>Etapa uno</text></svg>", source="Fuente: propia.")
+        return deck.build()
+
+    def test_claims_include_tables_cover_labels_and_chart_text_with_their_origin(self) -> None:
+        listed = D.claims(D.read_deck(self._rich().read_text(encoding="utf-8")))
+        for expected in ((1, "portada", "150 Ventas del periodo"),
+                         (2, "gr\u00e1fica", "Margen neto"),
+                         (2, "gr\u00e1fica", "Flujos"),
+                         (2, "gr\u00e1fica", "Precio 110"),
+                         (2, "tabla", "Concepto"), (2, "tabla", "Valor"),
+                         (2, "tabla", "Tasa de descuento"), (2, "tabla", "240 mm"),
+                         (2, "texto", "Nota de la lamina."),
+                         (3, "texto", "Texto en un div."),
+                         (3, "gr\u00e1fica", "Etapa uno")):
+            self.assertIn(expected, listed)
+        texts = [text for _, _, text in listed]
+        for absent in ("9.0%", "Proyectado", "Nota", "15.0%", "120", "2027"):
+            self.assertNotIn(absent, texts)
+        # En orden de lectura: la portada antes que la lamina de contenido.
+        self.assertEqual([slide for slide, _, _ in listed], sorted(s for s, _, _ in listed))
+
+    def _report(self, path: Path) -> tuple[Path, tuple[int, int, int]]:
+        findings, doc, facts = D.audit_deck(path, self.root / MODEL_REL, self.root / FACTS_REL)
+        report = self.root / "research" / "notes" / f"x-deck-verify_{AS_OF}.md"
+        return report, D.write_report(report, path, [("Cifras", findings)], doc, facts,
+                                      model=self.root / MODEL_REL)
+
+    def _carry(self, deck: Path, *rows: str) -> tuple[str, int, int, int]:
+        previous = ("| L\u00e1mina | D\u00f3nde | Frase | Evidencia |\n|---|---|---|---|\n"
+                    + "".join(row + "\n" for row in rows))
+        return D.claims_with_evidence(D.read_deck(deck.read_text(encoding="utf-8")), previous)
+
+    def test_evidence_follows_the_same_claim_not_the_same_words(self) -> None:
+        deck = self._rich()
+        # Mismas palabras en otro lugar (rotulo de grafica contra encabezado de tabla).
+        table, kept, lost, _ = self._carry(deck, "| 2 | gr\u00e1fica | Concepto | de la grafica |")
+        self.assertEqual((kept, lost), (0, 1))
+        self.assertIn("| 2 | tabla | Concepto |  |", table)
+        # La lamina cambio de numero y la frase es unica: es la misma afirmacion.
+        table, kept, lost, _ = self._carry(deck, "| 7 | tabla | Tasa de descuento | DCF C5 |")
+        self.assertEqual((kept, lost), (1, 0))
+        self.assertIn("| 2 | tabla | Tasa de descuento | DCF C5 |", table)
+
+    def test_repeated_claims_keep_evidence_only_on_their_own_slide(self) -> None:
+        deck = self.deck()
+        for title in ("Primera", "Segunda"):
+            deck.slide(title=title, lede="", note="Nota.", source="Fuente: x.",
+                       visual=deck.table(["Concepto", "Valor"], [["Fila", "celda"]]))
+        path = deck.build()
+        table, kept, lost, _ = self._carry(path, "| 1 | tabla | Valor | de la primera |",
+                                           "| 2 | tabla | Valor | de la segunda |")
+        self.assertEqual((kept, lost), (2, 0))
+        self.assertIn("| 1 | tabla | Valor | de la primera |", table)
+        self.assertIn("| 2 | tabla | Valor | de la segunda |", table)
+        # Renumeradas y repetidas: no se sabe cual es cual, no se adivina.
+        table, kept, lost, _ = self._carry(path, "| 5 | tabla | Valor | de la primera |",
+                                           "| 6 | tabla | Valor | de la segunda |")
+        self.assertEqual((kept, lost), (0, 2))
+        self.assertNotIn("de la primera", table)
+
+    def test_evidence_text_survives_pipes_backslashes_and_odd_rows(self) -> None:
+        deck = self._built()
+        table, kept, lost, _ = self._carry(
+            deck, "| 2 | texto | Menos que antes. | serie a | b, sin escapar |",
+            "| 2 | texto | Sigue creciendo. | ver C:\\modelos\\|",
+            "| 1 | texto | -- | evidencia de una frase rara |")
+        self.assertEqual((kept, lost), (2, 1))
+        self.assertIn("| 2 | texto | Menos que antes. | serie a | b, sin escapar |", table)
+        self.assertIn("| 2 | texto | Sigue creciendo. | ver C:\\modelos\\| |", table)
+
+    def test_evidence_written_against_another_model_is_marked_for_review(self) -> None:
+        path = self._built()
+        report, _ = self._report(path)
+        text = report.read_text(encoding="utf-8")
+        self.assertRegex(text, r"Evidencia cotejada contra: modelo `[0-9a-f]{12}`, "
+                               r"hechos `[0-9a-f]{12}`\.")
+        row = "| 2 | texto | Menos que antes. |  |"
+        report.write_text(text.replace(row, row[:-3] + " crecimiento menor al observado |"),
+                          encoding="utf-8")
+        self.assertEqual(self._report(path)[1], (1, 0, 0))      # mismo modelo: sin marca
+        wb = load_workbook(self.root / MODEL_REL)
+        wb["Annual"]["C7"] = 11.0          # una celda que el deck no muestra
+        wb.save(self.root / MODEL_REL)
+        report, counts = self._report(path)
+        self.assertEqual(counts, (1, 0, 1))                     # conservada, pero marcada
+        marked = "| 2 | texto | Menos que antes. | [revisar] crecimiento menor al observado |"
+        self.assertIn(marked, report.read_text(encoding="utf-8"))
+        self.assertEqual(self._report(path)[1], (1, 0, 0))      # no se marca dos veces
+        self.assertIn(marked, report.read_text(encoding="utf-8"))
+        self.assertNotIn("[revisar] [revisar]", report.read_text(encoding="utf-8"))
+
+    def test_report_keeps_the_evidence_of_sentences_that_did_not_change(self) -> None:
+        report, counts = self._report(self._built())
+        self.assertEqual(counts, (0, 0, 0))
+        text = report.read_text(encoding="utf-8")
+        for sentence, evidence in (("Sigue creciendo.", "Annual!H6 > Annual!G6"),
+                                   ("Menos que antes.", "crecimiento 2024 \\| 2027"),
+                                   ("Participa con 31.5% del mercado.", "reporte, p. 1")):
+            row = f"| 2 | texto | {sentence} |  |"
+            self.assertIn(row, text)
+            text = text.replace(row, f"| 2 | texto | {sentence} | {evidence} |")
+        report.write_text(text, encoding="utf-8")
+        # Misma lamina, otra entradilla: una frase cambia, las demas no.
+        deck = self.deck()
+        rev = deck.series("Annual", "Ingresos")
+        deck.cover("Emisora X")
+        deck.slide(title=f"Ventas crecen {rev.growth()[2027]:+.1%} en 2027",
+                   lede="Menos que en el tramo observado. Sigue creciendo.",
+                   visual=deck.bars(rev, show=(2027,)),
+                   note=f"Participa con {deck.fact('share'):.1f}% del mercado.",
+                   source="Fuente: modelo y reporte de industria.")
+        report, counts = self._report(deck.build())
+        self.assertEqual(counts, (2, 1, 0))     # conservadas, perdidas, marcadas
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("| 2 | texto | Sigue creciendo. | Annual!H6 > Annual!G6 |", text)
+        self.assertIn("| 2 | texto | Participa con 31.5% del mercado. | reporte, p. 1 |", text)
+        self.assertIn("| 2 | texto | Menos que en el tramo observado. |  |", text)
+        self.assertNotIn("crecimiento 2024", text)
+
+    def test_evidence_is_read_from_a_report_of_the_previous_format(self) -> None:
+        path = self._built()
+        report, _ = self._report(path)
+        text = report.read_text(encoding="utf-8")
+        head, _, _ = text.partition("## Afirmaciones")
+        report.write_text(head + "## Afirmaciones\n\n| L\u00e1mina | Frase | Evidencia |\n"
+                          "|---|---|---|\n| 2 | Sigue creciendo. | celda H6 |\n",
+                          encoding="utf-8")
+        report, counts = self._report(path)
+        # Sin huella del modelo en el reporte viejo: se conserva, marcada para revisar.
+        self.assertEqual(counts, (1, 0, 1))
+        self.assertIn("| 2 | texto | Sigue creciendo. | [revisar] celda H6 |",
+                      report.read_text(encoding="utf-8"))
+
+    def test_space_section_is_added_and_replaced_without_touching_the_rest(self) -> None:
+        path = self._built()
+        report, _ = self._report(path)
+        before = report.read_text(encoding="utf-8")
+        D.write_space_section(report, path, D.measure_findings([_slide(2, 40.0)], 90))
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("## Espacio", text)
+        self.assertIn("| [ok] | P6 sin lamina vacia | 1 laminas medidas, umbral 90 px |", text)
+        self.assertLess(text.index("## Espacio"), text.index("## Cifras y su origen"))
+        self.assertLess(text.index("## Cifras\n"), text.index("## Espacio"))
+        start = text.index("## Espacio")
+        self.assertEqual(text[:start] + text[text.index("## Cifras y su origen"):], before)
+        D.write_space_section(report, path, D.measure_findings([_slide(2, 140.0)], 90))
+        text = report.read_text(encoding="utf-8")
+        self.assertEqual(text.count("## Espacio"), 1)
+        self.assertIn("| [x] | P6 sin lamina vacia |", text)
+        self.assertNotIn("| [ok] | P6", text)
+        self.assertEqual(text[:text.index("## Espacio")]
+                         + text[text.index("## Cifras y su origen"):], before)
+
+    def test_space_section_creates_the_report_when_there_is_none(self) -> None:
+        path = self._built()
+        report = self.root / "research" / "notes" / "nuevo.md"
+        D.write_space_section(report, path, D.measure_findings([_slide(2, 40.0)], 90))
+        text = report.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("# Verificaci\u00f3n del deck"))
+        self.assertIn("| [ok] | P5 sin contenido encimado |", text)
+
+    def test_audit_report_keeps_the_space_section_only_for_the_deck_it_measured(self) -> None:
+        path = self._built()
+        report, _ = self._report(path)
+        D.write_space_section(report, path, D.measure_findings([_slide(2, 40.0)], 90))
+        report, _ = self._report(path)             # mismo deck: la medicion sigue valiendo
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("| [ok] | P6 sin lamina vacia |", text)
+        self.assertEqual(text.count("## Espacio"), 1)
+        report, _ = self._report(self._built(extra=" Otra frase."))   # el deck cambio
+        text = report.read_text(encoding="utf-8")
+        self.assertEqual(text.count("## Espacio"), 1)
+        self.assertNotIn("| [ok] | P6", text)
+        self.assertIn("| [pendiente] | P5-P8 medicion de espacio |", text)
+        self.assertIn("measure --report", text)
 
     def test_report_holds_the_deterministic_sections(self) -> None:
         path = self._built()
         findings, doc, facts = D.audit_deck(path, self.root / MODEL_REL, self.root / FACTS_REL)
         report = self.root / "research" / "notes" / f"x-deck-verify_{AS_OF}.md"
-        D.write_report(report, path, [("Cifras", findings)], doc, facts)
+        D.write_report(report, path, [("Cifras", findings)], doc, facts,
+                       model=self.root / MODEL_REL)
         text = report.read_text(encoding="utf-8")
         for expected in ("| [ok] | P1 cifras iguales a su origen |",
                          "| 2 | +14.3% | `((Annual!H6/Annual!G6)-1)` | `+.1%` |",
                          "| share | 31.5 % | observado |", "## Afirmaciones",
-                         "| 2 | Participa con 31.5% del mercado. |  |"):
+                         "| 2 | texto | Participa con 31.5% del mercado. |  |"):
             self.assertIn(expected, text)
+
+
+class LabelsTests(_Case):
+
+    def test_labels_list_rows_bands_numeric_span_and_axis(self) -> None:
+        text = D.labels_report(D.ModelBook(self.root / MODEL_REL))
+        self.assertTrue(text.startswith(f"# Etiquetas del modelo \u2014 x-model_{AS_OF}_v1.xlsx"))
+        annual, dcf = text.split("## Annual", 1)[1].split("## DCF", 1)
+        self.assertIn("Periodos (6): `2022` a `2027`, columnas C a H; proyectado desde `2025`.",
+                      annual)
+        for row in ("| 6 | Ingresos |  | 6 | C a H |  |",
+                    "| 9 | Balance | secci\u00f3n | 0 |  |  |",
+                    "| 10 | Total |  | 6 | C a H | repetida: usa `section=` |",
+                    "| 13 | Total |  | 6 | C a H | repetida: usa `section=` |",
+                    "| 15 | Sin calcular |  | 0 |  | 1 f\u00f3rmula(s) sin valor: recalcula |",
+                    "| 16 | Parcial |  | 3 | C a E |  |"):
+            self.assertIn(row, annual)
+        self.assertIn("Sin encabezado de periodos", dcf)
+        self.assertIn("| 5 | WACC |  | 1 | C |  |", dcf)
+        self.assertIn("| 7 | Dos |  | 2 | C a D |  |", dcf)
+        self.assertIn("| 8 | Texto |  | 0 |  |  |", dcf)
+
+    def test_label_with_a_line_break_and_repeats_that_section_cannot_split(self) -> None:
+        model = self.root / MODEL_REL
+        wb = load_workbook(model)
+        ws = wb["Annual"]
+        ws["B18"], ws["C18"] = "Deuda\nneta", 5.0
+        ws["B19"], ws["B20"] = "Doble", "Doble"         # las dos en la seccion Otros
+        ws["B5"] = "Total"                              # antes de cualquier banda
+        wb.save(model)
+        book = D.ModelBook(model)
+        text = D.labels_report(book)
+        self.assertIn("| 18 | Deuda\\nneta |  | 1 | C | salto de l\u00ednea: "
+                      "escr\u00edbelo `\\n` |", text)
+        self.assertEqual(book.cell("Annual", "Deuda\nneta").value, 5.0)
+        self.assertIn("| 19 | Doble |  | 0 |  | repetida en su secci\u00f3n: usa `deck.range` |",
+                      text)
+        self.assertIn("| 5 | Total |  | 0 |  | repetida y fuera de secci\u00f3n: usa "
+                      "`deck.range` |", text)
+        self.assertIn("| 10 | Total |  | 6 | C a H | repetida: usa `section=` |", text)
+
+    def test_band_rule_is_the_one_section_lookup_uses(self) -> None:
+        book = D.ModelBook(self.root / MODEL_REL)
+        text = D.labels_report(book)
+        for title in ("Balance", "Flujos", "Otros"):
+            self.assertIsNotNone(D._section_bounds(book._sheet("Annual"), title))
+            self.assertRegex(text, rf"\| \d+ \| {title} \| secci\u00f3n \|")
+        self.assertIsNone(D._section_bounds(book._sheet("Annual"), "Ingresos"))
+
+    def test_quarterly_axis_is_shown_with_the_keys_the_script_uses(self) -> None:
+        model = self.root / MODEL_REL
+        wb = load_workbook(model)
+        ws = wb.create_sheet("Quarterly")
+        for i, key in enumerate(("1Q2026A", "2Q2026A", "3Q2026E", "4Q2026E")):
+            ws.cell(row=4, column=3 + i, value=key)
+        ws.cell(row=6, column=2, value="Ingresos")
+        wb.save(model)
+        text = D.labels_report(D.ModelBook(model))
+        self.assertIn("Periodos (4): `1Q2026` a `4Q2026`, columnas C a F; "
+                      "proyectado desde `3Q2026`.", text)
+
+
+class FactsCheckTests(_Case):
+
+    def test_every_fact_is_listed_with_its_verification(self) -> None:
+        findings = D.check_facts(self.root / FACTS_REL, self.root)
+        self.assertEqual([(f.check, f.mark) for f in findings],
+                         [("hecho share", "[ok]"), ("hecho plants", "[aviso]")])
+        self.assertIn("cita encontrada", findings[0].detail)
+        self.assertIn(REPORT_REL, findings[0].detail)
+        self.assertIn("manual", findings[1].detail)
+        self.assertFalse(any(f.blocking for f in findings))
+
+    def test_every_bad_fact_is_reported_not_only_the_first(self) -> None:
+        path = self.root / "hechos.json"
+        path.write_text(json.dumps({"facts": [
+            _fact("share", 31.5, REPORT_REL, "31.5%"),
+            _fact("lejos", 1.0, REPORT_REL, "no esta"),
+            _fact("share", 2.0, REPORT_REL, "31.5%"),
+            {"key": "corto"}, "suelto"]}), encoding="utf-8")
+        findings = D.check_facts(path, self.root)
+        self.assertEqual([f.mark for f in findings], ["[ok]", "[x]", "[x]", "[x]", "[x]"])
+        self.assertIn("no aparece en", findings[1].detail)
+        self.assertNotIn("hecho 'lejos'", findings[1].detail)    # la clave ya va en el check
+        self.assertIn("duplicado", findings[2].detail)
+        self.assertIn("faltan campos", findings[3].detail)
+        # load_facts sigue deteniendose en el primero, con su clave.
+        with self.assertRaisesRegex(D.DeckError, "hecho 'lejos': la cita"):
+            D.load_facts(path, self.root)
+
+    def test_a_broken_file_is_still_a_deck_error(self) -> None:
+        path = self.root / "hechos.json"
+        path.write_text("[]", encoding="utf-8")
+        with self.assertRaisesRegex(D.DeckError, "lista 'facts'"):
+            D.check_facts(path, self.root)
 
 
 def _slide(n: int, gap: float, **extra: object) -> dict[str, object]:
@@ -929,14 +1297,13 @@ class CliTests(_Case):
         self.assertIn(b"[x] P1 cifras iguales a su origen", broken.stdout)
 
     def test_audit_with_design_lists_contrast_warnings_without_failing(self) -> None:
-        self.assertEqual(_cli(["demo", str(self.root)]).returncode, 0)
-        notes = self.root / "demo" / "research" / "notes"
         design = self.root / "DESIGN.md"
         design.write_text("deck_text: #BBBBBB" + chr(10), encoding="utf-8")
-        done = _cli(["audit", str(notes / f"demo-deck_{D.DEMO_AS_OF}.html"),
-                     str(self.root / "demo" / "model" / f"demo-model_{D.DEMO_AS_OF}_v1.xlsx"),
-                     "--facts", str(notes / f"demo-facts_{D.DEMO_AS_OF}.json"),
-                     "--design", str(design)])
+        deck = self.deck(design="DESIGN.md")
+        deck.slide(title="Titulo", lede="", visual="<p>visual</p>", note="Nota.",
+                   source="Fuente: x.")
+        done = _cli(["audit", str(deck.build()), str(self.root / MODEL_REL),
+                     "--facts", str(self.root / FACTS_REL), "--design", str(design)])
         self.assertEqual(done.returncode, 0)
         self.assertIn(b"-- Diseno", done.stdout)
         self.assertIn(b"[aviso] P9 contraste del texto", done.stdout)
@@ -956,8 +1323,168 @@ class CliTests(_Case):
         done = _cli(["claims", str(deck), str(out)])
         self.assertEqual(done.returncode, 0)
         self.assertTrue(done.stdout.isascii())
-        self.assertIn("| 3 | El crecimiento se modera, no se detiene. |  |",
+        row = "| 3 | texto | El crecimiento se modera, no se detiene. |  |"
+        self.assertIn(row, out.read_text(encoding="utf-8"))
+        out.write_text(out.read_text(encoding="utf-8").replace(
+            row, row[:-3] + " serie de ventas |"), encoding="utf-8")
+        again = _cli(["claims", str(deck), str(out)])       # no pisa evidencia ya escrita
+        self.assertEqual(again.returncode, 1)
+        self.assertIn(b"[x]", again.stdout)
+        self.assertIn(b"audit --report", again.stdout)
+        self.assertIn("| 3 | texto | El crecimiento se modera, no se detiene. | serie de ventas |",
                       out.read_text(encoding="utf-8"))
+        other = self.root / "notas.md"
+        other.write_text("Notas del analista.\n", encoding="utf-8")
+        self.assertEqual(_cli(["claims", str(deck), str(other)]).returncode, 1)
+        self.assertEqual(other.read_text(encoding="utf-8"), "Notas del analista.\n")
+
+    def test_labels_writes_the_model_map_and_keeps_the_console_ascii(self) -> None:
+        model = self.root / MODEL_REL
+        wb = load_workbook(model)
+        wb["Annual"]["B20"] = "Depreciaci\u00f3n"
+        wb.save(model)
+        out = self.root / "etiquetas.md"
+        done = _cli(["labels", str(model), str(out)])
+        self.assertEqual(done.returncode, 0, done.stdout.decode("ascii", "replace"))
+        self.assertTrue(done.stdout.isascii())
+        self.assertIn(b"[ok] 18 etiquetas en 3 hojas", done.stdout)
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("| 20 | Depreciaci\u00f3n |  | 0 |  |  |", text)
+        missing = _cli(["labels", str(self.root / "nope.xlsx"), str(out)])
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn(b"[x]", missing.stdout)
+        self.assertEqual(_cli(["labels", str(model), str(out)]).returncode, 0)   # su propia salida
+        journal = self.root / "journal.md"
+        journal.write_text("# Journal\n", encoding="utf-8")
+        clobber = _cli(["labels", str(model), str(journal)])
+        self.assertEqual(clobber.returncode, 1)
+        self.assertEqual(journal.read_text(encoding="utf-8"), "# Journal\n")
+
+    def test_facts_validates_the_register_without_building_a_deck(self) -> None:
+        facts = self.root / FACTS_REL
+        done = _cli(["facts", str(facts), "--root", str(self.root)])
+        self.assertEqual(done.returncode, 0, done.stdout.decode("ascii", "replace"))
+        self.assertIn(b"[ok] hecho share: cita encontrada", done.stdout)
+        self.assertIn(b"[aviso] hecho plants: manual", done.stdout)
+        # Sin --root: la cobertura es la carpeta que contiene research/notes/.
+        self.assertEqual(_cli(["facts", str(facts)]).returncode, 0)
+        facts.write_text(json.dumps({"facts": [
+            _fact("share", 31.5, REPORT_REL, "31.5%"),
+            _fact("lejos", 1.0, REPORT_REL, "no est\u00e1 en el reporte"),
+            _fact("nodoc", 2.0, "filings/nope.md", "dos")]}), encoding="utf-8")
+        broken = _cli(["facts", str(facts), "--root", str(self.root)])
+        self.assertEqual(broken.returncode, 1)
+        self.assertTrue(broken.stdout.isascii())
+        self.assertIn(b"[ok] hecho share", broken.stdout)
+        self.assertIn(b"[x] hecho lejos: la cita", broken.stdout)
+        self.assertIn(b"[x] hecho nodoc: no existe el documento", broken.stdout)
+
+    def test_facts_never_reads_green_with_nothing_validated(self) -> None:
+        facts = self.root / FACTS_REL
+        for payload in ({"hechos": [_fact("share", 31.5, REPORT_REL, "31.5%")]}, {"facts": []}):
+            facts.write_text(json.dumps(payload), encoding="utf-8")
+            done = _cli(["facts", str(facts), "--root", str(self.root)])
+            with self.subTest(payload=list(payload)):
+                self.assertNotEqual(done.returncode, 0, done.stdout.decode("ascii", "replace"))
+                self.assertNotIn(b"VERDE", done.stdout)
+        facts.write_text(json.dumps({"facts": [_fact("nan", float("nan"), REPORT_REL, "31.5%")]}),
+                         encoding="utf-8")
+        done = _cli(["facts", str(facts), "--root", str(self.root)])
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(b"[x] hecho nan: value debe ser un numero", done.stdout)
+
+    def test_facts_outside_research_notes_needs_the_root(self) -> None:
+        loose = self.root / "hechos.json"
+        loose.write_text((self.root / FACTS_REL).read_text(encoding="utf-8"), encoding="utf-8")
+        done = _cli(["facts", str(loose)])
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(b"--root", done.stdout)
+        self.assertEqual(_cli(["facts", str(loose), "--root", str(self.root)]).returncode, 0)
+
+    def test_facts_dumps_the_visible_text_of_a_source(self) -> None:
+        filing = self.root / "filings" / "anual.htm"
+        filing.write_text("<html><body><table><tr><td>Ventas</td><td><ix:x>2,192,931</ix:x>"
+                          "</td><td>58%</td></tr></table>"
+                          + "<p>Parrafo de relleno con acento: operaci\u00f3n.</p>" * 30
+                          + "</body></html>", encoding="utf-8")
+        facts = self.root / FACTS_REL
+        facts.write_text(json.dumps({"facts": [_fact("x", 1.0, "filings/anual.htm", "nope")]}),
+                         encoding="utf-8")
+        out = self.root / "scratch" / "anual.txt"
+        done = _cli(["facts", str(facts), "--root", str(self.root),
+                     "--text", "filings/anual.htm", str(out)])
+        # El volcado sale aunque el registro no valide: sirve para corregir la cita.
+        self.assertEqual(done.returncode, 1)
+        self.assertTrue(done.stdout.isascii())
+        self.assertIn(b"[ok] texto visible", done.stdout)
+        text = out.read_text(encoding="utf-8")
+        self.assertIn("Ventas 2,192,931 58%", text)
+        self.assertNotIn("<td>", text)
+        self.assertIn("operaci\u00f3n", text)
+        self.assertLessEqual(max(len(line) for line in text.splitlines()), 100)
+        self.assertEqual(D._flatten(text), D._visible_text(filing))
+        pdf = _cli(["facts", str(facts), "--root", str(self.root),
+                    "--text", "filings/anual.pdf", str(out)])
+        self.assertEqual(pdf.returncode, 1)
+        self.assertIn(b"no es una fuente de texto", pdf.stdout)
+        # Repetir el volcado sobre si mismo si; sobre otro archivo, nunca.
+        again = _cli(["facts", str(facts), "--root", str(self.root),
+                      "--text", "filings/anual.htm", str(out)])
+        self.assertIn(b"[ok] texto visible", again.stdout)
+        register = facts.read_text(encoding="utf-8")
+        clobber = _cli(["facts", str(facts), "--root", str(self.root),
+                        "--text", "filings/anual.htm", str(facts)])
+        self.assertEqual(clobber.returncode, 1)
+        self.assertNotIn(b"[ok] texto visible", clobber.stdout)
+        self.assertEqual(facts.read_text(encoding="utf-8"), register)
+
+    def test_measure_report_writes_the_space_section(self) -> None:
+        self.assertEqual(_cli(["demo", str(self.root)]).returncode, 0)
+        notes = self.root / "demo" / "research" / "notes"
+        deck = notes / f"demo-deck_{D.DEMO_AS_OF}.html"
+        report = notes / f"demo-deck-verify_{D.DEMO_AS_OF}.md"
+        self.assertEqual(_cli(["audit", str(deck), str(self.root / "demo" / "model"
+                                                       / f"demo-model_{D.DEMO_AS_OF}_v1.xlsx"),
+                               "--facts", str(notes / f"demo-facts_{D.DEMO_AS_OF}.json"),
+                               "--report", str(report)]).returncode, 0)
+        done = _cli(["measure", str(deck), "--report", str(report)],
+                    env={"RA_BROWSER": str(self.root / "nope.exe")})
+        self.assertEqual(done.returncode, 3)
+        self.assertTrue(done.stdout.isascii())
+        text = report.read_text(encoding="utf-8")
+        self.assertIn("## Espacio", text)
+        self.assertIn("| [pendiente] | P5-P8 medicion de espacio |", text)
+        self.assertNotIn("Deck medido", text)        # sin navegador no se midio nada
+        self.assertIn("## Afirmaciones", text)
+
+    def test_audit_design_is_found_in_the_coverage_and_must_be_the_deck_palette(self) -> None:
+        (self.root / "brand").mkdir()
+        (self.root / "brand" / "DESIGN.md").write_text("deck_text: #BBBBBB\n", encoding="utf-8")
+        deck = self.deck(design="brand/DESIGN.md")
+        deck.slide(title="Titulo", lede="", visual="<p>visual</p>", note="Nota.",
+                   source="Fuente: x.")
+        path = deck.build()
+        args = ["audit", str(path), str(self.root / MODEL_REL), "--facts",
+                str(self.root / FACTS_REL), "--design"]
+        # Ruta relativa a la cobertura, como en Deck(design=...), desde otra carpeta.
+        relative = _cli(args + ["brand/DESIGN.md"])
+        self.assertEqual(relative.returncode, 0, relative.stdout.decode("ascii", "replace"))
+        self.assertIn(b"[aviso] P9 contraste del texto", relative.stdout)
+        # Un archivo que no existe NO da verde a una paleta que el deck no usa.
+        wrong = _cli(args + ["brand/NOPE.md"])
+        self.assertEqual(wrong.returncode, 1)
+        self.assertIn(b"[x]", wrong.stdout)
+        self.assertNotIn(b"[ok] P9", wrong.stdout)
+        self.assertIn(b"otra paleta", wrong.stdout)
+
+    def test_printing_a_number_survives_a_cp1252_console(self) -> None:
+        code = ("import sys; sys.path.insert(0, 'tools'); import deck_builder as D; "
+                "n = D.Num(240.0, 'Annual!H6') / 2; print(n); print(str(n)); print([n]); "
+                "print([D.Num(1.0, chr(39) + chr(916) + ' WC' + chr(39) + '!C5')])")
+        done = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True,
+                              env=dict(os.environ, PYTHONIOENCODING="cp1252:strict"), timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr.decode("ascii", "replace"))
+        self.assertIn(b"120.0 [(Annual!H6/2)]", done.stdout)
 
     def test_usage_errors_exit_two_and_missing_files_exit_one(self) -> None:
         self.assertEqual(_cli([]).returncode, 2)
@@ -1173,12 +1700,20 @@ class CliHardeningTests(_Case):
         return (self.root / "demo" / "research" / "notes" / f"demo-deck_{D.DEMO_AS_OF}.html",
                 self.root / "demo" / "model" / f"demo-model_{D.DEMO_AS_OF}_v1.xlsx")
 
-    def test_missing_design_file_is_an_error_not_a_green_palette(self) -> None:
+    def test_missing_design_file_audits_the_neutral_palette(self) -> None:
+        # Deck(design=...) acepta que el archivo falte y usa el estilo neutro: audit
+        # evalua esa misma paleta, y dice que lo hizo.
         deck, model = self._demo()
-        done = _cli(["audit", str(deck), str(model), "--design", str(self.root / "NOPE.md")])
-        self.assertEqual(done.returncode, 1)
-        self.assertIn(b"[x]", done.stdout)
-        self.assertNotIn(b"P9", done.stdout)
+        facts = ["--facts", str(deck.parent / f"demo-facts_{D.DEMO_AS_OF}.json")]
+        done = _cli(["audit", str(deck), str(model), *facts,
+                     "--design", str(self.root / "NOPE.md")])
+        self.assertEqual(done.returncode, 0, done.stdout.decode("ascii", "replace"))
+        self.assertIn(b"-- Diseno (paleta neutra: no existe NOPE.md)", done.stdout)
+        self.assertIn(b"[ok] P9 contraste del texto", done.stdout)
+        self.assertIn(b"[ok] P10 series distinguibles con daltonismo", done.stdout)
+        folder = _cli(["audit", str(deck), str(model), *facts, "--design", str(self.root)])
+        self.assertEqual(folder.returncode, 1)      # una carpeta no es "sin archivo"
+        self.assertIn(b"[x] --design no es un archivo", folder.stdout)
 
     def test_broken_inputs_never_end_in_a_traceback(self) -> None:
         deck, model = self._demo()

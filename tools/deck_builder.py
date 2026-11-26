@@ -16,10 +16,14 @@ Uso como biblioteca (desde el script de la cobertura):
 
 Uso por consola:
     python tools/deck_builder.py demo <carpeta>
+    python tools/deck_builder.py labels <modelo.xlsx> <salida.md>
+    python tools/deck_builder.py facts <hechos.json> [--root cobertura]
+                                 [--text <doc> <salida.txt>]
     python tools/deck_builder.py audit <deck.html> <modelo.xlsx>
                                  [--facts hechos.json] [--design brand/DESIGN.md]
                                  [--report reporte.md]
     python tools/deck_builder.py measure <deck.html> [--shots carpeta]
+                                 [--report reporte.md]
     python tools/deck_builder.py claims <deck.html> <salida.md>
 
 Exit codes (los de model_check): 0 = verde; 1 = alguna falla; 2 = uso
@@ -33,6 +37,7 @@ from __future__ import annotations
 import argparse
 import ast
 import base64
+import hashlib
 import html
 import json
 import math
@@ -42,13 +47,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import zipfile
+from collections import Counter
 from dataclasses import dataclass, field
+from decimal import Decimal
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Sequence, Union
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import Cell
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.worksheet.worksheet import Worksheet
@@ -173,8 +182,18 @@ class Num:
                             f"decimales y tipo (p. ej. '+,.1f' o '.0%')")
         return f"{_M_NUM}{self.src}{_M_SEP}{spec}{_M_SEP}{format(self.value, spec)}{_M_END}"
 
+    def _plain(self) -> str:
+        """Valor en notacion fija: '1e+16' pasaria el escaneo como identificador."""
+        return format(Decimal(repr(float(self.value))), "f")
+
     def __str__(self) -> str:
-        return format(self, "")
+        """Para ``print()`` al depurar: valor y origen, en ASCII (la consola de
+        Windows no escribe el marcador). NO ata la cifra: en una lamina es un
+        numero suelto y bloquea. Lo que ata es el f-string (``__format__``)."""
+        return f"{self._plain()} [{_ascii(self.src)}]"
+
+    def __repr__(self) -> str:
+        return f"Num(value={self._plain()}, src={_ascii(self.src)!r})"
 
 
 def lit(text: str, why: str) -> str:
@@ -307,21 +326,27 @@ _COORD = re.compile(r"\$?([A-Za-z]{1,3})\$?([1-9]\d{0,6})")
 MAX_ROW = 1048576
 
 
+def _is_band(cell: Cell) -> bool:
+    """Banda de seccion: etiqueta en negrita y de 16 pt o mas (``section_header``
+    del builder). Una sola regla para ``section=`` y para el mapa de ``labels``."""
+    font = cell.font
+    return (isinstance(cell.value, str) and font is not None and bool(font.bold)
+            and (font.size or 0) >= 16)
+
+
 def _section_bounds(ws: Worksheet, title: str) -> Optional[tuple[int, int]]:
     """Filas (primera, ultima) de la seccion cuya banda EMPIEZA con ``title``.
 
-    Banda = etiqueta en columna B, negrita y de 16 pt o mas (``section_header``
-    del builder). Por prefijo, sin distinguir mayusculas: en un modelo real la
-    banda dice 'Assumptions (unica zona de input del libro)'. Es una busqueda
-    propia a proposito: no depende de un helper privado de model_check."""
+    Banda = etiqueta en columna B que cumple ``_is_band``. Por prefijo, sin
+    distinguir mayusculas: en un modelo real la banda dice 'Assumptions (unica
+    zona de input del libro)'. Es una busqueda propia a proposito: no depende
+    de un helper privado de model_check."""
     wanted = title.strip().lower()
     first: Optional[int] = None
     last_row = min(ws.max_row, B._MAX_SCAN_ROWS)
     for r in range(1, last_row + 1):
         cell = ws.cell(row=r, column=2)
-        font = cell.font
-        if not (isinstance(cell.value, str) and font is not None and font.bold
-                and (font.size or 0) >= 16):
+        if not _is_band(cell):
             continue
         if first is not None:
             return first, r - 1
@@ -398,8 +423,7 @@ class ModelBook:
         points: dict[PeriodKey, Num] = {}
         actual: dict[PeriodKey, bool] = {}
         for period in axis:
-            key: PeriodKey = (period.year if period.quarter is None
-                              else f"{period.quarter}Q{period.year}")
+            key = _period_key(period)
             cell = ws.cell(row=row, column=period.column)
             formula = self._formulas[sheet].cell(row=row, column=period.column).value
             if cell.value is None and not (isinstance(formula, str) and formula.startswith("=")):
@@ -439,6 +463,103 @@ class ModelBook:
     def axis_years(self) -> set[int]:
         """Anios presentes en algun encabezado de periodos del libro."""
         return {p.year for ws in self._values.worksheets for p in M._period_axis(ws)}
+
+
+def _period_key(period: M.PeriodColumn) -> PeriodKey:
+    """Clave con la que el script indexa una serie: 2027 o '3Q2026'."""
+    return period.year if period.quarter is None else f"{period.quarter}Q{period.year}"
+
+
+# ---------------------------------------------------------------------------
+# Mapa del modelo: lo que el script necesita saber antes de pedir una cifra
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class LabelRow:
+    """Una etiqueta de la columna B: fila, si es banda y sus celdas numericas."""
+
+    row: int
+    label: str
+    band: bool
+    numeric: tuple[str, ...]   # letras de columna con valor numerico
+    uncalculated: int          # formulas de la fila sin valor calculado
+    section: Optional[int]     # fila de la banda que la contiene; None = antes de toda banda
+
+
+def model_labels(book: ModelBook) -> list[tuple[str, str, list[LabelRow]]]:
+    """Por hoja: (nombre, linea del eje de periodos, etiquetas de la columna B)."""
+    out: list[tuple[str, str, list[LabelRow]]] = []
+    for ws in book._values.worksheets:
+        formulas = book._formulas[ws.title]
+        rows: list[LabelRow] = []
+        section: Optional[int] = None
+        for r in range(1, min(ws.max_row, B._MAX_SCAN_ROWS) + 1):
+            cell = ws.cell(row=r, column=2)
+            if not (isinstance(cell.value, str) and cell.value.strip()):
+                continue
+            if _is_band(cell):
+                section = r
+            numeric = tuple(c.column_letter for c in ws[r][2:]
+                            if isinstance(c.value, (int, float)) and not isinstance(c.value, bool))
+            uncalculated = sum(
+                1 for c in formulas[r][2:]
+                if isinstance(c.value, str) and c.value.startswith("=")
+                and ws.cell(row=r, column=c.column).value is None)
+            rows.append(LabelRow(r, cell.value.strip(), _is_band(cell), numeric, uncalculated,
+                                 section))
+        axis = M._period_axis(ws)
+        if not axis:
+            line = ("Sin encabezado de periodos: se lee con `deck.cell` o `deck.range`, "
+                    "no con `deck.series`.")
+        else:
+            keys = [_period_key(p) for p in axis]
+            forecast = next((key for p, key in zip(axis, keys) if not p.actual), None)
+            cut = ("todo observado" if forecast is None
+                   else "todo proyectado" if not axis[0].actual
+                   else f"proyectado desde `{forecast}`")
+            line = (f"Periodos ({len(axis)}): `{keys[0]}` a `{keys[-1]}`, columnas "
+                    f"{get_column_letter(axis[0].column)} a "
+                    f"{get_column_letter(axis[-1].column)}; {cut}.")
+        out.append((ws.title, line, rows))
+    return out
+
+
+def labels_report(book: ModelBook) -> str:
+    """Markdown con las etiquetas del modelo. Va a archivo: llevan acentos."""
+    out = [f"# Etiquetas del modelo — {book.path.name}", "",
+           "Etiqueta EXACTA de la columna B de cada hoja, con su fila. `sección` es una "
+           "banda (negrita de 16 pt o más): lo que acepta `section=`. Columnas: de la "
+           "primera a la última celda numérica de la fila; con más de una, `deck.cell` "
+           "pide `column=`.", ""]
+    for title, axis_line, rows in model_labels(book):
+        out += [f"## {title}", "", axis_line, ""]
+        if not rows:
+            out += ["Sin etiquetas en la columna B.", ""]
+            continue
+        in_sheet = Counter(row.label for row in rows)
+        in_section = Counter((row.label, row.section) for row in rows)
+        out += ["| Fila | Etiqueta | Banda | Celdas numéricas | Columnas | Nota |",
+                "|---|---|---|---|---|---|"]
+        for row in rows:
+            span = ("" if not row.numeric else row.numeric[0] if len(row.numeric) == 1
+                    else f"{row.numeric[0]} a {row.numeric[-1]}")
+            notes = []
+            if in_sheet[row.label] > 1:         # section= solo separa bandas distintas
+                notes.append("repetida y fuera de sección: usa `deck.range`"
+                             if row.section is None
+                             else "repetida en su sección: usa `deck.range`"
+                             if in_section[(row.label, row.section)] > 1
+                             else "repetida: usa `section=`")
+            if "\n" in row.label:
+                notes.append("salto de línea: escríbelo `\\n`")
+            if row.uncalculated:
+                notes.append(f"{row.uncalculated} fórmula(s) sin valor: recalcula")
+            # La etiqueta va tal cual se escribe en el script: un salto de linea, como \n.
+            out.append(f"| {row.row} | {_md_cell(row.label.replace(chr(10), chr(92) + 'n'))} | "
+                       f"{'sección' if row.band else ''} | {len(row.numeric)} | {span} | "
+                       f"{'; '.join(notes)} |")
+        out.append("")
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -487,48 +608,111 @@ def _visible_text(doc: Path) -> str:
     return _flatten(text)
 
 
-def load_facts(path: Path, root: Path) -> dict[str, Fact]:
-    """Lee y valida el registro de hechos. ``root`` = carpeta de la cobertura."""
+def source_text(root: Path, relative: str) -> str:
+    """Texto visible de una fuente de la cobertura, en lineas de hasta 100
+    caracteres. Es el texto contra el que se coteja una cita (los saltos de
+    linea no cuentan): de aqui se copia, no del HTML crudo."""
+    doc = _inside(root, relative, "fuente")
+    if not doc.is_file():
+        raise DeckError(f"no existe el documento {relative}")
+    if doc.suffix.lower() not in TEXT_SOURCES:
+        raise DeckError(f"{relative} no es una fuente de texto "
+                        f"({', '.join(sorted(TEXT_SOURCES))}): su cita se coteja a mano")
+    return textwrap.fill(_visible_text(doc), width=100, break_long_words=False,
+                         break_on_hyphens=False) + "\n"
+
+
+def _raw_facts(path: Path, strict: bool = False) -> list[object]:
+    """Entradas del registro. ``strict``: la lista 'facts' debe estar (quien
+    valida el registro no puede dar por bueno un archivo con otra clave)."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:   # JSON invalido o archivo que no es UTF-8
         raise DeckError(f"hechos ilegibles ({path.name}): {exc}") from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("facts", []), list):
+    if not isinstance(payload, dict) or not isinstance(payload.get("facts", []), list) \
+            or (strict and "facts" not in payload):
         raise DeckError(f"hechos ({path.name}): se espera un objeto con la lista 'facts'")
+    return list(payload.get("facts", []))
+
+
+def _fact_key(raw: object) -> str:
+    return str(raw.get("key", "?")) if isinstance(raw, dict) else "?"
+
+
+def _parse_fact(raw: object, root: Path, known: dict[str, Fact],
+                sources: dict[Path, str]) -> Fact:
+    """Valida un hecho. El error dice el motivo; la clave la pone quien llama.
+    ``sources``: texto visible por documento, leido una sola vez."""
+    if not isinstance(raw, dict):
+        raise DeckError(f"cada hecho debe ser un objeto, no {raw!r}")
+    missing = [k for k in ("key", "value", "unit", "tag", "doc", "locator", "quote")
+               if k not in raw or raw[k] in ("", None)]
+    key = _fact_key(raw)
+    if missing:
+        raise DeckError(f"faltan campos {missing}")
+    if not _FACT_KEY.fullmatch(key):
+        raise DeckError("la clave solo admite letras, digitos y _")
+    if not isinstance(raw["doc"], str):
+        raise DeckError("doc debe ser texto (ruta en la cobertura)")
+    if len(str(raw["quote"]).strip()) < MIN_QUOTE_CHARS:
+        raise DeckError("cita demasiado corta para cotejarla")
+    if key in known:
+        raise DeckError("duplicado")
+    if raw["tag"] not in FACT_TAGS:
+        raise DeckError(f"tag debe ser uno de {FACT_TAGS}")
+    if isinstance(raw["value"], bool) or not isinstance(raw["value"], (int, float)) \
+            or not math.isfinite(raw["value"]):
+        raise DeckError("value debe ser un numero finito")
+    doc = _inside(root, raw["doc"], "doc")
+    if not doc.is_file():
+        raise DeckError(f"no existe el documento {raw['doc']}")
+    manual = doc.suffix.lower() not in TEXT_SOURCES
+    if not manual and doc not in sources:
+        sources[doc] = _visible_text(doc)
+    if not manual and _flatten(str(raw["quote"])) not in sources[doc]:
+        raise DeckError(f"la cita {_ascii(raw['quote'])!r} no aparece en {raw['doc']}")
+    return Fact(key, float(raw["value"]), str(raw["unit"]), raw["tag"],
+                raw["doc"], str(raw["locator"]), str(raw["quote"]), manual)
+
+
+def load_facts(path: Path, root: Path) -> dict[str, Fact]:
+    """Lee y valida el registro de hechos; se detiene en el primero que falla.
+    ``root`` = carpeta de la cobertura."""
     facts: dict[str, Fact] = {}
-    sources: dict[Path, str] = {}      # texto visible por documento, leido una vez
-    for raw in payload.get("facts", []):
-        if not isinstance(raw, dict):
-            raise DeckError(f"hechos ({path.name}): cada hecho debe ser un objeto, no {raw!r}")
-        missing = [k for k in ("key", "value", "unit", "tag", "doc", "locator", "quote")
-                   if k not in raw or raw[k] in ("", None)]
-        key = str(raw.get("key", "?"))
-        if missing:
-            raise DeckError(f"hecho '{_ascii(key)}': faltan campos {missing}")
-        if not _FACT_KEY.fullmatch(key):
-            raise DeckError(f"hecho '{_ascii(key)}': la clave solo admite letras, digitos y _")
-        if not isinstance(raw["doc"], str):
-            raise DeckError(f"hecho '{_ascii(key)}': doc debe ser texto (ruta en la cobertura)")
-        if len(str(raw["quote"]).strip()) < MIN_QUOTE_CHARS:
-            raise DeckError(f"hecho '{_ascii(key)}': cita demasiado corta para cotejarla")
-        if key in facts:
-            raise DeckError(f"hecho '{_ascii(key)}' duplicado")
-        if raw["tag"] not in FACT_TAGS:
-            raise DeckError(f"hecho '{_ascii(key)}': tag debe ser uno de {FACT_TAGS}")
-        if isinstance(raw["value"], bool) or not isinstance(raw["value"], (int, float)):
-            raise DeckError(f"hecho '{_ascii(key)}': value debe ser un numero")
-        doc = _inside(root, raw["doc"], f"hecho '{key}'")
-        if not doc.is_file():
-            raise DeckError(f"hecho '{_ascii(key)}': no existe el documento {_ascii(raw['doc'])}")
-        manual = doc.suffix.lower() not in TEXT_SOURCES
-        if not manual and doc not in sources:
-            sources[doc] = _visible_text(doc)
-        if not manual and _flatten(str(raw["quote"])) not in sources[doc]:
-            raise DeckError(f"hecho '{_ascii(key)}': la cita {_ascii(raw['quote'])!r} no "
-                            f"aparece en {_ascii(raw['doc'])}")
-        facts[key] = Fact(key, float(raw["value"]), str(raw["unit"]), raw["tag"],
-                          raw["doc"], str(raw["locator"]), str(raw["quote"]), manual)
+    sources: dict[Path, str] = {}
+    for raw in _raw_facts(path):
+        try:
+            fact = _parse_fact(raw, root, facts, sources)
+        except DeckError as exc:
+            raise DeckError(f"hecho '{_fact_key(raw)}': {exc}") from exc
+        facts[fact.key] = fact
     return facts
+
+
+def check_facts(path: Path, root: Path) -> list[Finding]:
+    """El registro completo, hecho por hecho, sin construir un deck: cita
+    encontrada, verificacion manual (aviso) o el motivo por el que no carga."""
+    facts: dict[str, Fact] = {}
+    sources: dict[Path, str] = {}
+    findings: list[Finding] = []
+    entries = _raw_facts(path, strict=True)
+    if not entries:
+        return [Finding("registro de hechos", False, "la lista 'facts' esta vacia: no se "
+                        "valido ningun hecho", pending=True)]
+    for raw in entries:
+        name = f"hecho {_ascii(_fact_key(raw))}"
+        try:
+            fact = _parse_fact(raw, root, facts, sources)
+        except DeckError as exc:
+            findings.append(Finding(name, False, str(exc)))
+            continue
+        facts[fact.key] = fact
+        where = f"{fact.doc}, {fact.locator}"
+        findings.append(Finding(
+            name, not fact.manual,
+            f"manual: la fuente no es texto, la cita se coteja a mano ({where})"
+            if fact.manual else f"cita encontrada ({where})", warning=fact.manual))
+    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -630,6 +814,11 @@ def load_design(path: Optional[Path], root: Optional[Path] = None) -> Design:
     return Design(series=tuple(series), **values)  # type: ignore[arg-type]
 
 
+def _palette(design: Design) -> str:
+    """Los colores que evaluan P9 y P10; el deck los lleva en ``data-palette``."""
+    return ",".join((design.background, design.text, *design.series))
+
+
 def weak_series(design: Design) -> set[int]:
     """Indices de colores de serie con poco contraste contra el fondo: las
     graficas etiquetan todos sus valores cuando usan uno de ellos."""
@@ -659,12 +848,14 @@ def design_findings(design: Design) -> list[Finding]:
 
 _VOID = frozenset({"br", "hr", "img", "meta", "link", "input", "col", "wbr"})
 _BLOCK = frozenset({"h1", "h2", "h3", "h4", "p", "li", "td", "th", "figcaption",
-                    "div", "aside", "header", "footer", "text"})
+                    "div", "aside", "header", "footer", "text", "blockquote", "pre",
+                    "dt", "dd", "caption"})
 _EXEMPT_CLASSES = frozenset({"auto", "source"})
 # Etiquetas que cierran un <p> abierto, como hace el navegador.
 _CLOSES_P = frozenset({"p", "div", "ul", "ol", "table", "h1", "h2", "h3", "h4", "section",
                        "aside", "header", "footer", "figure", "blockquote", "pre"})
-CLAIM_TAGS = frozenset({"h1", "h2", "h3", "h4", "p", "li", "figcaption"})
+# De donde viene cada afirmacion listada (columna "Dónde" del reporte).
+CLAIM_ORIGINS = {"text": "texto", "table": "tabla", "cover": "portada", "chart": "gráfica"}
 
 
 @dataclass
@@ -675,6 +866,7 @@ class Block:
     tag: str
     in_svg: bool
     parts: list[tuple[str, str]] = field(default_factory=list)
+    where: str = "text"     # clave de CLAIM_ORIGINS
 
     @property
     def text(self) -> str:
@@ -698,6 +890,7 @@ class DeckDocument(HTMLParser):
         self.literals: list[tuple[int, str, str]] = []   # (lamina, texto, porque)
         self.blocks: list[Block] = []
         self.gap_max: Optional[int] = None
+        self.palette: Optional[str] = None      # colores con los que se genero el deck
         self._stack: list[tuple[str, str, Optional[Block], dict[str, str]]] = []
         self._slide = 0
         self._svg = 0
@@ -712,6 +905,8 @@ class DeckDocument(HTMLParser):
         classes = set(attr.get("class", "").split())
         if tag == "html" and attr.get("data-gap-max", "").isdigit():
             self.gap_max = int(attr["data-gap-max"])
+        if tag == "html" and attr.get("data-palette"):
+            self.palette = attr["data-palette"]
         if tag == "section" and "slide" in classes:
             self._slide = int(attr["data-n"]) if attr.get("data-n", "").isdigit() else 0
         if tag == "svg":
@@ -731,7 +926,7 @@ class DeckDocument(HTMLParser):
             kind = ""
         block = None
         if tag in _BLOCK and kind == "" and not capturing:
-            block = Block(self._slide, tag, self._svg > 0)
+            block = Block(self._slide, tag, self._svg > 0, where=self._where(tag))
             self.blocks.append(block)
         self._stack.append((tag, kind, block, attr))
 
@@ -758,6 +953,16 @@ class DeckDocument(HTMLParser):
             if owner is not None:
                 owner.parts.append((kind, text))
 
+    def _where(self, tag: str = "") -> str:
+        """Origen de un bloque que se abre aqui: grafica, tabla, portada o texto."""
+        if self._svg > 0:
+            return "chart"
+        if tag in ("td", "th") or any(open_tag in ("td", "th") for open_tag, _, _, _ in self._stack):
+            return "table"
+        if any("figs" in attr.get("class", "").split() for _, _, _, attr in self._stack):
+            return "cover"
+        return "text"
+
     def _current_block(self) -> Optional[Block]:
         return next((b for _, _, b, _ in reversed(self._stack) if b is not None), None)
 
@@ -782,7 +987,7 @@ class DeckDocument(HTMLParser):
         if owner is not None:
             owner.parts.append(("text", data))
         elif data.strip():
-            loose = Block(self._slide, "", self._svg > 0, [("text", data)])
+            loose = Block(self._slide, "", self._svg > 0, [("text", data)], self._where())
             self.blocks.append(loose)
 
 
@@ -930,6 +1135,7 @@ svg text.val{font-weight:bold}
 table.grid{border-collapse:collapse;width:100%%;font-size:14px}
 table.grid th,table.grid td{padding:7px 10px;text-align:right;border-bottom:1px solid rgba(0,0,0,.12)}
 table.grid th:first-child,table.grid td:first-child{text-align:left}
+table.grid th.t,table.grid td.t{text-align:left}
 table.grid th{font-size:12px;color:%(muted)s}
 table.grid td.hl{outline:2px solid %(text)s;font-weight:bold}
 html.shot{background:%(bg)s}
@@ -1023,7 +1229,7 @@ class Deck:
     def cover(self, title: str, subtitle: str = "",
               figures: Sequence[tuple[str, str]] = ()) -> None:
         logo = f'<img class="logo" src="{self.design.logo}" alt=""/>' if self.design.logo else ""
-        figs = "".join(f'<div><b>{_esc(value)}</b><span class="lbl">{_esc(label)}</span></div>'
+        figs = "".join(f'<div><b>{_esc(value)}</b> <span class="lbl">{_esc(label)}</span></div>'
                        for label, value in figures)
         self._slides.append(("cover", (
             f"{logo}<h1>{_esc(title)}</h1>"
@@ -1048,7 +1254,7 @@ class Deck:
             f"<header><h2>{_esc(title)}</h2>"
             + (f'<p class="lede">{_esc(lede)}</p>' if lede else "") + "</header>"
             f'<div class="body"><div class="visual">{visual}</div>'
-            f'<aside class="note"><b>Nota</b><p>{_esc(note)}</p></aside></div>'
+            f'<aside class="note"><b class="auto">Nota</b><p>{_esc(note)}</p></aside></div>'
             + self._footer(source, takeaway))))
 
     def raw(self, content: str, source: str, takeaway: str = "") -> None:
@@ -1097,7 +1303,8 @@ class Deck:
                             f'data-kind="{kind}">{content}</section>')
         document = (
             '<!doctype html>\n<html lang="es" '
-            f'data-gap-max="{d.gap_max}" data-as-of="{self.as_of}">\n<head>\n'
+            f'data-gap-max="{d.gap_max}" data-as-of="{self.as_of}" '
+            f'data-palette="{_palette(d)}">\n<head>\n'
             '<meta charset="utf-8"/>\n'
             f"<title>{html.escape(self.ticker)} · {self.as_of}</title>\n"
             f"<style>{css}</style>\n</head>\n<body>\n"
@@ -1245,13 +1452,22 @@ class Deck:
                  marker: Optional[tuple[str, Num]] = None, fmt: str = ",.0f",
                  w: int = 1100, h: Optional[int] = None) -> str:
         """Football field: por fila (metodo, minimo, maximo, punto central);
-        ``marker`` = (rotulo, valor) de la linea vertical (precio actual)."""
+        ``marker`` = (rotulo, valor) de la linea vertical (precio actual).
+        ``h`` reparte las filas en el alto: mas alto, filas mas separadas y
+        barras mas gruesas. Sin ``h``, 60 por fila."""
         if not rows:
             raise DeckError("football: falta al menos una fila")
         for label, low, high, _ in rows:
             if float(low) > float(high):
                 raise DeckError(f"football '{label}': el minimo es mayor que el maximo")
-        h = h or 60 * len(rows) + 60
+        frame = 60                              # eje, rotulo del marcador y margenes
+        if h is None:
+            h = 60 * len(rows) + frame
+        elif h < _FOOTBALL_MIN_PITCH * len(rows) + frame:
+            raise DeckError(f"football: h={h} no alcanza para {len(rows)} fila(s); minimo "
+                            f"{_FOOTBALL_MIN_PITCH * len(rows) + frame}")
+        pitch = (h - frame) / len(rows)
+        bar = min(0.4 * pitch, _FOOTBALL_MAX_BAR)
         values = [float(v) for _, low, high, mid in rows for v in (low, high, mid)]
         if marker is not None:
             values.append(float(marker[1]))
@@ -1268,19 +1484,20 @@ class Deck:
             out.append(f'<text class="auto" x="{x(tick):.1f}" y="{h - 8}" '
                        f'text-anchor="middle">{tick:{fmt}}</text>')
         for i, (label, low, high, mid) in enumerate(rows):
-            cy, color = top + 60 * i + 22, self._color(i)
-            out.append(f'<text x="0" y="{cy + 4}">{_esc(label)}</text>')
-            out.append(f'<rect x="{x(float(low)):.1f}" y="{cy - 12}" '
-                       f'width="{x(float(high)) - x(float(low)):.1f}" height="24" '
+            # Centro de la fila, 8 abajo: la etiqueta del punto va sobre la barra.
+            cy, color = top + pitch * (i + 0.5) - 8, self._color(i)
+            out.append(f'<text x="0" y="{cy + 4:.1f}">{_esc(label)}</text>')
+            out.append(f'<rect x="{x(float(low)):.1f}" y="{cy - bar / 2:.1f}" '
+                       f'width="{x(float(high)) - x(float(low)):.1f}" height="{bar:.1f}" '
                        f'fill="{color}" opacity="0.30"/>')
-            out.append(f'<circle cx="{x(float(mid)):.1f}" cy="{cy}" r="6" fill="{color}"/>')
-            out.append(f'<text class="val" x="{x(float(mid)):.1f}" y="{cy - 18}" '
+            out.append(f'<circle cx="{x(float(mid)):.1f}" cy="{cy:.1f}" r="6" fill="{color}"/>')
+            out.append(f'<text class="val" x="{x(float(mid)):.1f}" y="{cy - bar / 2 - 6:.1f}" '
                        f'text-anchor="middle">{mid:{fmt}}</text>')
             if float(low) == float(high):
                 continue        # metodo sin rango: el punto ya lleva su valor
-            out.append(f'<text x="{x(float(low)) - 6:.1f}" y="{cy + 4}" '
+            out.append(f'<text x="{x(float(low)) - 6:.1f}" y="{cy + 4:.1f}" '
                        f'text-anchor="end">{low:{fmt}}</text>')
-            out.append(f'<text x="{x(float(high)) + 6:.1f}" y="{cy + 4}">{high:{fmt}}</text>')
+            out.append(f'<text x="{x(float(high)) + 6:.1f}" y="{cy + 4:.1f}">{high:{fmt}}</text>')
         if marker is not None:
             mx = x(float(marker[1]))
             out.append(f'<line x1="{mx:.1f}" y1="{top - 6}" x2="{mx:.1f}" y2="{h - 26}" '
@@ -1359,14 +1576,31 @@ class Deck:
 
     def table(self, header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
         """Tabla simple. Las celdas son texto; los numeros llegan ya
-        formateados desde un Num (f-string)."""
+        formateados desde un Num (f-string). Una columna sin cifras (ningun
+        Num ni lit en sus celdas) es de texto y va a la izquierda; las de
+        cifras, a la derecha. La primera siempre va a la izquierda."""
+        rows = [list(row) for row in rows]          # un iterador se recorre dos veces
+        text_columns = {i for i in range(1, max(len(line) for line in (header, *rows)))
+                        if not any(_MARKER.search(row[i]) for row in rows if i < len(row))}
+
+        def cell(tag: str, index: int, value: str) -> str:
+            mark = ' class="t"' if index in text_columns else ""
+            return f"<{tag}{mark}>{_esc(value)}</{tag}>"
+
         out = ['<table class="grid"><tr>']
-        out += [f"<th>{_esc(cell)}</th>" for cell in header]
+        out += [cell("th", i, value) for i, value in enumerate(header)]
         out.append("</tr>")
         for row in rows:
-            out.append("<tr>" + "".join(f"<td>{_esc(cell)}</td>" for cell in row) + "</tr>")
+            out.append("<tr>" + "".join(cell("td", i, value) for i, value in enumerate(row))
+                       + "</tr>")
         out.append("</table>")
         return "".join(out)
+
+
+# Alto minimo por fila: con menos, la etiqueta del primer punto toca el rotulo
+# del marcador (P8).
+_FOOTBALL_MIN_PITCH = 54
+_FOOTBALL_MAX_BAR = 48.0
 
 
 def _svg_open(w: int, h: int, label: str) -> str:
@@ -1525,15 +1759,29 @@ def audit_deck(deck_html: Path, model: Path, facts_path: Optional[Path] = None,
     return findings, doc, facts
 
 
-def claims(doc: DeckDocument) -> list[tuple[int, str]]:
-    """(lamina, frase) de todo el texto corrido del deck, en orden."""
-    out: list[tuple[int, str]] = []
+def claims(doc: DeckDocument) -> list[tuple[int, str, str]]:
+    """(lamina, donde, texto) de todo el texto visible del deck, en orden.
+
+    ``donde`` (CLAIM_ORIGINS): 'texto' = titulos, entradillas, Notas, cierres y
+    el texto de una lamina a medida, partido en frases; 'tabla' = una celda o
+    un encabezado; 'portada' = una cifra de portada con su rotulo; 'gráfica' =
+    un texto de un SVG. De los tres ultimos solo entra lo que trae palabras:
+    una celda con solo su cifra ya esta en "Cifras y su origen". No entra lo
+    que pone el tool (ejes, 'Proyectado', numero de pagina) ni la linea de
+    fuente."""
+    out: list[tuple[int, str, str]] = []
     for block in doc.blocks:
-        if block.in_svg or block.tag not in CLAIM_TAGS or not block.text:
+        if not block.text:
+            continue
+        where = CLAIM_ORIGINS[block.where]
+        if block.where != "text":
+            if any(kind == "text" and any(ch.isalpha() for ch in part)
+                   for kind, part in block.parts):
+                out.append((block.slide, where, block.text))
             continue
         for sentence in re.split(r"(?<=[.!?])\s+", block.text):
             if sentence.strip():
-                out.append((block.slide, sentence.strip()))
+                out.append((block.slide, where, sentence.strip()))
     return out
 
 
@@ -1541,21 +1789,185 @@ def _md_cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
+_MD_PIPE = re.compile(r"(?<!\\)\|")
+_MD_SEPARATOR = re.compile(r":?-{3,}:?")
+REVIEW_MARK = "[revisar]"
+_ANCHOR_LINE = re.compile(r"^Evidencia cotejada contra: (.+)\.$", re.MULTILINE)
+
+
+def _previous_evidence(text: str) -> list[tuple[str, str, str, str]]:
+    """(lamina, donde, frase, evidencia) de cada fila de una tabla de
+    afirmaciones ya escrita: la del reporte, la de ``claims`` o la de tres
+    columnas de la version anterior (que solo listaba 'texto'). La evidencia se
+    toma tal cual, con sus '|' y sus '\\'."""
+    rows: list[tuple[str, str, str, str]] = []
+    columns: Optional[dict[str, int]] = None
+    for line in text.splitlines():
+        line = line.strip()
+        pipes = [match.start() for match in _MD_PIPE.finditer(line)]
+        if not line.startswith("|"):
+            columns = None
+            continue
+        tail = line[pipes[-1] + 1:].strip()         # vacio si la fila cierra con '|'
+        cells = [line[a + 1:b].strip() for a, b in zip(pipes, pipes[1:])] + ([tail] if tail else [])
+        if columns is None:
+            if "Frase" in cells and "Evidencia" in cells:
+                columns = {name: cells.index(name) for name in cells}
+            continue
+        if cells and all(_MD_SEPARATOR.fullmatch(cell) for cell in cells):
+            continue
+        sentence, evidence = columns["Frase"], columns["Evidencia"]
+        if len(cells) <= sentence:
+            continue
+        found = ""
+        if len(pipes) > evidence:
+            closes = not tail and len(pipes) - 1 > evidence
+            found = line[pipes[evidence] + 1:pipes[-1] if closes else len(line)].strip()
+        slide = cells[columns["Lámina"]] if "Lámina" in columns else ""
+        where = cells[columns["Dónde"]] if "Dónde" in columns else CLAIM_ORIGINS["text"]
+        rows.append((slide, where, cells[sentence], found))
+    return rows
+
+
+def claims_with_evidence(doc: DeckDocument, previous: str = "",
+                         mark: bool = False) -> tuple[str, int, int, int]:
+    """Tabla de afirmaciones. ``previous`` = el archivo que se va a reescribir.
+
+    Una fila conserva su evidencia si es la misma afirmacion: misma lamina,
+    mismo origen y mismo texto (repetidas en una lamina, por orden). Si la
+    lamina cambio de numero, solo cuando origen y texto son unicos en ambas
+    tablas; repetida y renumerada no se adivina. Una frase que cambio pierde
+    la suya. ``mark``: la evidencia se escribio contra otro modelo u otros
+    hechos; se conserva con REVIEW_MARK al frente.
+    Devuelve (tabla, conservadas, evidencias cuya frase ya no esta, marcadas)."""
+    old = _previous_evidence(previous)
+    rows = [(str(slide), where, _md_cell(text)) for slide, where, text in claims(doc)]
+    exact: dict[tuple[str, str, str], list[int]] = {}
+    for index, entry in enumerate(old):
+        exact.setdefault(entry[:3], []).append(index)
+    source: list[Optional[int]] = []
+    for row in rows:
+        queue = exact.get(row)
+        source.append(queue.pop(0) if queue else None)
+    used = {index for index in source if index is not None}
+    loose: dict[tuple[str, str], list[int]] = {}
+    for index, entry in enumerate(old):
+        if index not in used:
+            loose.setdefault(entry[1:3], []).append(index)
+    unmatched = Counter(row[1:] for row, index in zip(rows, source) if index is None)
+    for position, row in enumerate(rows):
+        candidates = loose.get(row[1:], [])
+        if source[position] is None and len(candidates) == 1 and unmatched[row[1:]] == 1:
+            source[position] = candidates[0]
+    used = {index for index in source if index is not None}
+    kept = marked = 0
+    lines = ["| Lámina | Dónde | Frase | Evidencia |", "|---|---|---|---|"]
+    for row, index in zip(rows, source):
+        evidence = old[index][3] if index is not None else ""
+        if evidence:
+            kept += 1
+            if mark and not evidence.startswith(REVIEW_MARK):
+                evidence, marked = f"{REVIEW_MARK} {evidence}", marked + 1
+        lines.append(f"| {row[0]} | {row[1]} | {row[2]} | {evidence} |")
+    lost = sum(1 for index, entry in enumerate(old) if entry[3] and index not in used)
+    return "\n".join(lines) + "\n", kept, lost, marked
+
+
 def claims_table(doc: DeckDocument) -> str:
-    lines = ["| Lámina | Frase | Evidencia |", "|---|---|---|"]
-    lines += [f"| {slide} | {_md_cell(sentence)} |  |" for slide, sentence in claims(doc)]
-    return "\n".join(lines) + "\n"
+    return claims_with_evidence(doc)[0]
+
+
+def _evidence_anchor(book: ModelBook, facts: dict[str, Fact]) -> str:
+    """Huella de los valores del modelo y de los hechos contra los que se
+    escribio la evidencia. Por valores, no por bytes: recalcular o regenerar
+    el mismo modelo no la cambia."""
+    model = hashlib.sha256()
+    for ws in book._values.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is not None:
+                    model.update(f"{ws.title}!{cell.coordinate}={cell.value!r}\n".encode("utf-8"))
+    cited = hashlib.sha256(repr(sorted(
+        (f.key, f.value, f.unit, f.tag, f.doc, f.locator, f.quote)
+        for f in facts.values())).encode("utf-8"))
+    return f"modelo `{model.hexdigest()[:12]}`, hechos `{cited.hexdigest()[:12]}`"
+
+
+SPACE_TITLE = "Espacio"
+_STALE_MEASURE = ("la medicion guardada es de otra version del deck: corre "
+                  "measure --report de nuevo")
+
+
+def _md_section_span(text: str, title: str) -> Optional[tuple[int, int]]:
+    """(inicio, fin) de la seccion '## title': hasta el siguiente '## ' o el final."""
+    start = re.search(rf"^## {re.escape(title)}[ \t]*$", text, re.MULTILINE)
+    if start is None:
+        return None
+    following = re.search(r"^## ", text[start.end():], re.MULTILINE)
+    return start.start(), start.end() + following.start() if following else len(text)
+
+
+def _deck_digest(deck_html: Path) -> str:
+    """Huella del deck medido: une la seccion Espacio a una version del HTML."""
+    return hashlib.sha256(deck_html.read_bytes()).hexdigest()[:12]
+
+
+def _space_section(deck_html: Path, findings: Sequence[Finding], measured: bool = True) -> str:
+    lines = [f"## {SPACE_TITLE}", ""]
+    if measured:        # la huella dice de que deck habla la seccion, se haya medido o no
+        lines += [f"Deck: `{deck_html.name}`, sha256 `{_deck_digest(deck_html)}`.", ""]
+    lines += ["| Estado | Check | Detalle |", "|---|---|---|"]
+    lines += [f"| {f.mark} | {f.check} | {_md_cell(f.detail)} |" for f in findings]
+    return "\n".join(lines) + "\n\n"
+
+
+def write_space_section(report: Path, deck_html: Path, findings: Sequence[Finding]) -> None:
+    """Agrega o reemplaza la seccion Espacio (P5 a P8) del reporte de
+    verificacion, sin tocar el resto. Sin reporte, lo crea con esa seccion."""
+    text = (_read_text(report, "el reporte") if report.is_file()
+            else f"# Verificación del deck — {deck_html.name}\n\n")
+    own = _md_section_span(text, SPACE_TITLE)
+    anchor = _md_section_span(text, "Cifras y su origen")
+    if own is not None:
+        start, end = own
+    elif anchor is not None:
+        start = end = anchor[0]
+    else:
+        text = text.rstrip("\n") + "\n\n"
+        start = end = len(text)
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(text[:start] + _space_section(deck_html, findings) + text[end:],
+                      encoding="utf-8", newline="\n")
 
 
 def write_report(path: Path, deck_html: Path, groups: Sequence[tuple[str, Sequence[Finding]]],
-                 doc: DeckDocument, facts: dict[str, Fact]) -> None:
+                 doc: DeckDocument, facts: dict[str, Fact], model: Path) -> tuple[int, int, int]:
     """Reporte de verificacion del gate 2 (partes deterministas). La columna
-    Evidencia de las afirmaciones la llena quien verifica."""
+    Evidencia la llena quien verifica. Al reescribir un reporte que ya existe:
+    se conserva la evidencia de cada afirmacion que sigue igual
+    (``claims_with_evidence``); si el modelo o los hechos cambiaron desde que
+    se escribio, se conserva marcada con REVIEW_MARK; y la seccion Espacio se
+    conserva si es de este mismo deck (si es de otro, queda [pendiente]).
+    Devuelve (evidencias conservadas, evidencias cuya frase ya no esta,
+    evidencias marcadas en esta corrida)."""
+    previous = _read_text(path, "el reporte") if path.is_file() else ""
+    anchor = _evidence_anchor(ModelBook(model), facts)
+    written = _ANCHOR_LINE.search(previous)
+    table, kept, lost, marked = claims_with_evidence(
+        doc, previous, mark=written is None or written.group(1) != anchor)
     out = [f"# Verificación del deck — {deck_html.name}", ""]
     for title, findings in groups:
         out += [f"## {title}", "", "| Estado | Check | Detalle |", "|---|---|---|"]
         out += [f"| {f.mark} | {f.check} | {_md_cell(f.detail)} |" for f in findings]
         out.append("")
+    span = _md_section_span(previous, SPACE_TITLE)
+    if span is not None:
+        space = previous[span[0]:span[1]]
+        if f"sha256 `{_deck_digest(deck_html)}`" not in space:
+            space = _space_section(deck_html, [Finding(
+                "P5-P8 medicion de espacio", False, _STALE_MEASURE, pending=True)],
+                measured=False)
+        out += space.rstrip("\n").split("\n") + [""]
     out += ["## Cifras y su origen", "", "| Lámina | Texto | Origen | Formato |", "|---|---|---|---|"]
     out += [f"| {n.slide} | {_md_cell(n.text)} | `{_md_cell(n.src)}` | `{n.fmt}` |"
             for n in doc.numbers]
@@ -1566,9 +1978,12 @@ def write_report(path: Path, deck_html: Path, groups: Sequence[tuple[str, Sequen
             "|---|---|---|---|---|---|"]
     out += [f"| {f.key} | {f.value:g} {f.unit} | {f.tag} | {f.doc} | {_md_cell(f.locator)} | "
             f"{'manual' if f.manual else 'cita encontrada'} |" for f in facts.values()]
-    out += ["", "## Afirmaciones", "", claims_table(doc)]
+    out += ["", "## Afirmaciones", "", f"Evidencia cotejada contra: {anchor}.",
+            f"Una evidencia marcada `{REVIEW_MARK}` se escribió con otro modelo u otros "
+            "hechos: se coteja de nuevo y se le quita la marca.", "", table]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(out), encoding="utf-8", newline="\n")
+    return kept, lost, marked
 
 
 # ---------------------------------------------------------------------------
@@ -1817,25 +2232,71 @@ def _report(groups: Sequence[tuple[str, Sequence[Finding]]]) -> int:
     return 0
 
 
+def _coverage_of(register: Path) -> Path:
+    """Cobertura de un registro de hechos: la carpeta que contiene su research/notes/."""
+    parents = register.resolve().parents
+    if len(parents) < 3 or (parents[0].name, parents[1].name) != ("notes", "research"):
+        raise DeckError("el registro no esta en <cobertura>/research/notes/: indica --root")
+    return parents[2]
+
+
+def _write_output(out: Path, text: str, own: Callable[[str], bool]) -> None:
+    """Escribe una salida de trabajo. Un archivo que ya existe solo se reemplaza
+    si es una salida anterior del mismo comando: nada mas se pisa (R5)."""
+    if out.exists():
+        try:
+            mine = out.is_file() and own(out.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            mine = False
+        if not mine:
+            raise DeckError(f"{out.name} ya existe y no es una salida anterior de este "
+                            f"comando: elige otro nombre")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _evidence_note(kept: int, lost: int, marked: int) -> str:
+    """Lo que paso con la evidencia ya escrita al reescribir el reporte."""
+    if not kept and not lost:
+        return ""
+    return (f" (evidencia conservada: {kept}, de ellas marcadas {REVIEW_MARK} por cambio "
+            f"de modelo o hechos: {marked}; de frases que ya no estan: {lost})")
+
+
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="deck_builder.py",
-        description="Deck de cobertura por codigo: demo, auditoria de cifras, medicion "
-                    "de espacio y lista de afirmaciones.")
+        description="Deck de cobertura por codigo: demo, etiquetas del modelo, registro "
+                    "de hechos, auditoria de cifras, medicion de espacio y lista de "
+                    "afirmaciones.")
     sub = parser.add_subparsers(dest="command", required=True)
     demo = sub.add_parser("demo", help="genera un deck sintetico y lo audita")
     demo.add_argument("folder")
+    labels = sub.add_parser("labels", help="lista las etiquetas del modelo en un Markdown")
+    labels.add_argument("model")
+    labels.add_argument("out")
+    fact = sub.add_parser("facts", help="valida el registro de hechos sin construir el deck")
+    fact.add_argument("facts")
+    fact.add_argument("--root", help="carpeta de la cobertura (default: la que contiene el "
+                                     "research/notes/ del registro)")
+    fact.add_argument("--text", nargs=2, metavar=("DOC", "SALIDA"),
+                      help="vuelca a SALIDA el texto visible de DOC (ruta relativa a la "
+                           "cobertura): de ahi se copia la cita")
     audit = sub.add_parser("audit", help="cada cifra del deck contra el modelo")
     audit.add_argument("deck")
     audit.add_argument("model")
     audit.add_argument("--facts", help="registro de hechos (JSON)")
     audit.add_argument("--root", help="carpeta de la cobertura (default: dos niveles "
                                       "arriba del modelo)")
-    audit.add_argument("--design", help="brand/DESIGN.md: agrega los avisos de contraste")
-    audit.add_argument("--report", help="escribe el reporte de verificacion (Markdown)")
+    audit.add_argument("--design", help="brand/DESIGN.md: agrega los avisos de contraste "
+                                        "(si no existe, evalua la paleta neutra)")
+    audit.add_argument("--report", help="escribe el reporte de verificacion (Markdown); "
+                                        "conserva la evidencia de las frases sin cambio")
     measure = sub.add_parser("measure", help="mide el espacio de cada lamina")
     measure.add_argument("deck")
     measure.add_argument("--shots", help="carpeta para una captura por lamina")
+    measure.add_argument("--report", help="agrega o reemplaza la seccion Espacio del "
+                                          "reporte de verificacion")
     claim = sub.add_parser("claims", help="lista las frases del deck en un Markdown")
     claim.add_argument("deck")
     claim.add_argument("out")
@@ -1849,6 +2310,23 @@ def main(argv: Sequence[str]) -> int:
             print(f"[ok] deck demo -> {_ascii(deck)}")
             findings, _, _ = audit_deck(deck, model, facts)
             return _report([("Cifras", findings)])
+        if args.command == "labels":
+            book, out = ModelBook(Path(args.model)), Path(args.out)
+            sheets = model_labels(book)
+            _write_output(out, labels_report(book),
+                          lambda old: old.startswith("# Etiquetas del modelo"))
+            print(f"[ok] {sum(len(rows) for _, _, rows in sheets)} etiquetas en "
+                  f"{len(sheets)} hojas -> {_ascii(out)}")
+            return 0
+        if args.command == "facts":
+            register = Path(args.facts)
+            root = Path(args.root) if args.root else _coverage_of(register)
+            if args.text:
+                # Antes de validar: el volcado sirve justo cuando una cita no aparece.
+                text, out = source_text(root, args.text[0]), Path(args.text[1])
+                _write_output(out, text, lambda old: old == text)
+                print(f"[ok] texto visible de {_ascii(args.text[0])} -> {_ascii(out)}")
+            return _report([("Hechos", check_facts(register, root))])
         if args.command == "audit":
             deck = Path(args.deck)
             findings, doc, facts = audit_deck(
@@ -1856,19 +2334,44 @@ def main(argv: Sequence[str]) -> int:
                 Path(args.root) if args.root else None)
             groups = [("Cifras", findings)]
             if args.design:
-                if not Path(args.design).is_file():
-                    raise DeckError(f"no existe el archivo de diseno: {args.design}")
-                groups.append(("Diseno", design_findings(load_design(Path(args.design)))))
+                design = Path(args.design)
+                root = Path(args.root) if args.root else Path(args.model).resolve().parent.parent
+                # Como en Deck(design=...): la ruta puede ser relativa a la cobertura.
+                if not design.exists() and not design.is_absolute() and (root / design).exists():
+                    design = root / design
+                if design.exists() and not design.is_file():
+                    raise DeckError(f"--design no es un archivo: {args.design}")
+                # Igual que Deck(design=...): sin archivo, el estilo es el neutro.
+                title = ("Diseno" if design.is_file()
+                         else f"Diseno (paleta neutra: no existe {_ascii(design.name)})")
+                style = load_design(design)
+                if doc.palette is not None and doc.palette != _palette(style):
+                    raise DeckError(f"el deck no se genero con la paleta de --design "
+                                    f"({args.design}); usa otra paleta: revisa la ruta o "
+                                    f"regenera el deck. P9 y P10 no se evaluan sobre colores "
+                                    f"que el deck no tiene")
+                groups.append((title, design_findings(style)))
             if args.report:
-                write_report(Path(args.report), deck, groups, doc, facts)
-                print(f"[ok] reporte -> {_ascii(args.report)}")
+                carried = write_report(Path(args.report), deck, groups, doc, facts,
+                                       Path(args.model))
+                print(f"[ok] reporte -> {_ascii(args.report)}{_evidence_note(*carried)}")
             return _report(groups)
         if args.command == "measure":
-            return _report([("Espacio", measure_deck(
-                Path(args.deck), Path(args.shots) if args.shots else None))])
+            deck = Path(args.deck)
+            findings = measure_deck(deck, Path(args.shots) if args.shots else None)
+            if args.report:
+                write_space_section(Path(args.report), deck, findings)
+                print(f"[ok] seccion Espacio -> {_ascii(args.report)}")
+            return _report([("Espacio", findings)])
         doc = read_deck(_read_text(Path(args.deck), "el deck"))
-        Path(args.out).write_text(claims_table(doc), encoding="utf-8", newline="\n")
-        print(f"[ok] {len(claims(doc))} frases -> {_ascii(args.out)}")
+        out = Path(args.out)
+        if out.is_file() and any(row[3] for row in _previous_evidence(
+                _read_text(out, "la salida"))):
+            raise DeckError(f"{out.name} ya tiene evidencia escrita y no se reescribe: la "
+                            f"evidencia se conserva con audit --report; para otra tabla, "
+                            f"elige otro nombre")
+        _write_output(out, claims_table(doc), lambda old: old.startswith("| Lámina |"))
+        print(f"[ok] {len(claims(doc))} frases -> {_ascii(out)}")
         return 0
     except (DeckError, OSError) as exc:
         print(f"[x] {_ascii(exc)}")
