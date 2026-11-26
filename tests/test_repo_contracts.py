@@ -21,7 +21,7 @@ CHECKS_DOC = SKILLS_DIR / "model-standards" / "references" / "integrity-checks.m
 BUILDER = ROOT / "tools" / "xlsx_builder.py"
 CHECKER = ROOT / "tools" / "model_check.py"
 # Checks C que son escaneo por codigo (el resto son formulas de la tab Checks).
-SCANNED_C_CHECKS = {"C9", "C10"}
+SCANNED_C_CHECKS = {"C9", "C10", "C11"}
 
 # Documentos cuyas rutas citadas deben existir en el repo.
 ROUTED_DOCS = ("AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/architecture.md")
