@@ -448,11 +448,11 @@ class ModelStyler:
     # -- Valuacion: terminal normalizado, g implicita, sensibilidad ----------
 
     def _value_row(self, ws: Worksheet, row: int, col: int, label: str,
-                   formula: str, numfmt: NumFmt) -> str:
+                   formula: str, numfmt: NumFmt,
+                   role: CellRole = CellRole.FORMULA) -> str:
         """Fila de valor unico: label en B, valor en ``col`` (C por contrato)."""
         ws.cell(row=row, column=2, value=label).font = Font(name=FONT_NAME, size=11)
-        self.set_cell(ws, f"{get_column_letter(col)}{row}", formula,
-                      CellRole.FORMULA, numfmt)
+        self.set_cell(ws, f"{get_column_letter(col)}{row}", formula, role, numfmt)
         return f"${get_column_letter(col)}${row}"
 
     def _normalized_terminal(self, ws: Worksheet, row: int, col: int, *, base_ref: str,
@@ -557,14 +557,10 @@ class ModelStyler:
         refs = {"pv_explicit": pv_explicit, "pv_tv": pv_tv, "equity": equity,
                 "per_share": per_share, "tv_share": tv_share, "next_row": str(row + 5)}
         if require_positive_flows:
-            ws.cell(row=row + 5, column=2,
-                    value=f"{title}: flujos explicitos positivos").font = Font(
-                        name=FONT_NAME, size=11)
-            letter = get_column_letter(col)
-            self.set_cell(ws, f"{letter}{row + 5}",
-                          f'=IF(SUM({flow_range})<=0,"{REVIEW_FLAG}","OK")',
-                          CellRole.WARN, NumFmt.GENERAL)
-            refs["flag"] = f"${letter}${row + 5}"
+            refs["flag"] = self._value_row(
+                ws, row + 5, col, f"{title}: flujos explicitos positivos",
+                f'=IF(SUM({flow_range})<=0,"{REVIEW_FLAG}","OK")', NumFmt.GENERAL,
+                role=CellRole.WARN)
             refs["next_row"] = str(row + 6)
         return refs
 

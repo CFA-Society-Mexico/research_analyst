@@ -75,6 +75,12 @@ class ValuationBlockStructureTests(unittest.TestCase):
                 wacc=w, g=g, fcff_range="$D$5:$H$5", exponent_range="$D$6:$H$6",
                 nopat_n="$H$3", ronic="RONIC", tv_exponent="$C$7",
                 net_debt="$C$8", shares="$C$9"))
+        self.styler.equity_terminal_block(self.ws, 70, ni_ref="$T$20", g_ref="G_TERMINAL",
+                                          ke_ref="KE", roe_ref="ROE_TERMINAL")
+        self.styler.equity_value_block(
+            self.ws, 80, title="DDM", flow_range="$D$40:$H$40",
+            exponent_range="$D$30:$H$30", ke_ref="KE", tv_ref="$C$72",
+            tv_exponent_ref="$C$31", shares_ref="$C$32", require_positive_flows=True)
         for formula in _formulas(self.ws):
             with self.subTest(formula=formula):
                 self.assertEqual(M.hardcoded_literals(formula), [])
@@ -130,6 +136,8 @@ class ValuationBlockStructureTests(unittest.TestCase):
         self.assertEqual(refs["reinvestment"], "$C$70")
         self.assertEqual(refs["tv"], "$C$72")
         self.assertEqual(refs["next_row"], "73")
+        self.assertEqual(refs["flow"], "$C$71")
+        self.assertIn("NI_n", self.ws["B71"].value)
         self.assertEqual(self.ws["C70"].value,
                          '=IF(ROE_TERMINAL<=0,"n/s",G_TERMINAL/ROE_TERMINAL)')
         self.assertEqual(self.ws["C71"].value,
@@ -167,6 +175,8 @@ class ValuationBlockStructureTests(unittest.TestCase):
         self.assertEqual(refs["flag"], "$C$85")
         self.assertEqual(refs["next_row"], "86")
         self.assertEqual(self.ws["C85"].value, '=IF(SUM($D$40:$H$40)<=0,"REVISAR","OK")')
+        self.assertEqual(self.ws["B85"].value, "DDM: flujos explicitos positivos")
+        self.assertEqual(self.ws["C85"].font.color.rgb, B.Color.WARN_RED.value)
 
     def test_equity_flow_rows_subtract_payments_stored_as_positive_magnitudes(self) -> None:
         refs = self.styler.equity_flow_rows(
