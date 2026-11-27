@@ -495,17 +495,32 @@ def _snapshot_problems(data: dict[str, Any]) -> tuple[list[str], list[str]]:
     return hard, soft
 
 
+def _snapshot_order(item: Loaded) -> tuple[date, date]:
+    """Orden de vigencia de un snapshot: (``as_of``, fecha del nombre).
+
+    ``as_of`` manda. La fecha ``_YYYY-MM-DD`` del nombre solo desempata: un
+    snapshot de CORRECCION conserva legitimamente el ``as_of`` del precio que
+    corrige, y sin desempate ganaba el primero en orden alfabetico, que es el
+    mas viejo (``GFS_2026-11-25`` antes que ``GFS_2026-11-26``; ``AMZN.yaml``
+    antes que ``AMZN_2026-11-26.yaml``). Un nombre sin fecha es el mas viejo.
+    """
+    named = _DATED_SUFFIX.search(item.path.stem)
+    file_date = _date_of(named.group(0)) if named else None
+    return (_date_of((item.data or {}).get("as_of")) or date.min, file_date or date.min)
+
+
 def _current_snapshots(comps: Sequence[Loaded]) -> list[Loaded]:
-    """El snapshot vigente de cada comparable: el de ``as_of`` mas reciente
-    (mismo criterio que D3). Los anteriores son historia y no se validan."""
-    latest: dict[str, tuple[date, Loaded]] = {}
+    """El snapshot vigente de cada comparable: el de ``as_of`` mas reciente y,
+    con ``as_of`` empatado, el de fecha mas reciente en el nombre. Los
+    anteriores son historia y no se validan."""
+    latest: dict[str, tuple[tuple[date, date], Loaded]] = {}
     for item in comps:
         if item.data is None:
             continue
         key = str(item.data.get("ticker") or _DATED_SUFFIX.sub("", item.path.stem))
-        as_of = _date_of(item.data.get("as_of")) or date.min
-        if key not in latest or as_of > latest[key][0]:
-            latest[key] = (as_of, item)
+        order = _snapshot_order(item)
+        if key not in latest or order > latest[key][0]:
+            latest[key] = (order, item)
     return [item for _, item in sorted(latest.values(), key=lambda pair: pair[1].path.name)]
 
 
