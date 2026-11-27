@@ -235,6 +235,8 @@ def method_divergence_formula(values: Sequence[str], max_ratio: str) -> str:
     bloqueo -con apalancamiento cambiante FCFE y FCFF divergen de verdad- y
     jamas se promedia para ocultarlo.
     """
+    if isinstance(values, str):
+        raise TypeError("method_divergence_formula: values es una lista de refs, no un str")
     if not values:
         raise ValueError("method_divergence_formula: se necesita al menos un valor")
     args = ",".join(values)

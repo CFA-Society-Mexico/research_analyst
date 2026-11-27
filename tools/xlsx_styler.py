@@ -567,7 +567,7 @@ class ModelStyler:
     def method_consistency_block(self, ws: Worksheet, row: int, *, g_ref: str,
                                  roe_last_ref: str, dividends_last_ref: str,
                                  ni_last_ref: str, ke_equity_ref: str, ke_wacc_ref: str,
-                                 reinvestment_ref: str, net_debt_first_ref: str,
+                                 equity_reinvestment_ref: str, net_debt_first_ref: str,
                                  ebitda_first_ref: str, net_debt_last_ref: str,
                                  ebitda_last_ref: str, col: int = 3) -> dict[str, str]:
         """Diagnostico de D5: de donde suele salir la divergencia (siete filas).
@@ -578,11 +578,15 @@ class ModelStyler:
         terminal implicito contra el ultimo explicito, y deuda neta / EBITDA
         al inicio y al final del horizonte (apalancamiento cambiante = FCFE y
         FCFF divergen legitimamente). Material de entrevista, no veredicto.
+
+        ``equity_reinvestment_ref`` es ``equity_terminal_block(...)["reinvestment"]``
+        (g / ROE terminal), nunca el de Gordon del lado de la firma.
         """
         nm = NOT_MEANINGFUL
         sustainable = self._value_row(
             ws, row, col, "Crecimiento sostenible, ultimo anio explicito (ROE x retencion)",
-            f'=IF({ni_last_ref}<=0,"{nm}",'
+            f'=IF(OR(NOT(ISNUMBER({roe_last_ref})),NOT(ISNUMBER({ni_last_ref})),'
+            f'{ni_last_ref}<=0),"{nm}",'
             f"{roe_last_ref}*(1-{dividends_last_ref}/{ni_last_ref}))", NumFmt.PCT2)
         g_gap = self._value_row(
             ws, row + 1, col, "g terminal - crecimiento sostenible",
@@ -592,17 +596,20 @@ class ModelStyler:
             f"={ke_equity_ref}-{ke_wacc_ref}", NumFmt.PCT2)
         terminal_payout = self._value_row(
             ws, row + 3, col, "Payout terminal implicito (1 - g / ROE terminal)",
-            f'=IF(ISNUMBER({reinvestment_ref}),1-{reinvestment_ref},"{nm}")', NumFmt.PCT1)
+            f'=IF(ISNUMBER({equity_reinvestment_ref}),1-{equity_reinvestment_ref},"{nm}")', NumFmt.PCT1)
         last_payout = self._value_row(
             ws, row + 4, col, "Ultimo payout explicito (dividendos / NI)",
-            f'=IF({ni_last_ref}<=0,"{nm}",{dividends_last_ref}/{ni_last_ref})', NumFmt.PCT1)
+            f'=IF(OR(NOT(ISNUMBER({ni_last_ref})),{ni_last_ref}<=0),"{nm}",'
+            f"{dividends_last_ref}/{ni_last_ref})", NumFmt.PCT1)
         leverage_first = self._value_row(
             ws, row + 5, col, "Deuda neta / EBITDA, primer anio explicito",
-            f'=IF({ebitda_first_ref}<=0,"{nm}",{net_debt_first_ref}/{ebitda_first_ref})',
+            f'=IF(OR(NOT(ISNUMBER({ebitda_first_ref})),{ebitda_first_ref}<=0),"{nm}",'
+            f"{net_debt_first_ref}/{ebitda_first_ref})",
             NumFmt.DEC2)
         leverage_last = self._value_row(
             ws, row + 6, col, "Deuda neta / EBITDA, ultimo anio explicito",
-            f'=IF({ebitda_last_ref}<=0,"{nm}",{net_debt_last_ref}/{ebitda_last_ref})',
+            f'=IF(OR(NOT(ISNUMBER({ebitda_last_ref})),{ebitda_last_ref}<=0),"{nm}",'
+            f"{net_debt_last_ref}/{ebitda_last_ref})",
             NumFmt.DEC2)
         return {"sustainable_g": sustainable, "g_gap": g_gap, "ke_gap": ke_gap,
                 "terminal_payout": terminal_payout, "last_payout": last_payout,
@@ -621,7 +628,9 @@ class ModelStyler:
         y la formula los resta; los dividendos entran sin voltear. Emision y
         amortizacion son listas porque deuda y bonos vienen en lineas
         separadas. Historico y forecast: el flujo realizado es sanity visible,
-        como el FCFF.
+        como el FCFF. El principal pagado de arrendamientos es una amortizacion
+        tipo deuda y va en ``repayment_rows``; si no, el FCFE sale inflado
+        frente a un par cuyos arrendamientos no se capitalizan.
         """
         for r, text in ((row, "Dividendos al accionista"),
                         (row + 1, "FCFE (CFO - capex + emision de deuda - amortizacion)")):

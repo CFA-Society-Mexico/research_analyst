@@ -94,7 +94,7 @@ guardan los pagos (capex, dividendos, amortización de deuda) como MAGNITUD
 POSITIVA y la fórmula del modelo los resta (`xbrl-csv-rules.md` §2, check
 C11). Por eso los dividendos entran sin voltear y capex y amortización se
 restan. `issuance_rows` / `repayment_rows` son listas: deuda y bonos pueden
-venir en líneas separadas. Devuelve las refs de rango de ambas filas.
+venir en líneas separadas. Devuelve los números de fila de ambas filas (`dividends_row`, `fcfe_row`) y `next_row`: el llamador arma el rango del tramo que descuenta.
 
 ### `method_divergence_formula(values, max_ratio)` — `xlsx_formulas.py`
 
