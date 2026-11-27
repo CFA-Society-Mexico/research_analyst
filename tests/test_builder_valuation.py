@@ -168,6 +168,23 @@ class ValuationBlockStructureTests(unittest.TestCase):
         self.assertEqual(refs["next_row"], "86")
         self.assertEqual(self.ws["C85"].value, '=IF(SUM($D$40:$H$40)<=0,"REVISAR","OK")')
 
+    def test_equity_flow_rows_subtract_payments_stored_as_positive_magnitudes(self) -> None:
+        refs = self.styler.equity_flow_rows(
+            self.ws, 40, 4, 3, dividends_row=20, cfo_row=21, capex_row=22,
+            issuance_rows=[23], repayment_rows=[24, 25])
+        self.assertEqual(refs, {"dividends_row": "40", "fcfe_row": "41", "next_row": "42"})
+        self.assertEqual(self.ws["D40"].value, "=D20")             # dividendos sin voltear
+        self.assertEqual(self.ws["F40"].value, "=F20")
+        self.assertEqual(self.ws["D41"].value, "=D21-D22+D23-D24-D25")
+        self.assertEqual(self.ws["F41"].value, "=F21-F22+F23-F24-F25")
+        self.assertIsNone(self.ws["G41"].value)                    # solo n_cols columnas
+        self.assertEqual(self.ws["B40"].value, "Dividendos al accionista")
+
+    def test_equity_flow_rows_without_debt_lines(self) -> None:
+        self.styler.equity_flow_rows(self.ws, 40, 4, 1, dividends_row=20, cfo_row=21,
+                                     capex_row=22)
+        self.assertEqual(self.ws["D41"].value, "=D21-D22")
+
 
 class TransitionYearTests(unittest.TestCase):
     """Issue #41: formula propia en la primera columna del forecast, declarada."""

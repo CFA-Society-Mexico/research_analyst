@@ -12,7 +12,7 @@ captura (C9). Formato por construccion: lo que escribe pasa los checks F de
 # de ``xlsx_builder.py`` (el builder tambien se carga por ruta).
 
 from datetime import date
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from openpyxl import Workbook
 from openpyxl.comments import Comment
@@ -567,6 +567,33 @@ class ModelStyler:
             refs["flag"] = f"${letter}${row + 5}"
             refs["next_row"] = str(row + 6)
         return refs
+
+    def equity_flow_rows(self, ws: Worksheet, row: int, first_col: int, n_cols: int, *,
+                         dividends_row: int, cfo_row: int, capex_row: int,
+                         issuance_rows: Sequence[int] = (),
+                         repayment_rows: Sequence[int] = ()) -> dict[str, str]:
+        """Flujos al accionista en TODO el horizonte (dos filas, una serie = una fila).
+
+        ``Dividendos al accionista = dividendos pagados`` y
+        ``FCFE = CFO - capex + emision de deuda - amortizacion``. Signos del
+        contrato (C11): los canonicos guardan los pagos como MAGNITUD POSITIVA
+        y la formula los resta; los dividendos entran sin voltear. Emision y
+        amortizacion son listas porque deuda y bonos vienen en lineas
+        separadas. Historico y forecast: el flujo realizado es sanity visible,
+        como el FCFF.
+        """
+        for r, text in ((row, "Dividendos al accionista"),
+                        (row + 1, "FCFE (CFO - capex + emision de deuda - amortizacion)")):
+            ws.cell(row=r, column=2, value=text).font = Font(name=FONT_NAME, size=11)
+        for k in range(n_cols):
+            c = get_column_letter(first_col + k)
+            self.set_cell(ws, f"{c}{row}", f"={c}{dividends_row}", CellRole.FORMULA)
+            fcfe = (f"={c}{cfo_row}-{c}{capex_row}"
+                    + "".join(f"+{c}{r}" for r in issuance_rows)
+                    + "".join(f"-{c}{r}" for r in repayment_rows))
+            self.set_cell(ws, f"{c}{row + 1}", fcfe, CellRole.FORMULA)
+        return {"dividends_row": str(row), "fcfe_row": str(row + 1),
+                "next_row": str(row + 2)}
 
     def implied_growth_block(self, ws: Worksheet, row: int, *, title: str,
                              tv_ref: str, nopat_ref: str, wacc_ref: str,
