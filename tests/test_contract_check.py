@@ -485,6 +485,29 @@ class CompTests(_Coverage):
         self.assertTrue(finding.ok, finding.detail)
         self.assertIn("1 snapshots vigentes", finding.detail)
 
+    def test_tie_on_as_of_goes_to_the_newer_dated_file(self) -> None:
+        # Un snapshot de correccion conserva el as_of del precio. Con la fecha
+        # empatada, vigente es el archivo con la fecha mas reciente en el nombre.
+        broken = self._without(COMP_OK, "price_currency")
+        self._write("TICK/comps/MSFT.yaml", broken)                # sin fecha: el mas viejo
+        self._write("TICK/comps/MSFT_2026-11-25.yaml", broken)
+        self._write("TICK/comps/MSFT_2026-11-26.yaml", COMP_OK)    # la correccion
+        finding = self._k4()
+        self.assertTrue(finding.ok, finding.detail)
+        self.assertIn("1 snapshots vigentes", finding.detail)
+
+    def test_tie_on_as_of_does_not_hide_a_broken_correction(self) -> None:
+        # El sentido contrario: si la correccion es la rota, K4 debe verla.
+        self._write("TICK/comps/MSFT_2026-11-26.yaml", self._without(COMP_OK, "price_currency"))
+        self.assertFails(self._k4(), "MSFT_2026-11-26.yaml", "market_data sin price_currency")
+
+    def test_newer_as_of_beats_a_newer_file_name(self) -> None:
+        # as_of manda; la fecha del nombre solo desempata.
+        stale = self._without(COMP_OK, "price_currency").replace("2026-11-23 16:00 EST", "2026-11-01")
+        self._write("TICK/comps/MSFT_2026-11-26.yaml", stale)
+        finding = self._k4()                                       # MSFT.yaml (as_of 11-23) sigue vigente
+        self.assertTrue(finding.ok, finding.detail)
+
     def test_coverage_without_comps_does_not_apply(self) -> None:
         (self.coverage / "comps" / "MSFT.yaml").unlink()
         finding = self._k4()
