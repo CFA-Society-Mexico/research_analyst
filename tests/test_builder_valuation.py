@@ -109,6 +109,20 @@ class ValuationBlockStructureTests(unittest.TestCase):
         self.assertEqual(B.lint_formula(flag), [])
         self.assertEqual(M.hardcoded_literals(flag), [])
 
+    def test_gordon_terminal_cells_are_frozen_across_the_refactor(self) -> None:
+        self.styler.gordon_terminal_block(self.ws, 40, nopat_ref="$T$8", g_ref="G_TERMINAL",
+                                          wacc_ref="WACC", ronic_ref="RONIC")
+        self.assertEqual(self.ws["B40"].value, "Tasa de reinversion terminal (g / RONIC)")
+        self.assertEqual(self.ws["C40"].value, '=IF(RONIC<=0,"n/s",G_TERMINAL/RONIC)')
+        self.assertEqual(self.ws["B41"].value,
+                         "Flujo terminal normalizado (NOPAT_n x (1+g) x (1 - g/RONIC))")
+        self.assertEqual(self.ws["C41"].value,
+                         '=IF(RONIC<=0,"n/s",$T$8*(1+G_TERMINAL)*(1-G_TERMINAL/RONIC))')
+        self.assertEqual(self.ws["B42"].value, "TV Gordon (flujo terminal / (WACC - g))")
+        self.assertEqual(self.ws["C42"].value,
+                         '=IF(OR(WACC<=G_TERMINAL,NOT(ISNUMBER($C$41))),"n/s",'
+                         '$C$41/(WACC-G_TERMINAL))')
+
 
 class TransitionYearTests(unittest.TestCase):
     """Issue #41: formula propia en la primera columna del forecast, declarada."""

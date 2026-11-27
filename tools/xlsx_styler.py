@@ -449,6 +449,31 @@ class ModelStyler:
                       CellRole.FORMULA, numfmt)
         return f"${get_column_letter(col)}${row}"
 
+    def _normalized_terminal(self, ws: Worksheet, row: int, col: int, *, base_ref: str,
+                             g_ref: str, rate_ref: str, return_ref: str,
+                             labels: tuple[str, str, str]) -> dict[str, str]:
+        """Terminal de Gordon con flujo normalizado, generico (tres filas).
+
+        ``flujo = base x (1+g) x (1 - g/retorno)`` y ``TV = flujo / (tasa - g)``.
+        Lado firma: base = NOPAT_n, tasa = WACC, retorno = RONIC. Lado equity:
+        base = NI_n, tasa = ke, retorno = ROE terminal. Una sola matematica;
+        los labels dicen cual es cual. Devuelve ``reinvestment``, ``flow``,
+        ``tv`` y ``next_row``.
+        """
+        reinvestment = self._value_row(
+            ws, row, col, labels[0],
+            f'=IF({return_ref}<=0,"{NOT_MEANINGFUL}",{g_ref}/{return_ref})', NumFmt.PCT1)
+        flow = self._value_row(
+            ws, row + 1, col, labels[1],
+            f'=IF({return_ref}<=0,"{NOT_MEANINGFUL}",'
+            f"{base_ref}*(1+{g_ref})*(1-{g_ref}/{return_ref}))", NumFmt.NUM)
+        tv = self._value_row(
+            ws, row + 2, col, labels[2],
+            f'=IF(OR({rate_ref}<={g_ref},NOT(ISNUMBER({flow}))),"{NOT_MEANINGFUL}",'
+            f"{flow}/({rate_ref}-{g_ref}))", NumFmt.NUM)
+        return {"reinvestment": reinvestment, "flow": flow, "tv": tv,
+                "next_row": str(row + 3)}
+
     def gordon_terminal_block(self, ws: Worksheet, row: int, *, nopat_ref: str,
                               g_ref: str, wacc_ref: str, ronic_ref: str,
                               col: int = 3) -> dict[str, str]:
@@ -465,19 +490,12 @@ class ModelStyler:
         Devuelve las referencias absolutas ``reinvestment``, ``flow``, ``tv``
         y ``next_row``.
         """
-        reinvestment = self._value_row(
-            ws, row, col, "Tasa de reinversion terminal (g / RONIC)",
-            f'=IF({ronic_ref}<=0,"{NOT_MEANINGFUL}",{g_ref}/{ronic_ref})', NumFmt.PCT1)
-        flow = self._value_row(
-            ws, row + 1, col, "Flujo terminal normalizado (NOPAT_n x (1+g) x (1 - g/RONIC))",
-            f'=IF({ronic_ref}<=0,"{NOT_MEANINGFUL}",'
-            f"{nopat_ref}*(1+{g_ref})*(1-{g_ref}/{ronic_ref}))", NumFmt.NUM)
-        tv = self._value_row(
-            ws, row + 2, col, "TV Gordon (flujo terminal / (WACC - g))",
-            f'=IF(OR({wacc_ref}<={g_ref},NOT(ISNUMBER({flow}))),"{NOT_MEANINGFUL}",'
-            f"{flow}/({wacc_ref}-{g_ref}))", NumFmt.NUM)
-        return {"reinvestment": reinvestment, "flow": flow, "tv": tv,
-                "next_row": str(row + 3)}
+        return self._normalized_terminal(
+            ws, row, col, base_ref=nopat_ref, g_ref=g_ref, rate_ref=wacc_ref,
+            return_ref=ronic_ref,
+            labels=("Tasa de reinversion terminal (g / RONIC)",
+                    "Flujo terminal normalizado (NOPAT_n x (1+g) x (1 - g/RONIC))",
+                    "TV Gordon (flujo terminal / (WACC - g))"))
 
     def implied_growth_block(self, ws: Worksheet, row: int, *, title: str,
                              tv_ref: str, nopat_ref: str, wacc_ref: str,
