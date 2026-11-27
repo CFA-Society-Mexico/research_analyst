@@ -346,6 +346,39 @@ class LiveChecksTests(unittest.TestCase):
                 if not expect_ok:
                     self.assertIn("C1 Balance cuadra", finding.detail)
 
+    def _evaluate(self, styler: B.ModelStyler, cached_values: dict[str, object]) -> B.Finding:
+        styler.save(self.path)
+        cached = B.Workbook()
+        ws = cached.active
+        ws.title = "Checks"
+        for coord, value in cached_values.items():
+            ws[coord] = value
+        real_load = B.load_workbook
+
+        def fake_load(path: str, data_only: bool = False, **kwargs: object) -> Workbook:
+            return cached if data_only else real_load(path, data_only=False, **kwargs)
+
+        with mock.patch.object(B, "load_workbook", side_effect=fake_load):
+            return B.live_checks_finding(self.path)
+
+    def test_evaluated_review_is_a_warning_that_names_the_check(self) -> None:
+        finding = self._evaluate(self._book('=IF(D5>D6,"REVISAR","OK")'), {"C5": "REVISAR"})
+        self.assertTrue(finding.warning, finding.detail)
+        self.assertFalse(finding.blocking)
+        self.assertFalse(finding.pending)
+        self.assertIn("REVISAR", finding.detail)
+        self.assertIn("C1 Balance cuadra", finding.detail)
+
+    def test_error_still_fails_when_another_check_says_review(self) -> None:
+        styler = self._book('=IF(ABS(D5)>0.0001,"Error","OK")')
+        checks = styler.wb["Checks"]
+        checks["B6"] = "D5 convergencia de metodos"
+        styler.check_result(checks, 6, 3, '=IF(D6>D7,"REVISAR","OK")')
+        finding = self._evaluate(styler, {"C5": "Error", "C6": "REVISAR"})
+        self.assertTrue(finding.blocking, finding.detail)
+        self.assertIn("C1 Balance cuadra", finding.detail)
+
+
 
 class ExternalModelTests(unittest.TestCase):
     """F10 en un modelo que no construyo el builder: falla en el pipeline del

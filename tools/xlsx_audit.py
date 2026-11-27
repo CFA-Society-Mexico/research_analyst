@@ -28,7 +28,7 @@ from xlsx_contract import (
     Color,
     NumFmt,
 )
-from xlsx_formulas import lint_formula
+from xlsx_formulas import REVIEW_FLAG, lint_formula
 from xlsx_scan import (
     _cash_roll_violations,
     _find_cycles,
@@ -490,6 +490,7 @@ def live_checks_finding(path: str) -> Finding:
     motor real (``tools/recalc_validate.py``), estos checks estan SIN evaluar y
     el resumen por codigo no los cubre -> [pendiente]. Con valores calculados:
     cualquier ``Error`` o error de Excel (#VALUE!, #NAME?...) es falla.
+    Un ``REVISAR`` evaluado (D5, aviso por doctrina) sale [aviso]: se lista, no bloquea, y nunca tapa una falla ni un pendiente.
     """
     name = "Checks vivos (tabs Checks y Cover)"
     formulas = load_workbook(path, data_only=False)
@@ -500,6 +501,7 @@ def live_checks_finding(path: str) -> Finding:
     total = 0
     unevaluated: list[str] = []
     failing: list[str] = []
+    review: list[str] = []
     for sheet in sheets:
         ws, values = formulas[sheet], cached_book[sheet]
         for row in ws.iter_rows(max_row=min(ws.max_row, _MAX_SCAN_ROWS),
@@ -519,6 +521,8 @@ def live_checks_finding(path: str) -> Finding:
                         cached.strip().upper().startswith("ERROR")
                         or cached.strip() in _EXCEL_ERRORS):
                     failing.append(f"{where} = {cached}")
+                elif isinstance(cached, str) and cached.strip().upper() == REVIEW_FLAG:
+                    review.append(where)
     if total == 0:
         return Finding(name, True, "n/a (tabs Checks y Cover sin formulas vivas)")
     if failing:
@@ -530,6 +534,13 @@ def live_checks_finding(path: str) -> Finding:
             f"{len(unevaluated)} de {total} checks vivos SIN evaluar (formulas sin valor "
             "calculado): este reporte NO los cubre. Recalcula y valida con "
             "python tools/recalc_validate.py <modelo.xlsx>", pending=True)
+    if review:
+        return Finding(
+            name, False,
+            f"{len(review)} de {total} checks vivos en {REVIEW_FLAG} (aviso, no bloquea): "
+            + "; ".join(review[:8])
+            + (f" (+{len(review) - 8} mas)" if len(review) > 8 else ""),
+            warning=True)
     return Finding(name, True, f"{total} checks vivos evaluados, ninguno en Error")
 
 
