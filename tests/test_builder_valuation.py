@@ -178,6 +178,29 @@ class ValuationBlockStructureTests(unittest.TestCase):
         self.assertEqual(self.ws["B85"].value, "DDM: flujos explicitos positivos")
         self.assertEqual(self.ws["C85"].font.color.rgb, B.Color.WARN_RED.value)
 
+    def test_equity_value_block_discounts_the_stub_before_the_full_years(self) -> None:
+        # Stub (trimestres E del anio en curso) con su exponente f; los anios
+        # completos despues del stub en flow_range / exponent_range.
+        refs = self._value_block(stub_flow_ref="$C$38", stub_exponent_ref="$C$29",
+                                 require_positive_flows=True)
+        self.assertEqual(self.ws["C80"].value,
+                         "=$C$38/(1+KE)^$C$29+SUMPRODUCT($D$40:$H$40/(1+KE)^$D$30:$H$30)")
+        self.assertEqual(self.ws["B80"].value, "DDM: VP de los flujos explicitos")
+        self.assertEqual(self.ws["C85"].value,
+                         '=IF($C$38+SUM($D$40:$H$40)<=0,"REVISAR","OK")')
+        self.assertEqual(refs["next_row"], "86")
+        # El resto del bloque no cambia con el stub.
+        self.assertEqual(self.ws["C82"].value, '=IF(ISNUMBER($C$81),$C$80+$C$81,"n/s")')
+        for formula in _formulas(self.ws):
+            with self.subTest(formula=formula):
+                self.assertEqual(M.hardcoded_literals(formula), [])
+                self.assertEqual(B.lint_formula(formula), [])
+
+    def test_equity_value_block_stub_needs_both_flow_and_exponent(self) -> None:
+        for kwargs in ({"stub_flow_ref": "$C$38"}, {"stub_exponent_ref": "$C$29"}):
+            with self.subTest(**kwargs), self.assertRaises(ValueError):
+                self._value_block(**kwargs)
+
     def test_equity_flow_rows_subtract_payments_stored_as_positive_magnitudes(self) -> None:
         refs = self.styler.equity_flow_rows(
             self.ws, 40, 4, 3, dividends_row=20, cfo_row=21, capex_row=22,
@@ -425,6 +448,7 @@ class EquityValuationExcelTests(unittest.TestCase):
 
     NI, KE, G, ROE, SHARES = 100.0, 0.10, 0.03, 0.10, 10.0
     FLOWS = (40.0, 44.0, 48.0)
+    STUB_FLOW, STUB_F = 10.0, 0.5
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -457,8 +481,20 @@ class EquityValuationExcelTests(unittest.TestCase):
                                                                 "tv_ref": tv_bad["tv"]})
         styler.set_cell(ws, "C51", f"={ddm['per_share']}*(1+METHOD_DIVERGENCE_MAX+"
                         "METHOD_DIVERGENCE_MAX)", B.CellRole.FORMULA)     # 40% arriba
+        # Stub del anio en curso: flujo de los trimestres E con exponente f; los
+        # anios completos despues del stub descuentan a f + k y el TV a f + n.
+        ws["C57"] = cls.STUB_FLOW
+        ws["C58"] = cls.STUB_F
+        for i in range(len(cls.FLOWS)):
+            ws.cell(row=59, column=4 + i, value=cls.STUB_F + i + 1)
+        ws["C60"] = cls.STUB_F + len(cls.FLOWS)
+        stub = styler.equity_value_block(
+            ws, 62, title="DDM stub", require_positive_flows=True,
+            **{**common, "exponent_range": "$D$59:$F$59", "tv_exponent_ref": "$C$60"},
+            stub_flow_ref="$C$57", stub_exponent_ref="$C$58")
         cls.refs = {"tv": tv["tv"], "ddm": ddm["per_share"], "fcfe": fcfe["per_share"],
-                    "flag": ddm["flag"], "tv_bad": tv_bad["tv"], "bad": bad["per_share"]}
+                    "flag": ddm["flag"], "tv_bad": tv_bad["tv"], "bad": bad["per_share"],
+                    "stub": stub["per_share"], "stub_flag": stub["flag"]}
         for coord, values in (("C53", [ddm["per_share"], fcfe["per_share"]]),
                               ("C54", [ddm["per_share"], "$C$51"]),
                               ("C55", [ddm["per_share"], bad["per_share"]])):
@@ -486,6 +522,16 @@ class EquityValuationExcelTests(unittest.TestCase):
         self.assertAlmostEqual(self._v("tv"), tv, places=6)
         self.assertAlmostEqual(self._v("ddm"), expected, places=6)
         self.assertEqual(self._v("flag"), "OK")
+
+    def test_stub_year_discounts_only_the_estimated_quarters(self) -> None:
+        flow = self.NI * (1 + self.G) * (1 - self.G / self.ROE)
+        tv = flow / (self.KE - self.G)
+        f = self.STUB_F
+        pv = self.STUB_FLOW / (1 + self.KE) ** f + sum(
+            fl / (1 + self.KE) ** (f + i + 1) for i, fl in enumerate(self.FLOWS))
+        expected = (pv + tv / (1 + self.KE) ** (f + len(self.FLOWS))) / self.SHARES
+        self.assertAlmostEqual(self._v("stub"), expected, places=6)
+        self.assertEqual(self._v("stub_flag"), "OK")
 
     def test_ke_not_above_g_is_not_meaningful_never_a_number(self) -> None:
         self.assertEqual(self._v("tv_bad"), B.NOT_MEANINGFUL)

@@ -147,7 +147,13 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
 ### Secciones DDM y FCFE de `Annual` (condicionales)
 
 Viven en `Annual` debajo del DCF (no en tabs propias): los flujos y la fila
-de exponentes ya están ahí, así que stub y mid-year se heredan.
+de exponentes ya están ahí. Los exponentes (mid-year incluido) salen de la
+fila del DCF; el año en curso con trimestres observados entra como **stub**
+por `stub_flow_ref` / `stub_exponent_ref` de `equity_value_block`: el flujo
+del stub es la suma de las columnas de trimestres E del año en `Operating`
+(dividendos, o los componentes del FCFE) y su exponente, el del stub del DCF
+(`f` o `f/2`). Con stub, el rango de flujos cubre solo los años completos
+posteriores: descontar el FY completo contaría dividendos o FCFE ya pagados.
 - **Flujos desde el modelo, nunca re-tecleados** (`ModelStyler.equity_flow_rows`):
   `Dividendos al accionista = dividendos pagados` y
   `FCFE = CFO − capex + emisión de deuda − amortización`, histórico y forecast

@@ -60,20 +60,27 @@ aparta de la capacidad de pago.
 `ROE_terminal` es input `supuesto` de Assumptions; default = link a ke (el
 crecimiento terminal no crea valor), mismo criterio que RONIC = WACC.
 
-### `equity_value_block(ws, row, *, title, flow_range, exponent_range, ke_ref, tv_ref, tv_exponent_ref, shares_ref, require_positive_flows=False, col=3)`
+### `equity_value_block(ws, row, *, title, flow_range, exponent_range, ke_ref, tv_ref, tv_exponent_ref, shares_ref, require_positive_flows=False, stub_flow_ref=None, stub_exponent_ref=None, col=3)`
 
 | Fila | Label | Fórmula |
 |---|---|---|
-| 1 | {title}: VP de los flujos explícitos | `=SUMPRODUCT(flows/(1+ke)^exps)` |
+| 1 | {title}: VP de los flujos explícitos | `=SUMPRODUCT(flows/(1+ke)^exps)`; con stub, `=stub/(1+ke)^stub_exp+SUMPRODUCT(flows/(1+ke)^exps)` |
 | 2 | {title}: VP del terminal | `=IF(ISNUMBER(tv),tv/(1+ke)^tv_exp,"n/s")` |
 | 3 | {title}: valor del equity | `=IF(ISNUMBER(pv_tv),pv_exp+pv_tv,"n/s")` |
 | 4 | {title}: valor por acción | `=IF(OR(NOT(ISNUMBER(eq)),shares<=0),"n/s",eq/shares)` |
 | 5 | {title}: % del valor en el terminal | `=IF(OR(NOT(ISNUMBER(eq)),eq<=0),"n/s",pv_tv/eq)` |
-| 6 (solo si `require_positive_flows`) | {title}: flujos explícitos positivos | `=IF(SUM(flows)<=0,"REVISAR","OK")` |
+| 6 (solo si `require_positive_flows`) | {title}: flujos explícitos positivos | `=IF(SUM(flows)<=0,"REVISAR","OK")`; con stub, `=IF(stub+SUM(flows)<=0,...)` |
 
 - Sin resta de deuda neta: los flujos ya son del accionista.
 - `exponent_range` y `tv_exponent_ref` son las celdas de la fila de
-  exponentes del DCF: stub y mid-year se heredan, no se recalculan.
+  exponentes del DCF: mid-year se hereda, no se recalcula.
+- Stub (modo `quarterly`, último trimestre reportado ≠ 4Q): `stub_flow_ref`
+  es la suma de las columnas de trimestres E del año en curso en `Operating`
+  (dividendos o componentes del FCFE), escrita por el llamador como fórmula;
+  `stub_exponent_ref` es el exponente del stub del DCF. Van los dos o
+  ninguno (`ValueError`). Con stub, `flow_range` / `exponent_range` cubren
+  solo los años completos posteriores: el FY completo contaría flujos ya
+  pagados. Sin stub, la salida es idéntica a la de antes.
 - DDM llama con `require_positive_flows=True`: una emisora sin dividendos
   explícitos tiene el método mal activado en el perfil.
 - Devuelve `pv_explicit`, `pv_tv`, `equity`, `per_share`, `tv_share`,

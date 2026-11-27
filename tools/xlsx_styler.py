@@ -525,20 +525,38 @@ class ModelStyler:
                            exponent_range: str, ke_ref: str, tv_ref: str,
                            tv_exponent_ref: str, shares_ref: str,
                            require_positive_flows: bool = False,
+                           stub_flow_ref: Optional[str] = None,
+                           stub_exponent_ref: Optional[str] = None,
                            col: int = 3) -> dict[str, str]:
         """Valor del equity por flujos al accionista (DDM o FCFE), linea por linea.
 
         Cinco filas: VP de los flujos explicitos, VP del terminal, valor del
         equity, valor por accion y % del valor en el terminal. NO resta deuda
         neta: los flujos ya son del accionista. ``exponent_range`` y
-        ``tv_exponent_ref`` son celdas de la fila de exponentes del DCF, asi
-        que stub y mid-year se heredan. Con ``require_positive_flows`` (DDM)
-        una sexta fila marca ``REVISAR`` si la suma de flujos explicitos no es
-        positiva: el metodo esta mal activado en el perfil.
+        ``tv_exponent_ref`` son celdas de la fila de exponentes del DCF
+        (mid-year incluido). Con ``require_positive_flows`` (DDM) una sexta
+        fila marca ``REVISAR`` si la suma de flujos explicitos no es positiva:
+        el metodo esta mal activado en el perfil.
+
+        Stub (modo ``quarterly`` con el ultimo trimestre reportado distinto de
+        4Q): ``stub_flow_ref`` es la celda con la suma de las columnas de
+        trimestres E del anio en curso en ``Operating`` (dividendos, o los
+        componentes del FCFE), que el llamador escribe como formula;
+        ``stub_exponent_ref`` es el exponente del stub de la fila del DCF
+        (``f`` o ``f/2``). Van los dos o ninguno. Con stub, ``flow_range`` y
+        ``exponent_range`` cubren SOLO los anios completos despues del stub:
+        el FY completo del anio en curso contaria flujos ya pagados.
         """
+        if (stub_flow_ref is None) != (stub_exponent_ref is None):
+            raise ValueError("stub_flow_ref y stub_exponent_ref van juntos o ninguno")
+        explicit = f"SUMPRODUCT({flow_range}/(1+{ke_ref})^{exponent_range})"
+        flows_sum = f"SUM({flow_range})"
+        if stub_flow_ref is not None:
+            explicit = f"{stub_flow_ref}/(1+{ke_ref})^{stub_exponent_ref}+{explicit}"
+            flows_sum = f"{stub_flow_ref}+{flows_sum}"
         pv_explicit = self._value_row(
             ws, row, col, f"{title}: VP de los flujos explicitos",
-            f"=SUMPRODUCT({flow_range}/(1+{ke_ref})^{exponent_range})", NumFmt.NUM)
+            f"={explicit}", NumFmt.NUM)
         pv_tv = self._value_row(
             ws, row + 1, col, f"{title}: VP del terminal",
             f'=IF(ISNUMBER({tv_ref}),{tv_ref}/(1+{ke_ref})^{tv_exponent_ref},'
@@ -559,7 +577,7 @@ class ModelStyler:
         if require_positive_flows:
             refs["flag"] = self._value_row(
                 ws, row + 5, col, f"{title}: flujos explicitos positivos",
-                f'=IF(SUM({flow_range})<=0,"{REVIEW_FLAG}","OK")', NumFmt.GENERAL,
+                f'=IF({flows_sum}<=0,"{REVIEW_FLAG}","OK")', NumFmt.GENERAL,
                 role=CellRole.WARN)
             refs["next_row"] = str(row + 6)
         return refs
