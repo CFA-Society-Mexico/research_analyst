@@ -11,8 +11,8 @@ El football field agrega SOLO métodos activos en `issuer-profile.yaml`.
 | **Core — siempre** | DCF FCFF multi-stage, terminal DUAL | WACC (componentes), g terminal, RONIC terminal, múltiplo de salida, horizonte |
 | **Core — siempre** | Comps (EV/EBITDA, P/E, P/B, EV/Sales) | universo (viene de industry-analysis), múltiplo aplicable |
 | **Core — siempre** | Sensibilidades (cuadrícula de 2 variables, fórmula cerrada por celda) + football field | pasos de sensibilidad |
-| Dividendera estable | DDM: Gordon / two-stage / H-model | g por etapa, payout |
-| Apalancamiento estable | FCFE directo | r equity, trayectoria de deuda neta |
+| Dividendera estable | DDM sobre los dividendos del modelo + terminal de equity normalizado | payout por periodo (Assumptions), ROE terminal, ke |
+| Apalancamiento estable | FCFE sobre CFO − capex + endeudamiento neto del modelo + el mismo terminal | trayectoria de deuda (Schedules), ROE terminal, ke |
 | FIBRA / REIT | NAV + FFO/AFFO | cap rate, ajustes AFFO — convención local FIBRA [VERIFICAR] |
 | Conglomerado | SOTP | método por segmento, descuento de holding |
 | Banco (v2) | Residual income + justified P/B | r, ω persistencia — **especificado, INACTIVO v1** |
@@ -144,9 +144,33 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
   - Lectura por fila: múltiplo de mercado vs justificado — de descriptivo ("a
     cuánto cotizan") a normativo ("a cuánto deberían").
 
-### Val_DDM (condicional)
-- Gordon: V₀ = D₁/(r−g). Two-stage y H-model con etapas explícitas.
-- Consistencia: g = ROE × (1−payout) visible como check suave.
+### Secciones DDM y FCFE de `Annual` (condicionales)
+
+Viven en `Annual` debajo del DCF (no en tabs propias): los flujos y la fila
+de exponentes ya están ahí, así que stub y mid-year se heredan.
+- **Flujos desde el modelo, nunca re-tecleados** (`ModelStyler.equity_flow_rows`):
+  `Dividendos al accionista = dividendos pagados` y
+  `FCFE = CFO − capex + emisión de deuda − amortización`, histórico y forecast
+  en la misma fila. Signos del contrato C11: los pagos son magnitud positiva
+  y la fórmula los resta.
+- **Terminal de equity normalizado** (`ModelStyler.equity_terminal_block`):
+  `flujo terminal = NI_n × (1+g) × (1 − g/ROE terminal)` y
+  `TV = flujo / (ke − g)`. Es la misma matemática que el terminal de la firma
+  (NI, ke y ROE en lugar de NOPAT, WACC y RONIC) y por la misma razón:
+  perpetuar el payout del último año explícito arrastra la reinversión de una
+  empresa que todavía crece. `ROE terminal` es `supuesto` en Assumptions;
+  default = link a ke. Un solo terminal sirve a DDM y FCFE: en estado estable
+  todo el FCFE se distribuye. Consecuencia: **DDM y FCFE solo difieren en el
+  tramo explícito**; si divergen, la política de payout explícita se aparta de
+  la capacidad de pago.
+- **Valor** (`ModelStyler.equity_value_block`): VP de flujos explícitos, VP del
+  terminal, valor del equity, valor por acción y % del valor en el terminal.
+  Sin resta de deuda neta. El DDM marca `REVISAR` si sus dividendos explícitos
+  suman ≤ 0 (método mal activado en el perfil).
+- ke: link a la celda de costo de capital del bloque WACC.
+- Two-stage = horizonte explícito + terminal. El H-model ya no forma parte del
+  menú: con flujos del modelo, el crecimiento que se desvanece va dentro del
+  horizonte explícito (lección D4: alargar el horizonte, no otra etapa cerrada).
 
 ### Val_NAV_AFFO (condicional — FIBRAs)
 - FFO = NI + D&A inmobiliaria ± partidas no recurrentes; AFFO = FFO − capex de
@@ -187,3 +211,11 @@ Hamada. Cero fórmulas comprimidas. Convenciones de cada pieza:
 DDM, FCFE y RI convergen bajo supuestos idénticos. Divergencia extrema entre métodos
 activos = supuesto inconsistente entre pestañas (g, payout, ROE, r). El modelo la
 reporta y el debate la discute; nunca se resuelve promediando.
+
+D5 es fórmula viva en `Checks` (`method_divergence_formula`): dispersión
+`(MAX − MIN) / MEDIANA` de los valores por acción numéricos de los métodos
+activos contra `METHOD_DIVERGENCE_MAX` (constante con nombre, default 0.2).
+Avisa con `REVISAR`, nunca bloquea. Debajo, `method_consistency_block` muestra
+las fuentes típicas: g terminal vs ROE × retención, ke de equity vs ke del
+WACC, payout terminal implícito vs último explícito y deuda neta/EBITDA al
+inicio y al final del horizonte.

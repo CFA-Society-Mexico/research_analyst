@@ -21,7 +21,7 @@ fórmula + valuación). Menos tabs, mejor; secciones colapsables en ambas.
 | 5 | `Macro` | Históricos observados de `macro/series/` (última obs + serie anual, con fuente y fecha) + valores de macro/macro-view.yaml: los de primer nivel, o los del bloque `countries.<pais>` que el analista asignó a la emisora (moneda y mercado; se pregunta, jamás se asume). Cada celda cita su ruta (`countries.mexico.rates.risk_free_10y`) | Sin inputs propios; yaml vacío = AVISO D6, la tab nunca queda muerta |
 | — | `Rev_Reconcile` | Doble ruta de revenue: bottom-up (bloques Sch) vs top-down (Macro × industria × participación) | Divergencia > umbral → flag en error check |
 | — | `Val_Comps` | Múltiplos POR FÓRMULA desde comps/*.yaml; market cap = precio ÷ acciones por ADS × acciones × FX a la moneda de reporte; media armónica; justificados + PVGO | Staleness de snapshots flaggeada (D3); múltiplo fuera de rango marcado `REVISAR` (D12) |
-| — | `Val_<método>` | Solo métodos activos del perfil (DDM / FCFE / NAV_AFFO / SOTP) | RI: especificado, inactivo v1 |
+| — | `Val_<método>` | Solo métodos activos del perfil (NAV_AFFO / SOTP). DDM y FCFE son secciones de `Annual` | RI: especificado, inactivo v1 |
 | — | `Sensitivity` | Cuadrículas de 2 variables con **fórmula cerrada por celda** (`sensitivity_grid` del builder), aisladas. NO son data tables de Excel: openpyxl no puede crearlos y la cuadrícula quedaba vacía | Tab dedicada; la celda central reproduce el valor del modelo (check en `Checks`) |
 | — | `Summary` | Resumen ejecutivo completo (ver §Summary) | Una pantalla; solo fórmulas/links |
 
@@ -58,7 +58,7 @@ modo (la captura trimestral vive en `Operating`).
     (misma fila, tramo distinto).
 - Secciones: lectura informativa (crecimientos anuales implícitos de los
   supuestos trimestrales — calculada, NO editable) → IS → BS → CF → Ratios →
-  Schedules agregados → **DCF/Valuación**.
+  Schedules agregados → **DCF/Valuación** → **DDM / FCFE** (si activos en el perfil).
 
 ### Sección DCF — línea por línea (obligatorio; cero fórmulas comprimidas)
 
@@ -106,6 +106,18 @@ analista, y el año en curso con trimestres ya observados entra como **stub**
 reverse DCF, Hamada): los VALORES se anclan en la **columna C** (pegados a los
 labels), jamás al final del horizonte de columnas — el lector no scrollea 16
 periodos para ver el valor por acción.
+
+### Secciones DDM / FCFE (condicionales, debajo del DCF)
+
+```
+Dividendos al accionista / FCFE (equity_flow_rows)   [hist + forecast]
+Terminal de equity normalizado (equity_terminal_block, una vez)
+DDM: VP explícitos · VP terminal · equity · por acción · % terminal · flag
+FCFE: VP explícitos · VP terminal · equity · por acción · % terminal
+```
+
+Exponentes = fila de exponentes del DCF. D5 en `Checks`; diagnóstico
+(`method_consistency_block`) debajo de la última sección de equity.
 
 ## Periodicidad (`model_periodicity` del perfil)
 
