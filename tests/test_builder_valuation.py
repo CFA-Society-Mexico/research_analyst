@@ -202,6 +202,25 @@ class ValuationBlockStructureTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             B.method_divergence_formula([], "METHOD_DIVERGENCE_MAX")
 
+    def test_method_consistency_block_lists_the_usual_sources_of_divergence(self) -> None:
+        refs = self.styler.method_consistency_block(
+            self.ws, 100, g_ref="G_TERMINAL", roe_last_ref="$H$60",
+            dividends_last_ref="$H$40", ni_last_ref="$H$20", ke_equity_ref="KE",
+            ke_wacc_ref="$C$12", reinvestment_ref="$C$70", net_debt_first_ref="$D$50",
+            ebitda_first_ref="$D$15", net_debt_last_ref="$H$50", ebitda_last_ref="$H$15")
+        self.assertEqual(refs["next_row"], "107")
+        self.assertEqual(self.ws["C100"].value, '=IF($H$20<=0,"n/s",$H$60*(1-$H$40/$H$20))')
+        self.assertEqual(self.ws["C101"].value, '=IF(ISNUMBER($C$100),G_TERMINAL-$C$100,"n/s")')
+        self.assertEqual(self.ws["C102"].value, "=KE-$C$12")
+        self.assertEqual(self.ws["C103"].value, '=IF(ISNUMBER($C$70),1-$C$70,"n/s")')
+        self.assertEqual(self.ws["C104"].value, '=IF($H$20<=0,"n/s",$H$40/$H$20)')
+        self.assertEqual(self.ws["C105"].value, '=IF($D$15<=0,"n/s",$D$50/$D$15)')
+        self.assertEqual(self.ws["C106"].value, '=IF($H$15<=0,"n/s",$H$50/$H$15)')
+        for formula in _formulas(self.ws):
+            with self.subTest(formula=formula):
+                self.assertEqual(M.hardcoded_literals(formula), [])
+                self.assertEqual(B.lint_formula(formula), [])
+
 
 class TransitionYearTests(unittest.TestCase):
     """Issue #41: formula propia en la primera columna del forecast, declarada."""

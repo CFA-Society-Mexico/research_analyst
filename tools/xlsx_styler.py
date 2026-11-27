@@ -568,6 +568,51 @@ class ModelStyler:
             refs["next_row"] = str(row + 6)
         return refs
 
+    def method_consistency_block(self, ws: Worksheet, row: int, *, g_ref: str,
+                                 roe_last_ref: str, dividends_last_ref: str,
+                                 ni_last_ref: str, ke_equity_ref: str, ke_wacc_ref: str,
+                                 reinvestment_ref: str, net_debt_first_ref: str,
+                                 ebitda_first_ref: str, net_debt_last_ref: str,
+                                 ebitda_last_ref: str, col: int = 3) -> dict[str, str]:
+        """Diagnostico de D5: de donde suele salir la divergencia (siete filas).
+
+        Cero inputs nuevos, todo por referencia: g terminal contra el
+        crecimiento sostenible del ultimo anio explicito (ROE x retencion), ke
+        de los metodos de equity contra el ke del WACC (debe ser 0), payout
+        terminal implicito contra el ultimo explicito, y deuda neta / EBITDA
+        al inicio y al final del horizonte (apalancamiento cambiante = FCFE y
+        FCFF divergen legitimamente). Material de entrevista, no veredicto.
+        """
+        nm = NOT_MEANINGFUL
+        sustainable = self._value_row(
+            ws, row, col, "Crecimiento sostenible, ultimo anio explicito (ROE x retencion)",
+            f'=IF({ni_last_ref}<=0,"{nm}",'
+            f"{roe_last_ref}*(1-{dividends_last_ref}/{ni_last_ref}))", NumFmt.PCT2)
+        g_gap = self._value_row(
+            ws, row + 1, col, "g terminal - crecimiento sostenible",
+            f'=IF(ISNUMBER({sustainable}),{g_ref}-{sustainable},"{nm}")', NumFmt.PCT2)
+        ke_gap = self._value_row(
+            ws, row + 2, col, "ke de los metodos de equity - ke del WACC",
+            f"={ke_equity_ref}-{ke_wacc_ref}", NumFmt.PCT2)
+        terminal_payout = self._value_row(
+            ws, row + 3, col, "Payout terminal implicito (1 - g / ROE terminal)",
+            f'=IF(ISNUMBER({reinvestment_ref}),1-{reinvestment_ref},"{nm}")', NumFmt.PCT1)
+        last_payout = self._value_row(
+            ws, row + 4, col, "Ultimo payout explicito (dividendos / NI)",
+            f'=IF({ni_last_ref}<=0,"{nm}",{dividends_last_ref}/{ni_last_ref})', NumFmt.PCT1)
+        leverage_first = self._value_row(
+            ws, row + 5, col, "Deuda neta / EBITDA, primer anio explicito",
+            f'=IF({ebitda_first_ref}<=0,"{nm}",{net_debt_first_ref}/{ebitda_first_ref})',
+            NumFmt.DEC2)
+        leverage_last = self._value_row(
+            ws, row + 6, col, "Deuda neta / EBITDA, ultimo anio explicito",
+            f'=IF({ebitda_last_ref}<=0,"{nm}",{net_debt_last_ref}/{ebitda_last_ref})',
+            NumFmt.DEC2)
+        return {"sustainable_g": sustainable, "g_gap": g_gap, "ke_gap": ke_gap,
+                "terminal_payout": terminal_payout, "last_payout": last_payout,
+                "leverage_first": leverage_first, "leverage_last": leverage_last,
+                "next_row": str(row + 7)}
+
     def equity_flow_rows(self, ws: Worksheet, row: int, first_col: int, n_cols: int, *,
                          dividends_row: int, cfo_row: int, capex_row: int,
                          issuance_rows: Sequence[int] = (),
