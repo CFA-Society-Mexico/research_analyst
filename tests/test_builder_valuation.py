@@ -449,6 +449,12 @@ class EquityValuationExcelTests(unittest.TestCase):
     NI, KE, G, ROE, SHARES = 100.0, 0.10, 0.03, 0.10, 10.0
     FLOWS = (40.0, 44.0, 48.0)
     STUB_FLOW, STUB_F = 10.0, 0.5
+    # FCFE = CFO - capex + emision - amortizacion = dividendos (40, 44, 48):
+    # D5 sigue convergiendo, pero ahora prueba el cableado y los signos.
+    CFO = (70.0, 75.0, 80.0)
+    CAPEX = (35.0, 36.0, 37.0)
+    ISSUANCE = (10.0, 12.0, 14.0)
+    REPAYMENT = (5.0, 7.0, 9.0)
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -466,14 +472,36 @@ class EquityValuationExcelTests(unittest.TestCase):
         for i, flow in enumerate(cls.FLOWS):
             ws.cell(row=15, column=4 + i, value=flow)          # dividendos
             ws.cell(row=16, column=4 + i, value=i + 1)         # exponentes 1..3
+        # Partidas del flujo (pagos como MAGNITUD POSITIVA, contrato C11) en
+        # filas 70-73; equity_flow_rows arma dividendos y FCFE en 75-76.
+        for r, series in zip(range(70, 74), (cls.CFO, cls.CAPEX, cls.ISSUANCE,
+                                             cls.REPAYMENT)):
+            for i, value in enumerate(series):
+                ws.cell(row=r, column=4 + i, value=value)
+        flows = styler.equity_flow_rows(ws, 75, 4, len(cls.FLOWS), dividends_row=15,
+                                        cfo_row=70, capex_row=71, issuance_rows=[72],
+                                        repayment_rows=[73])
         tv = styler.equity_terminal_block(ws, 20, ni_ref="$C$8", g_ref="G_TERMINAL",
                                           ke_ref="KE", roe_ref="ROE_TERMINAL")
         common = dict(flow_range="$D$15:$F$15", exponent_range="$D$16:$F$16",
                       ke_ref="KE", tv_ref=tv["tv"], tv_exponent_ref="$C$10",
                       shares_ref="$C$9")
-        ddm = styler.equity_value_block(ws, 25, title="DDM", require_positive_flows=True,
-                                        **common)
-        fcfe = styler.equity_value_block(ws, 32, title="FCFE", **common)
+        last = B.get_column_letter(3 + len(cls.FLOWS))
+        ddm = styler.equity_value_block(
+            ws, 25, title="DDM", require_positive_flows=True,
+            **{**common, "flow_range": f"$D${flows['dividends_row']}:${last}"
+                                       f"${flows['dividends_row']}"})
+        fcfe = styler.equity_value_block(
+            ws, 32, title="FCFE",
+            **{**common, "flow_range": f"$D${flows['fcfe_row']}:${last}${flows['fcfe_row']}"})
+        cls.fcfe_row = int(flows["fcfe_row"])
+        # ROE terminal <= 0: el terminal es n/s. Acciones <= 0: por accion n/s.
+        ws["C13"] = 0.0
+        ws["C14"] = 0.0
+        tv_roe = styler.equity_terminal_block(ws, 80, ni_ref="$C$8", g_ref="G_TERMINAL",
+                                              ke_ref="KE", roe_ref="$C$13")
+        no_shares = styler.equity_value_block(ws, 84, title="sin acciones",
+                                              **{**common, "shares_ref": "$C$14"})
         # ke <= g: terminal y valor por accion en n/s
         tv_bad = styler.equity_terminal_block(ws, 40, ni_ref="$C$8", g_ref="G_TERMINAL",
                                               ke_ref="$C$12", roe_ref="ROE_TERMINAL")
@@ -494,7 +522,9 @@ class EquityValuationExcelTests(unittest.TestCase):
             stub_flow_ref="$C$57", stub_exponent_ref="$C$58")
         cls.refs = {"tv": tv["tv"], "ddm": ddm["per_share"], "fcfe": fcfe["per_share"],
                     "flag": ddm["flag"], "tv_bad": tv_bad["tv"], "bad": bad["per_share"],
-                    "stub": stub["per_share"], "stub_flag": stub["flag"]}
+                    "stub": stub["per_share"], "stub_flag": stub["flag"],
+                    "tv_roe": tv_roe["tv"], "no_shares": no_shares["per_share"],
+                    "no_shares_equity": no_shares["equity"]}
         for coord, values in (("C53", [ddm["per_share"], fcfe["per_share"]]),
                               ("C54", [ddm["per_share"], "$C$51"]),
                               ("C55", [ddm["per_share"], bad["per_share"]])):
@@ -532,6 +562,21 @@ class EquityValuationExcelTests(unittest.TestCase):
         expected = (pv + tv / (1 + self.KE) ** (f + len(self.FLOWS))) / self.SHARES
         self.assertAlmostEqual(self._v("stub"), expected, places=6)
         self.assertEqual(self._v("stub_flag"), "OK")
+
+    def test_fcfe_row_built_by_the_builder_subtracts_payments(self) -> None:
+        for i, parts in enumerate(zip(self.CFO, self.CAPEX, self.ISSUANCE, self.REPAYMENT)):
+            cfo, capex, issuance, repayment = parts
+            with self.subTest(column=i):
+                value = self.values.cell(row=self.fcfe_row, column=4 + i).value
+                self.assertAlmostEqual(value, cfo - capex + issuance - repayment, places=9)
+                self.assertAlmostEqual(value, self.FLOWS[i], places=9)
+
+    def test_terminal_roe_not_positive_is_not_meaningful(self) -> None:
+        self.assertEqual(self._v("tv_roe"), B.NOT_MEANINGFUL)
+
+    def test_shares_not_positive_is_not_meaningful_per_share(self) -> None:
+        self.assertEqual(self._v("no_shares"), B.NOT_MEANINGFUL)
+        self.assertIsInstance(self._v("no_shares_equity"), float)
 
     def test_ke_not_above_g_is_not_meaningful_never_a_number(self) -> None:
         self.assertEqual(self._v("tv_bad"), B.NOT_MEANINGFUL)
