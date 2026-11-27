@@ -59,7 +59,8 @@ Falta un contrato → detente y repórtalo; no construyas parcial ni inventes el
    DDM y FCFE (si `valuation_methods.ddm` / `.fcfe`): secciones de `Annual`
    debajo del DCF con `equity_flow_rows`, `equity_terminal_block` y
    `equity_value_block`; D5 en `Checks` con `method_divergence_formula` y su
-   diagnóstico con `method_consistency_block`.
+   diagnóstico con `method_consistency_block` en `Annual`, debajo de la
+   última sección de equity (no en `Checks`).
 6. Corre TODOS los checks de `references/integrity-checks.md`: los S, C9, C10, C11 y
    los F por código, con recálculo real (`python tools/model_check.py <modelo>
    --driver-map driver-map.md --recalc`, exit 0 exigido — nunca con un script

@@ -121,7 +121,8 @@ observados entra como stub por `stub_flow_ref` / `stub_exponent_ref` de
 `equity_value_block` (suma de los trimestres E del año en `Operating`, con el
 exponente del stub del DCF); el rango de flujos cubre entonces solo los años
 completos posteriores. D5 en `Checks`; diagnóstico
-(`method_consistency_block`) debajo de la última sección de equity.
+(`method_consistency_block`) en `Annual`, debajo de la última sección de
+equity (no en `Checks`).
 
 ## Periodicidad (`model_periodicity` del perfil)
 

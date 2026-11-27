@@ -92,6 +92,12 @@ las best practices escritas y entregó Calibri con gridlines).
    (cuadrícula con fórmula cerrada por celda — openpyxl NO crea data tables),
    `center_check_formula`, `comps_market_cap_formula`,
    `multiple_range_flag_formula` y `terminal_multiple_alarm_formula`.
+   DDM y FCFE: `equity_flow_rows` (dividendos y FCFE desde el modelo, pagos
+   restados), `equity_terminal_block` (terminal de equity normalizado con ROE
+   terminal), `equity_value_block` (valor del equity y por acción, con stub
+   del año en curso por `stub_flow_ref` / `stub_exponent_ref`),
+   `method_divergence_formula` (check D5) y `method_consistency_block`
+   (diagnóstico de D5).
    PROHIBIDO re-derivar estas fórmulas en el script de la cobertura.
 4. **Constantes**: 365, 1000 y similares como celdas etiquetadas en Assumptions
    con `define_constant` (`DAYS_YEAR`, `MM_TO_B`); las fórmulas referencian el

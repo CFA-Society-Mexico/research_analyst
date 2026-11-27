@@ -117,8 +117,9 @@ de los métodos activos (DCF FCFF siempre; DDM y FCFE si existen).
 
 ### `method_consistency_block(ws, row, *, ...)` — diagnóstico de D5
 
-Debajo de la fila D5, cero inputs nuevos, una fila por fuente típica de
-divergencia:
+En `Annual`, debajo de la última sección de equity (no en `Checks`: la fila
+D5 vive en `Checks`, su diagnóstico junto a los métodos que explica). Cero
+inputs nuevos, una fila por fuente típica de divergencia:
 
 | Fila | Qué muestra |
 |---|---|
@@ -136,7 +137,7 @@ Operating CF (dividendos pagados, CFO, capex, emisión/amortización de deuda)
   -> Annual: agregados FY por fórmula (sin cambio)
   -> equity_flow_rows (histórico + forecast)
   -> equity_terminal_block (una vez) -> equity_value_block (DDM y/o FCFE)
-  -> D5 en Checks (method_divergence_formula) + method_consistency_block
+  -> D5 en Checks (method_divergence_formula) + method_consistency_block (Annual)
 ```
 
 - `valuation_methods.ddm` / `.fcfe` del perfil deciden si la sección se
@@ -148,7 +149,8 @@ Operating CF (dividendos pagados, CFO, capex, emisión/amortización de deuda)
 ## D3 — D5 en `Checks` y en el reporte
 
 - Fila D5 en `Checks` con `method_divergence_formula`: `OK` / `REVISAR` /
-  `n/a`.
+  `n/a`. El diagnóstico (`method_consistency_block`) NO va en `Checks`: va en
+  `Annual`, debajo de la última sección de equity.
 - Hoy el escáner de checks vivos (`live_checks_finding` en
   `tools/xlsx_audit.py`, sobre `Checks` y `Cover`) solo falla con texto que empieza con
   `ERROR` o error de Excel: `REVISAR` pasa en silencio. Cambio: una celda

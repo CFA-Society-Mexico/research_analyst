@@ -172,7 +172,10 @@ posteriores: descontar el FY completo contaría dividendos o FCFE ya pagados.
 - **Valor** (`ModelStyler.equity_value_block`): VP de flujos explícitos, VP del
   terminal, valor del equity, valor por acción y % del valor en el terminal.
   Sin resta de deuda neta. El DDM marca `REVISAR` si sus dividendos explícitos
-  suman ≤ 0 (método mal activado en el perfil).
+  suman ≤ 0 (método mal activado en el perfil). Esa fila vive en `Annual` y se
+  enlaza a una fila de `Checks` (`=Annual!<celda>`) para que el reporte por
+  código la liste como `[aviso]`: el escáner de checks vivos solo lee
+  `Checks` y `Cover`.
 - ke: link a la celda de costo de capital del bloque WACC.
 - Two-stage = horizonte explícito + terminal. El H-model ya no forma parte del
   menú: con flujos del modelo, el crecimiento que se desvanece va dentro del
@@ -215,13 +218,19 @@ posteriores: descontar el FY completo contaría dividendos o FCFE ya pagados.
 ## Principio de convergencia (check D5)
 
 DDM, FCFE y RI convergen bajo supuestos idénticos. Divergencia extrema entre métodos
-activos = supuesto inconsistente entre pestañas (g, payout, ROE, r). El modelo la
-reporta y el debate la discute; nunca se resuelve promediando.
+activos = casi siempre un supuesto inconsistente entre métodos (g, payout, ROE,
+r); con apalancamiento cambiante en el horizonte, FCFE y FCFF divergen
+legítimamente. El modelo la reporta y el debate la discute; nunca se resuelve
+promediando.
 
 D5 es fórmula viva en `Checks` (`method_divergence_formula`): dispersión
 `(MAX − MIN) / MEDIANA` de los valores por acción numéricos de los métodos
 activos contra `METHOD_DIVERGENCE_MAX` (constante con nombre, default 0.2).
-Avisa con `REVISAR`, nunca bloquea. Debajo, `method_consistency_block` muestra
-las fuentes típicas: g terminal vs ROE × retención, ke de equity vs ke del
-WACC, payout terminal implícito vs último explícito y deuda neta/EBITDA al
-inicio y al final del horizonte.
+Entradas: el DCF entra UNA vez, con su valor por acción del terminal Gordon
+(no también el del múltiplo de salida, que ya cruza D4); DDM y FCFE con el
+suyo. Todos los métodos dividen entre la MISMA celda de acciones diluidas: un
+denominador distinto fabrica divergencia. Avisa con `REVISAR`, nunca bloquea.
+El diagnóstico, `method_consistency_block`, va en `Annual` debajo de la última
+sección de equity (no en `Checks`) y muestra las fuentes típicas: g terminal vs
+ROE × retención, ke de equity vs ke del WACC, payout terminal implícito vs
+último explícito y deuda neta/EBITDA al inicio y al final del horizonte.
