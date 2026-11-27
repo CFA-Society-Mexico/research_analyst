@@ -1,6 +1,6 @@
 {
   "name": "research-analyst",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Plugin de equity research para analistas CFA: estructura el trabajo de cobertura de principio a fin (folders, perfil contable IFRS/US GAAP/NIF, industria, drivers, modelo 3 estados, valuación determinista, triage de materialidad). El modelo redacta y estructura; nunca calcula ni decide.",
   "skills": "./skills",
   "author": {
