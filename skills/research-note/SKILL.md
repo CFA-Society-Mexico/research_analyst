@@ -63,9 +63,13 @@ docstring de `tools/deck_builder.py`.
 2. **Hechos** (§2). Cada dato del guion que no esté en el modelo entra al
    registro con documento, localizador y cita literal copiada del texto visible
    de la fuente. Sin fuente en la cobertura: el dato sale del guion o el
-   analista aporta el documento. Nunca de memoria.
+   analista aporta el documento. Nunca de memoria. Valida el registro con
+   `deck_builder.py facts` antes de escribir láminas; una cita que no aparece
+   se copia del volcado de `facts --text`.
 3. **Script y build** (§3 a §5). Si ya existe `build_deck.py`, guarda la copia
-   fechada primero. Escribe el script sobre el tool y córrelo. El bloqueo de
+   fechada primero. Vuelca las etiquetas del modelo con `deck_builder.py
+   labels`: de ahí salen la etiqueta exacta, la sección y la columna de cada
+   cifra. Escribe el script sobre el tool y córrelo. El bloqueo de
    cifras aplica aquí: un número suelto detiene el build y el mensaje dice la
    lámina. Se corrige el origen de la cifra, no el texto para esquivar la regla.
    `lit()` es para conteos editoriales y nombres propios, jamás para una cifra
@@ -73,10 +77,12 @@ docstring de `tools/deck_builder.py`.
    normal. La medición no decide el contenido: si para pasarla hace falta un
    visual o un hallazgo que el guion no tenía, se anota en el outline y va como
    excepción al gate 2; si cambia el argumento, vuelve al analista.
-4. **Verificación** (§6 y §7). `audit --report` y `measure --shots` hasta verde.
-   Luego evidencia frase por frase, tablas y rótulos incluidos (lo que no la
-   tenga se elimina y se regenera): con subagentes disponibles la hace uno que
-   no redactó el deck. Después, revisión de las capturas **una por una** y
+4. **Verificación** (§6 y §7). `audit --report` y `measure --shots --report`
+   hasta verde, sobre el mismo reporte. Luego evidencia fila por fila de la
+   sección "Afirmaciones", que ya lista prosa, tablas, portada y rótulos de
+   gráfica (lo que no la tenga se elimina y se regenera; la evidencia de las
+   frases que no cambian se conserva entre corridas): con subagentes
+   disponibles la hace uno que no redactó el deck. Después, revisión de las capturas **una por una** y
    pasada de texto. La medición en verde no sustituye mirar las capturas.
    Entrega al gate 2 el reporte, las capturas y la lista de excepciones (usos
    de `lit()`, hechos con verificación manual, frases eliminadas, cambios
@@ -116,6 +122,7 @@ Dos gates, ambos con `templates/debate-protocol.md` y entrada en thesis-journal.
 
 - `references/deck-format.md` — guion, registro de hechos, API del tool, regla
   de bloqueo, checks P1 a P10 y verificación: leer antes de escribir el outline.
-- `tools/deck_builder.py` — implementación única (`demo`, `audit`, `measure`,
-  `claims`); su docstring y sus firmas mandan sobre cualquier resumen.
+- `tools/deck_builder.py` — implementación única (`demo`, `labels`, `facts`,
+  `audit`, `measure`, `claims`); su docstring y sus firmas mandan sobre
+  cualquier resumen.
 - `tools/recalc_validate.py` — recálculo del modelo cuando no trae valores.

@@ -89,7 +89,7 @@ número de clientes, una fecha de evento, guidance de la dirección.
   pantalla. Un filing en iXBRL parte cada cifra con etiquetas: el tool quita las
   etiquetas y normaliza espacios antes de cotejar, así que una cita copiada del
   HTML crudo no coincide. Cita corta y exacta (la cifra con su unidad) antes que
-  una frase larga.
+  una frase larga. Ese texto visible se obtiene con `facts --text` (abajo).
 - Fuentes de texto (`.md`, `.txt`, `.htm`, `.html`, `.csv`, `.json`): si la cita
   no aparece, el tool no carga los hechos.
 - Otras fuentes (PDF): el hecho se acepta y sale como "verificación manual"
@@ -110,9 +110,30 @@ número de clientes, una fecha de evento, guidance de la dirección.
 - **Cita de una tabla:** una celda, no la fila. Al quitar las etiquetas, las
   celdas de una fila quedan separadas por un espacio (`2,192,931 58%`); una
   cita que cruza celdas es frágil.
-- **Valida temprano.** El registro se valida al crear el `Deck`: antes de
-  escribir láminas, corre un script de cinco líneas que solo construya
-  `Deck(..., facts=...)`. Cada cita que no aparezca falla ahí, con su clave.
+- **Valida temprano, sin construir un deck.** Antes de escribir láminas:
+
+  ```
+  python tools/deck_builder.py facts <hechos.json> --root <cobertura>
+  ```
+
+  Lista cada hecho con `cita encontrada`, `manual` (aviso: fuente no textual,
+  se coteja a mano) o el motivo por el que no carga; todos en una corrida, no
+  solo el primero. Sale en 1 si algún hecho no carga, y en 3 (`[pendiente]`,
+  nunca verde) si la lista está vacía. Sin `--root` toma la cobertura del
+  registro cuando éste vive en `<cobertura>/research/notes/`; en otra carpeta,
+  `--root` es obligatorio.
+- **Cita que no aparece:** se copia del texto que el tool coteja, no del HTML.
+
+  ```
+  python tools/deck_builder.py facts <hechos.json> --root <cobertura> --text <doc> <salida.txt>
+  ```
+
+  `<doc>` es la ruta de la fuente relativa a la cobertura; `<salida.txt>` va a
+  una carpeta de trabajo, no a `filings/`. El volcado sale aunque el registro
+  no valide. Son líneas de hasta 100 caracteres (una palabra más larga no se
+  parte); una cita puede cruzar un salto de línea, porque los espacios se
+  normalizan al cotejar. Si `<salida.txt>` ya existe con otro contenido, el
+  tool no lo pisa: se elige otro nombre.
 
 ## 3. El script (`research/notes/build_deck.py`)
 
@@ -174,33 +195,33 @@ puede pasarse siempre (sin archivo, estilo neutro; los slots están en
 
 El script necesita la etiqueta EXACTA de la columna B, la banda de sección
 cuando la etiqueta se repite y la letra de columna cuando la fila tiene varias
-celdas. Vuelca eso primero, a un archivo (las etiquetas llevan acentos y la
+celdas. El tool lo vuelca a un archivo (las etiquetas llevan acentos y la
 consola es ASCII-only):
 
-```python
-from pathlib import Path
-from openpyxl import load_workbook
-
-wb = load_workbook(MODEL, data_only=True)
-lines = []
-for ws in wb.worksheets:
-    lines.append(f"## {ws.title}")
-    for r in range(1, ws.max_row + 1):
-        cell = ws.cell(row=r, column=2)
-        if not (isinstance(cell.value, str) and cell.value.strip()):
-            continue
-        band = bool(cell.font and cell.font.bold and (cell.font.size or 0) >= 16)
-        nums = [c.column_letter for c in ws[r][2:]
-                if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)]
-        lines.append(f"{'SECCION ' if band else ''}{r} | {cell.value.strip()} | "
-                     f"{len(nums)} celdas {nums[:1]}..{nums[-1:]}")
-Path(OUT).write_text("\n".join(lines), encoding="utf-8")
+```
+python tools/deck_builder.py labels <modelo.xlsx> <salida.md>
 ```
 
-Es solo lectura. Una banda de sección es una etiqueta en negrita de 16 pt o
-más. Para inspeccionar un `Num` en consola usa `float(n)` y `n.src`: `print(n)`
-y `f"{n}"` devuelven un marcador interno que la consola de Windows no puede
-escribir.
+Por hoja da los periodos del eje con las claves que usa el script (`2027`,
+`3Q2026`), sus columnas y dónde empieza lo proyectado. Por etiqueta: su fila,
+si es banda de sección (negrita de 16 pt o más: lo que acepta `section=`),
+cuántas celdas numéricas tiene y entre qué columnas. La columna Nota marca:
+
+- `repetida: usa section=`: la etiqueta aparece en más de una banda.
+- `repetida en su sección` o `repetida y fuera de sección`: `section=` no las
+  separa; esas filas se leen con `deck.range(hoja, "C10:H10")`.
+- `salto de línea`: la etiqueta trae un salto dentro de la celda; en el script
+  se escribe con `\n`, como aparece en el archivo.
+- fórmulas sin valor calculado: el archivo no está recalculado (preflight de
+  `/present-coverage`).
+
+Es solo lectura sobre el modelo. La salida va a una carpeta de trabajo, no a
+`model/`; el tool solo reemplaza un archivo que sea un mapa anterior.
+
+Para inspeccionar un `Num`, `print(n)` escribe valor y origen en ASCII
+(`240.0 [Annual!H6]`). Es para depurar: `str(n)` y `repr(n)` no atan la cifra,
+y dentro de una lámina bloquean como número suelto. Lo que ata la cifra a su
+origen es el f-string, con o sin formato (`f"{n:,.0f}"`, `f"{n}"`).
 
 ### Leer del modelo
 
@@ -258,10 +279,10 @@ su título va dentro del contenido, como `<h2>`.
 |---|---|
 | `deck.bars(serie, keys=None, show=(), fmt=",.0f", scale=1.0, tick_fmt=None, w=1100, h=320)` | Observado y proyectado en colores distintos, corte rotulado. `show`: periodos con etiqueta de valor. `scale` divide (1e6 para millones) |
 | `deck.lines([(nombre, serie), ...], keys=None, show=(), fmt=".0%", tick_fmt=None, w=1100, h=320)` | Varias series, un eje. La primera fija periodos y corte |
-| `deck.football([(método, mín, máx, centro), ...], marker=(rótulo, valor), fmt=",.0f", w=1100, h=None)` | Rangos de valor; `marker` es la línea del precio |
+| `deck.football([(método, mín, máx, centro), ...], marker=(rótulo, valor), fmt=",.0f", w=1100, h=None)` | Rangos de valor; `marker` es la línea del precio. `h` reparte las filas en el alto; sin `h`, 60 por fila más 60 |
 | `deck.waterfall([(rótulo, valor), ...], total=(rótulo, valor), fmt=",.0f", w=1100, h=320)` | Puente. El total se lee del modelo, no se suma aquí |
 | `deck.heatmap(grid, rows, cols, fmt=",.0f", row_fmt=".1%", col_fmt=".1%", corner="", center=None)` | Sensibilidad. `center=(fila, columna)` marca el caso base |
-| `deck.table(header, rows)` | Celdas de texto; los números llegan formateados desde un `Num` |
+| `deck.table(header, rows)` | Celdas de texto; los números llegan formateados desde un `Num`. Columna sin cifras, a la izquierda; con cifras, a la derecha |
 
 - `keys=` recorta los periodos (una lista del eje). Etiquetar pocos puntos: los
   que sostienen el hallazgo.
@@ -274,10 +295,16 @@ su título va dentro del contenido, como `<h2>`.
 - **Componer visuales:** `visual=` es HTML; dos visuales se concatenan con `+`.
   Quedan pegados (las marcas de eje del primero parecen una fila de la tabla
   que sigue): envuelve el segundo en `<div style="margin-top:16px">…</div>`.
-- **Solo `bars`, `lines` y `waterfall` crecen con `h=`.** `table` y `heatmap`
-  miden lo que midan sus filas. En `football` las filas tienen alto fijo: un
-  `h` mayor solo agrega blanco dentro del SVG, y la medición quedaría en verde
-  con la lámina igual de vacía. No se usa para pasar P6.
+- **`bars`, `lines`, `waterfall` y `football` crecen con `h=`.** En `football`
+  el alto se reparte entre las filas: más separación y barras más gruesas. Un
+  `h` menor a 54 por fila más 60 se rechaza (las etiquetas se tocarían). `table` y
+  `heatmap` miden lo que midan sus filas. Subir `h=` llena el espacio, no
+  agrega contenido: un football de un solo método sigue siendo de un solo
+  método (regla de densidad del guion).
+- **Alineación en `table`:** la primera columna va a la izquierda. De las
+  demás, la que no trae cifras (ningún `Num` ni `lit()` en sus celdas) es de
+  texto y también va a la izquierda; las de cifras, a la derecha. Se decide por
+  columna completa: no mezcles prosa y cifras en la misma columna.
 
 ## 4. Regla de bloqueo y cuándo usar `lit()`
 
@@ -321,11 +348,12 @@ origen.
 ## 5. Construir, medir, ajustar
 
 `measure` no ajusta nada: reporta por lámina y el script se corrige. Lo normal
-son dos o tres rondas.
+son dos o tres rondas. Mientras se itera basta la consola; `--report` es para
+el cierre (sección 7).
 
 | Falla | Qué hacer |
 |---|---|
-| P6, lámina vacía (el detalle da los px libres y la altura del visual) | En `bars`, `lines` y `waterfall`: subir `h=` en esa cantidad. En `table`, `heatmap` y `football`: más filas o un segundo visual del mismo hallazgo |
+| P6, lámina vacía (el detalle da los px libres y la altura del visual) | En `bars`, `lines`, `waterfall` y `football`: subir `h=` en esa cantidad. En `table` y `heatmap`: más filas o un segundo visual del mismo hallazgo |
 | P5, contenido encimado o cortado | Bajar `h=`, acortar la Nota o la entradilla, o partir la lámina |
 | P7, desborde horizontal | Acortar el título o el rótulo; en tablas, menos columnas |
 | P8, etiqueta fuera de la gráfica o encimada con otra | Menos periodos en `show=`, otro `fmt`, rótulos de serie más cortos |
@@ -362,9 +390,18 @@ verde. Los IDs no se reciclan.
 | P9 | Contraste del texto | Razón WCAG del texto contra el fondo, mínimo 4.5 | `audit --design` | Avisa |
 | P10 | Series distinguibles con daltonismo | Distancia entre cada par de colores de serie bajo deuteranopia | `audit --design` | Avisa |
 
-P9 y P10 evalúan la marca del analista. Sin `brand/DESIGN.md` no se corren y se
-reportan `[n/a]`: la paleta neutra del tool pasa ambos por prueba del repo.
-`audit --design` con un archivo que no existe es error, no estilo neutro.
+P9 y P10 evalúan la paleta con la que se generó el deck. `audit --design
+brand/DESIGN.md` se pasa siempre, igual que `Deck(design=...)`, y la ruta
+puede ser relativa a la cobertura: con el archivo evalúa la marca del
+analista; sin él, la paleta neutra del tool (que pasa ambos por prueba del
+repo), y el título del grupo lo dice ("paleta neutra: no existe ..."). El deck
+lleva anotados sus colores: si no son los de `--design` (ruta equivocada, o
+`DESIGN.md` cambió después de generar), `audit` falla en lugar de evaluar una
+paleta que el deck no tiene. Una carpeta en lugar de un archivo es error.
+
+Subcomandos que no emiten checks P: `labels` (mapa del modelo, sección 3),
+`facts` (registro de hechos, sección 2; mismos códigos de salida) y `claims`
+(tabla de afirmaciones, sección 7).
 
 ## 7. Verificación del gate 2
 
@@ -376,28 +413,49 @@ verifica, sobre listas que el código garantiza completas.
 
 ```
 python tools/deck_builder.py audit <deck.html> <modelo.xlsx> --facts <hechos.json> --design brand/DESIGN.md --report research/notes/<ticker>-deck-verify_<fecha>.md
-python tools/deck_builder.py measure <deck.html> --shots research/notes/shots_<fecha>
+python tools/deck_builder.py measure <deck.html> --shots research/notes/shots_<fecha> --report research/notes/<ticker>-deck-verify_<fecha>.md
 ```
 
-`--design` solo si el archivo existe. Dos límites del reporte que hay que
-cubrir a mano:
+`--facts` solo si hay registro. El reporte se reescribe las veces que haga
+falta sin perder lo ya trabajado:
 
-- `--report` reescribe el archivo completo en cada corrida y borra la columna
-  de evidencia. Se llena sobre el de la ÚLTIMA corrida, cuando el deck ya no va
-  a cambiar. Mientras se itera, la evidencia vive en un archivo de trabajo:
-  `python tools/deck_builder.py claims <deck.html> <salida.md>` da la misma
-  tabla.
-- `measure` no escribe en el reporte: P5 a P8 solo salen en consola. Al cerrar,
-  se agrega al reporte una sección "Espacio" con la salida literal de la última
-  corrida de `measure`, y P9 y P10 como `[n/a]` si no hay `brand/DESIGN.md`.
+- `audit --report` conserva la columna Evidencia de cada afirmación que sigue
+  igual: misma lámina, mismo origen (columna Dónde) y mismo texto, cifras
+  incluidas. Si la lámina cambió de número, la conserva solo cuando ese texto
+  es único en la tabla; repetido y renumerado (un encabezado "Valor" en dos
+  tablas) no se adivina. Una frase que cambió pierde la suya: era evidencia de
+  otra afirmación. La consola dice cuántas se conservaron y cuántas quedaron
+  sin frase.
+- **Marca `[revisar]`.** El reporte anota la huella de los valores del modelo y
+  de los hechos. Si cambian entre corridas, la evidencia conservada sale con
+  `[revisar]` al frente: se escribió contra otros números, aunque la frase no
+  tenga ninguno ("el ritmo proyectado es menor al observado"). Se coteja de
+  nuevo y se le quita la marca a mano. Ninguna marca llega al gate 2.
+- `measure --report` agrega o reemplaza la sección "Espacio" (P5 a P8) sin
+  tocar el resto, con la huella del deck. `audit --report` la conserva
+  mientras el deck sea el mismo; si el deck cambió, la deja en `[pendiente]`
+  hasta volver a medir. Al cerrar: primero `audit --report`, después `measure
+  --report`.
+- `python tools/deck_builder.py claims <deck.html> <salida.md>` da la misma
+  tabla en un archivo aparte. No arrastra evidencia ni pisa un archivo que ya
+  la tenga: la evidencia vive en el reporte.
 
-**Evidencia por frase.** La sección "Afirmaciones" lista el texto corrido del
-deck (títulos, entradillas, Notas, cierres). **No lista** celdas ni encabezados
-de tabla, rótulos de las cifras de portada, ni rótulos de serie, de método o de
-paso en las gráficas: esos se revisan sobre el script y las capturas, con el
-mismo criterio. Cada frase recibe evidencia: la celda del modelo (ya está en
-"Cifras y su origen"), o el documento con su localizador. Una frase sin
-evidencia se elimina del script, se regenera el deck y se repite la corrida.
+**Evidencia por frase.** La sección "Afirmaciones" lista todo el texto visible
+que trae palabras, y la columna Dónde dice de dónde viene:
+
+| Dónde | Qué lista |
+|---|---|
+| `texto` | Títulos, entradillas, Notas, cierres y el texto de una lámina a medida, frase por frase |
+| `tabla` | Cada celda o encabezado con texto. Una celda que solo trae su cifra no: ya está en "Cifras y su origen" |
+| `portada` | Cada cifra de portada con su rótulo |
+| `gráfica` | Rótulos de serie, de método y de paso, el rótulo del marcador y los textos de un SVG a medida |
+
+No lista lo que pone el tool (marcas de eje, periodos, "Proyectado", número de
+página) ni la línea de fuente. Cada fila recibe evidencia: la celda del modelo
+(ya está en "Cifras y su origen"), o el documento con su localizador. En un
+rótulo, la evidencia es que dice lo mismo que la etiqueta de la fila del
+modelo. Una frase sin evidencia se elimina del script, se regenera el deck y
+se repite la corrida.
 
 Quien redactó una frase tiende a darla por buena. Si el runtime permite
 subagentes, esta parte la hace uno que no redactó el deck, con el deck, el
@@ -452,12 +510,18 @@ Sin visión en el runtime, las capturas las revisa el analista en el gate.
 - El bloqueo solo atrapa números. Una afirmación sin número pasa: queda para la
   evidencia por frase.
 - La evidencia la evalúa el asistente, a veces sobre texto que él mismo redactó.
-  El código lista todo el texto corrido; no lista tablas ni rótulos de gráfica,
-  y no garantiza que el juicio sea correcto.
-- El reporte de verificación no conserva la evidencia entre corridas ni incluye
-  la medición: ambos se agregan a mano al cerrar.
-- `football` no reparte sus filas en el alto: `h=` no sirve para llenar.
-- Atributos (`alt`, `title`) y la numeración de `<ol>` no se escanean.
+  El código lista todo el texto visible con palabras (prosa, tablas, portada y
+  gráficas); no garantiza que el juicio sea correcto.
+- La evidencia se conserva por texto exacto de la frase: cambiar una coma o una
+  cifra la suelta y hay que volver a escribirla. La marca `[revisar]` se
+  dispara con cualquier cambio de valores del modelo o de los hechos, toque o
+  no a esa frase: el tool no sabe de qué celdas depende una afirmación.
+- `facts --text` aplana la fuente: no conserva párrafos ni la forma de las
+  tablas. Sirve para copiar la cita, no para leer el documento.
+- `table` decide la alineación por columna completa: una columna que mezcla
+  prosa y cifras queda a la derecha.
+- Atributos (`alt`, `title`) y la numeración de `<ol>` no se escanean ni se
+  listan como afirmaciones.
 - Graficar hechos exige armar la `Series` a mano (`from deck_builder import
   Series`); no hay control de densidad en las tablas.
 - El umbral de 90 px de lámina vacía salió de un solo deck; se cambia con
