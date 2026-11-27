@@ -377,7 +377,79 @@ class LiveChecksTests(unittest.TestCase):
         finding = self._evaluate(styler, {"C5": "Error", "C6": "REVISAR"})
         self.assertTrue(finding.blocking, finding.detail)
         self.assertIn("C1 Balance cuadra", finding.detail)
+        self.assertFalse(finding.warning)
+        self.assertFalse(finding.pending)
 
+    def test_review_does_not_hide_unevaluated_check(self) -> None:
+        styler = self._book('=IF(ABS(D5)>0.0001,"Error","OK")')
+        checks = styler.wb["Checks"]
+        checks["B6"] = "D5 convergencia de metodos"
+        styler.check_result(checks, 6, 3, '=IF(D6>D7,"REVISAR","OK")')
+        finding = self._evaluate(styler, {"C6": "REVISAR"})   # C5 sin cachear
+        self.assertTrue(finding.pending, finding.detail)
+        self.assertFalse(finding.warning)
+        self.assertIn("SIN evaluar", finding.detail)
+
+    def test_warning_label_is_ascii_for_the_console(self) -> None:
+        styler = self._book('=IF(D5>D6,"REVISAR","OK")')
+        styler.wb["Checks"]["B5"] = "D5 convergencia de métodos ✓"
+        finding = self._evaluate(styler, {"C5": "REVISAR"})
+        self.assertTrue(finding.warning, finding.detail)
+        self.assertIn("D5 convergencia de m?todos ?", finding.detail)
+        self.assertTrue(finding.detail.isascii(), finding.detail)
+
+    def _cli_audit_with_cached(self, review_cell: str | None) -> tuple[int, str]:
+        """Audita el demo con todos los checks vivos cacheados en OK (y uno en
+        REVISAR si se pide), parcheando la lectura data_only."""
+        real = load_workbook(self.path)
+        cached = B.Workbook()
+        cached.remove(cached.active)
+        for sheet in B.LIVE_CHECK_SHEETS:
+            if sheet not in real.sheetnames:
+                continue
+            out_ws = cached.create_sheet(sheet)
+            for row in real[sheet].iter_rows():
+                for cell in row:
+                    if isinstance(cell.value, str) and cell.value.startswith("="):
+                        out_ws[cell.coordinate] = "OK"
+        if review_cell:
+            sheet, coord = review_cell.split("!")
+            cached[sheet][coord] = "REVISAR"
+        real_load = B.load_workbook
+
+        def fake_load(path: str, data_only: bool = False, **kwargs: object) -> Workbook:
+            if not data_only:
+                return real_load(path, data_only=False, **kwargs)
+            # Las demas tabs (F19 lee Annual/Operating) conservan su lectura real.
+            book = real_load(path, data_only=True, **kwargs)
+            for sheet in cached.sheetnames:
+                for row in cached[sheet].iter_rows():
+                    for cell in row:
+                        if cell.value is not None:
+                            book[sheet][cell.coordinate] = cell.value
+            return book
+
+        out = io.StringIO()
+        with mock.patch.object(B, "load_workbook", side_effect=fake_load),                 contextlib.redirect_stdout(out):
+            code = B.main(["xlsx_builder.py", "audit", self.path])
+        return code, out.getvalue()
+
+    def test_cli_audit_lists_review_as_warning_and_exits_green(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()):
+            B._demo(self.path)
+        wb = load_workbook(self.path)
+        for coord, formula in (("C7", '=IF(ABS(Operating!C27)>0,"OK","Error")'),
+                               ("C8", '=IF(Operating!C27>1,"REVISAR","OK")')):
+            wb["Checks"][coord] = formula
+            wb["Checks"][coord].font = Font(name=B.FONT_NAME, size=11)   # F2 sigue verde
+        wb.save(self.path)
+        target = "Checks!C8"
+        base_code, base_out = self._cli_audit_with_cached(None)
+        code, out = self._cli_audit_with_cached(target)
+        self.assertNotIn("[aviso] Checks vivos", base_out, base_out)
+        self.assertIn("[aviso] Checks vivos", out)
+        self.assertEqual(code, base_code, out)
+        self.assertNotIn(code, (1, 3), out)
 
 
 class ExternalModelTests(unittest.TestCase):

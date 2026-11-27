@@ -513,7 +513,8 @@ def live_checks_finding(path: str) -> Finding:
                     continue
                 total += 1
                 cached = values.cell(row=cell.row, column=cell.column).value
-                label = str(ws.cell(row=cell.row, column=2).value or "")[:40]
+                label = (str(ws.cell(row=cell.row, column=2).value or "")[:40]
+                         .encode("ascii", "replace").decode("ascii"))
                 where = f"{sheet}!{cell.coordinate}" + (f" ({label})" if label else "")
                 if cached is None:
                     unevaluated.append(where)
