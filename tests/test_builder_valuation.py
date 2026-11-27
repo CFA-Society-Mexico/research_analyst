@@ -419,5 +419,88 @@ class ExcelEvaluationTests(unittest.TestCase):
         self.assertEqual(self._v("C68"), B.REVIEW_FLAG)     # 1.0x fuera de 2x-60x
 
 
+@unittest.skipUnless(R.find_engine("excel") is R.Engine.EXCEL, "requiere Excel (COM)")
+class EquityValuationExcelTests(unittest.TestCase):
+    """DDM, FCFE y D5 evaluados con Excel."""
+
+    NI, KE, G, ROE, SHARES = 100.0, 0.10, 0.03, 0.10, 10.0
+    FLOWS = (40.0, 44.0, 48.0)
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.tmp.cleanup)
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Annual")
+        for coord, value in (("C5", cls.KE), ("C6", cls.G), ("C7", cls.ROE),
+                             ("C8", cls.NI), ("C9", cls.SHARES), ("C10", 3),
+                             ("C11", 0.2), ("C12", 0.02)):
+            ws[coord] = value
+        for name, coord in (("KE", "C5"), ("G_TERMINAL", "C6"), ("ROE_TERMINAL", "C7"),
+                            ("METHOD_DIVERGENCE_MAX", "C11")):
+            styler.define_constant(name, "Annual", coord)
+        for i, flow in enumerate(cls.FLOWS):
+            ws.cell(row=15, column=4 + i, value=flow)          # dividendos
+            ws.cell(row=16, column=4 + i, value=i + 1)         # exponentes 1..3
+        tv = styler.equity_terminal_block(ws, 20, ni_ref="$C$8", g_ref="G_TERMINAL",
+                                          ke_ref="KE", roe_ref="ROE_TERMINAL")
+        common = dict(flow_range="$D$15:$F$15", exponent_range="$D$16:$F$16",
+                      ke_ref="KE", tv_ref=tv["tv"], tv_exponent_ref="$C$10",
+                      shares_ref="$C$9")
+        ddm = styler.equity_value_block(ws, 25, title="DDM", require_positive_flows=True,
+                                        **common)
+        fcfe = styler.equity_value_block(ws, 32, title="FCFE", **common)
+        # ke <= g: terminal y valor por accion en n/s
+        tv_bad = styler.equity_terminal_block(ws, 40, ni_ref="$C$8", g_ref="G_TERMINAL",
+                                              ke_ref="$C$12", roe_ref="ROE_TERMINAL")
+        bad = styler.equity_value_block(ws, 44, title="malo", **{**common, "ke_ref": "$C$12",
+                                                                "tv_ref": tv_bad["tv"]})
+        styler.set_cell(ws, "C51", f"={ddm['per_share']}*(1+METHOD_DIVERGENCE_MAX+"
+                        "METHOD_DIVERGENCE_MAX)", B.CellRole.FORMULA)     # 40% arriba
+        cls.refs = {"tv": tv["tv"], "ddm": ddm["per_share"], "fcfe": fcfe["per_share"],
+                    "flag": ddm["flag"], "tv_bad": tv_bad["tv"], "bad": bad["per_share"]}
+        for coord, values in (("C53", [ddm["per_share"], fcfe["per_share"]]),
+                              ("C54", [ddm["per_share"], "$C$51"]),
+                              ("C55", [ddm["per_share"], bad["per_share"]])):
+            styler.set_cell(ws, coord, B.method_divergence_formula(
+                values, "METHOD_DIVERGENCE_MAX"), B.CellRole.WARN, B.NumFmt.GENERAL)
+        source = Path(cls.tmp.name) / "equity.xlsx"
+        styler.save(str(source))
+        cls.source = source
+        cls.recalculated = R.recalculate(source, Path(cls.tmp.name) / "wd", R.Engine.EXCEL)
+        cls.values = load_workbook(str(cls.recalculated), data_only=True)["Annual"]
+
+    def _v(self, key: str) -> object:
+        return self.values[self.refs.get(key, key).replace("$", "")].value
+
+    def test_excel_keeps_every_formula_the_builder_wrote(self) -> None:
+        self.assertEqual(R.formula_cells(self.source) - R.formula_cells(self.recalculated),
+                         set())
+        self.assertEqual(R.error_cells(self.recalculated), [])
+
+    def test_equity_value_per_share_matches_the_hand_calculation(self) -> None:
+        flow = self.NI * (1 + self.G) * (1 - self.G / self.ROE)
+        tv = flow / (self.KE - self.G)
+        pv = sum(f / (1 + self.KE) ** (i + 1) for i, f in enumerate(self.FLOWS))
+        expected = (pv + tv / (1 + self.KE) ** 3) / self.SHARES
+        self.assertAlmostEqual(self._v("tv"), tv, places=6)
+        self.assertAlmostEqual(self._v("ddm"), expected, places=6)
+        self.assertEqual(self._v("flag"), "OK")
+
+    def test_ke_not_above_g_is_not_meaningful_never_a_number(self) -> None:
+        self.assertEqual(self._v("tv_bad"), B.NOT_MEANINGFUL)
+        self.assertEqual(self._v("bad"), B.NOT_MEANINGFUL)
+
+    def test_d5_identical_flows_converge(self) -> None:
+        self.assertAlmostEqual(self._v("ddm"), self._v("fcfe"), places=9)
+        self.assertEqual(self._v("C53"), "OK")
+
+    def test_d5_over_threshold_warns(self) -> None:
+        self.assertEqual(self._v("C54"), B.REVIEW_FLAG)
+
+    def test_d5_with_a_single_numeric_method_is_not_applicable(self) -> None:
+        self.assertEqual(self._v("C55"), "n/a")
+
+
 if __name__ == "__main__":
     unittest.main()
