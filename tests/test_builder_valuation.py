@@ -141,6 +141,33 @@ class ValuationBlockStructureTests(unittest.TestCase):
         self.assertIn("ROE terminal", self.ws["B70"].value)
         self.assertIn("ke - g", self.ws["B72"].value)
 
+    def _value_block(self, **kwargs: object) -> dict[str, str]:
+        return self.styler.equity_value_block(
+            self.ws, 80, title="DDM", flow_range="$D$40:$H$40",
+            exponent_range="$D$30:$H$30", ke_ref="KE", tv_ref="$C$72",
+            tv_exponent_ref="$C$31", shares_ref="$C$32", **kwargs)
+
+    def test_equity_value_block_discounts_equity_flows_without_net_debt(self) -> None:
+        refs = self._value_block()
+        self.assertEqual(self.ws["C80"].value, "=SUMPRODUCT($D$40:$H$40/(1+KE)^$D$30:$H$30)")
+        self.assertEqual(self.ws["C81"].value, '=IF(ISNUMBER($C$72),$C$72/(1+KE)^$C$31,"n/s")')
+        self.assertEqual(self.ws["C82"].value, '=IF(ISNUMBER($C$81),$C$80+$C$81,"n/s")')
+        self.assertEqual(self.ws["C83"].value,
+                         '=IF(OR(NOT(ISNUMBER($C$82)),$C$32<=0),"n/s",$C$82/$C$32)')
+        self.assertEqual(self.ws["C84"].value,
+                         '=IF(OR(NOT(ISNUMBER($C$82)),$C$82<=0),"n/s",$C$81/$C$82)')
+        self.assertEqual(refs["per_share"], "$C$83")
+        self.assertEqual(refs["next_row"], "85")
+        self.assertNotIn("flag", refs)
+        self.assertIsNone(self.ws["C85"].value)
+        self.assertTrue(str(self.ws["B83"].value).startswith("DDM: "))
+
+    def test_ddm_flags_a_method_activated_without_dividends(self) -> None:
+        refs = self._value_block(require_positive_flows=True)
+        self.assertEqual(refs["flag"], "$C$85")
+        self.assertEqual(refs["next_row"], "86")
+        self.assertEqual(self.ws["C85"].value, '=IF(SUM($D$40:$H$40)<=0,"REVISAR","OK")')
+
 
 class TransitionYearTests(unittest.TestCase):
     """Issue #41: formula propia en la primera columna del forecast, declarada."""

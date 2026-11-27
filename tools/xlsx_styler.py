@@ -38,7 +38,13 @@ from xlsx_contract import (
     PeriodHeader,
     transition_year_of,
 )
-from xlsx_formulas import NO_GROWTH_BELOW_WACC, NO_REAL_SOLUTION, NOT_MEANINGFUL, lint_formula
+from xlsx_formulas import (
+    NO_GROWTH_BELOW_WACC,
+    NO_REAL_SOLUTION,
+    NOT_MEANINGFUL,
+    REVIEW_FLAG,
+    lint_formula,
+)
 from xlsx_scan import _has_quarter_header
 
 
@@ -514,6 +520,53 @@ class ModelStyler:
             labels=("Tasa de reinversion terminal del equity (g / ROE terminal)",
                     "Flujo terminal al accionista (NI_n x (1+g) x (1 - g/ROE))",
                     "TV del equity (flujo terminal / (ke - g))"))
+
+    def equity_value_block(self, ws: Worksheet, row: int, *, title: str, flow_range: str,
+                           exponent_range: str, ke_ref: str, tv_ref: str,
+                           tv_exponent_ref: str, shares_ref: str,
+                           require_positive_flows: bool = False,
+                           col: int = 3) -> dict[str, str]:
+        """Valor del equity por flujos al accionista (DDM o FCFE), linea por linea.
+
+        Cinco filas: VP de los flujos explicitos, VP del terminal, valor del
+        equity, valor por accion y % del valor en el terminal. NO resta deuda
+        neta: los flujos ya son del accionista. ``exponent_range`` y
+        ``tv_exponent_ref`` son celdas de la fila de exponentes del DCF, asi
+        que stub y mid-year se heredan. Con ``require_positive_flows`` (DDM)
+        una sexta fila marca ``REVISAR`` si la suma de flujos explicitos no es
+        positiva: el metodo esta mal activado en el perfil.
+        """
+        pv_explicit = self._value_row(
+            ws, row, col, f"{title}: VP de los flujos explicitos",
+            f"=SUMPRODUCT({flow_range}/(1+{ke_ref})^{exponent_range})", NumFmt.NUM)
+        pv_tv = self._value_row(
+            ws, row + 1, col, f"{title}: VP del terminal",
+            f'=IF(ISNUMBER({tv_ref}),{tv_ref}/(1+{ke_ref})^{tv_exponent_ref},'
+            f'"{NOT_MEANINGFUL}")', NumFmt.NUM)
+        equity = self._value_row(
+            ws, row + 2, col, f"{title}: valor del equity",
+            f'=IF(ISNUMBER({pv_tv}),{pv_explicit}+{pv_tv},"{NOT_MEANINGFUL}")', NumFmt.NUM)
+        per_share = self._value_row(
+            ws, row + 3, col, f"{title}: valor por accion",
+            f'=IF(OR(NOT(ISNUMBER({equity})),{shares_ref}<=0),"{NOT_MEANINGFUL}",'
+            f"{equity}/{shares_ref})", NumFmt.DEC2)
+        tv_share = self._value_row(
+            ws, row + 4, col, f"{title}: % del valor en el terminal",
+            f'=IF(OR(NOT(ISNUMBER({equity})),{equity}<=0),"{NOT_MEANINGFUL}",'
+            f"{pv_tv}/{equity})", NumFmt.PCT1)
+        refs = {"pv_explicit": pv_explicit, "pv_tv": pv_tv, "equity": equity,
+                "per_share": per_share, "tv_share": tv_share, "next_row": str(row + 5)}
+        if require_positive_flows:
+            ws.cell(row=row + 5, column=2,
+                    value=f"{title}: flujos explicitos positivos").font = Font(
+                        name=FONT_NAME, size=11)
+            letter = get_column_letter(col)
+            self.set_cell(ws, f"{letter}{row + 5}",
+                          f'=IF(SUM({flow_range})<=0,"{REVIEW_FLAG}","OK")',
+                          CellRole.WARN, NumFmt.GENERAL)
+            refs["flag"] = f"${letter}${row + 5}"
+            refs["next_row"] = str(row + 6)
+        return refs
 
     def implied_growth_block(self, ws: Worksheet, row: int, *, title: str,
                              tv_ref: str, nopat_ref: str, wacc_ref: str,
