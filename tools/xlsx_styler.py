@@ -497,6 +497,24 @@ class ModelStyler:
                     "Flujo terminal normalizado (NOPAT_n x (1+g) x (1 - g/RONIC))",
                     "TV Gordon (flujo terminal / (WACC - g))"))
 
+    def equity_terminal_block(self, ws: Worksheet, row: int, *, ni_ref: str, g_ref: str,
+                              ke_ref: str, roe_ref: str, col: int = 3) -> dict[str, str]:
+        """Terminal del equity con flujo NORMALIZADO (tres filas, valores en C).
+
+        ``flujo = NI_n x (1+g) x (1 - g/ROE terminal)`` y ``TV = flujo / (ke - g)``:
+        la misma matematica que el terminal de la firma con NI, ke y ROE en
+        lugar de NOPAT, WACC y RONIC. Un solo terminal sirve a DDM y FCFE: en
+        estado estable todo el FCFE se distribuye, asi que DDM y FCFE solo
+        difieren en el tramo explicito. ROE terminal es input ``supuesto`` de
+        Assumptions; default = link a ke (el crecimiento no crea valor).
+        """
+        return self._normalized_terminal(
+            ws, row, col, base_ref=ni_ref, g_ref=g_ref, rate_ref=ke_ref,
+            return_ref=roe_ref,
+            labels=("Tasa de reinversion terminal del equity (g / ROE terminal)",
+                    "Flujo terminal al accionista (NI_n x (1+g) x (1 - g/ROE))",
+                    "TV del equity (flujo terminal / (ke - g))"))
+
     def implied_growth_block(self, ws: Worksheet, row: int, *, title: str,
                              tv_ref: str, nopat_ref: str, wacc_ref: str,
                              ronic_ref: str, col: int = 3) -> dict[str, str]:

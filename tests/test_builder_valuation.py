@@ -123,6 +123,24 @@ class ValuationBlockStructureTests(unittest.TestCase):
                          '=IF(OR(WACC<=G_TERMINAL,NOT(ISNUMBER($C$41))),"n/s",'
                          '$C$41/(WACC-G_TERMINAL))')
 
+    def test_equity_terminal_normalizes_net_income_with_terminal_roe(self) -> None:
+        refs = self.styler.equity_terminal_block(
+            self.ws, 70, ni_ref="$T$20", g_ref="G_TERMINAL", ke_ref="KE",
+            roe_ref="ROE_TERMINAL")
+        self.assertEqual(refs["reinvestment"], "$C$70")
+        self.assertEqual(refs["tv"], "$C$72")
+        self.assertEqual(refs["next_row"], "73")
+        self.assertEqual(self.ws["C70"].value,
+                         '=IF(ROE_TERMINAL<=0,"n/s",G_TERMINAL/ROE_TERMINAL)')
+        self.assertEqual(self.ws["C71"].value,
+                         '=IF(ROE_TERMINAL<=0,"n/s",'
+                         '$T$20*(1+G_TERMINAL)*(1-G_TERMINAL/ROE_TERMINAL))')
+        self.assertEqual(self.ws["C72"].value,
+                         '=IF(OR(KE<=G_TERMINAL,NOT(ISNUMBER($C$71))),"n/s",'
+                         '$C$71/(KE-G_TERMINAL))')
+        self.assertIn("ROE terminal", self.ws["B70"].value)
+        self.assertIn("ke - g", self.ws["B72"].value)
+
 
 class TransitionYearTests(unittest.TestCase):
     """Issue #41: formula propia en la primera columna del forecast, declarada."""
