@@ -521,7 +521,8 @@ def live_checks_finding(path: str) -> Finding:
                 elif isinstance(cached, str) and (
                         cached.strip().upper().startswith("ERROR")
                         or cached.strip() in _EXCEL_ERRORS):
-                    failing.append(f"{where} = {cached}")
+                    shown = cached.encode("ascii", "replace").decode("ascii")
+                    failing.append(f"{where} = {shown}")
                 elif isinstance(cached, str) and cached.strip().upper() == REVIEW_FLAG:
                     review.append(where)
     if total == 0:

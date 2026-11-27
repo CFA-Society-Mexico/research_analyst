@@ -398,6 +398,13 @@ class LiveChecksTests(unittest.TestCase):
         self.assertIn("D5 convergencia de m?todos ?", finding.detail)
         self.assertTrue(finding.detail.isascii(), finding.detail)
 
+    def test_failing_cell_value_is_ascii_for_the_console(self) -> None:
+        finding = self._evaluate(self._book('=IF(ABS(D5)>0.0001,"Error","OK")'),
+                                 {"C5": "Error: balance no cuadra → revisar ✓"})
+        self.assertTrue(finding.blocking, finding.detail)
+        self.assertIn("Error: balance no cuadra ? revisar ?", finding.detail)
+        self.assertTrue(finding.detail.isascii(), finding.detail)
+
     def _cli_audit_with_cached(self, review_cell: str | None) -> tuple[int, str]:
         """Audita el demo con todos los checks vivos cacheados en OK (y uno en
         REVISAR si se pide), parcheando la lectura data_only."""
@@ -430,7 +437,8 @@ class LiveChecksTests(unittest.TestCase):
             return book
 
         out = io.StringIO()
-        with mock.patch.object(B, "load_workbook", side_effect=fake_load),                 contextlib.redirect_stdout(out):
+        with mock.patch.object(B, "load_workbook", side_effect=fake_load), \
+                contextlib.redirect_stdout(out):
             code = B.main(["xlsx_builder.py", "audit", self.path])
         return code, out.getvalue()
 
