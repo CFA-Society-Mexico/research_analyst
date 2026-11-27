@@ -185,6 +185,23 @@ class ValuationBlockStructureTests(unittest.TestCase):
                                      capex_row=22)
         self.assertEqual(self.ws["D41"].value, "=D21-D22")
 
+    def test_method_divergence_is_spread_over_median_and_only_warns(self) -> None:
+        formula = B.method_divergence_formula(["$C$90", "$C$83", "$C$95"],
+                                              "METHOD_DIVERGENCE_MAX")
+        args = "$C$90,$C$83,$C$95"
+        self.assertEqual(
+            formula,
+            f'=IF(COUNT({args})<=1,"n/a",IF(MEDIAN({args})<=0,"n/a",'
+            f'IF((MAX({args})-MIN({args}))/MEDIAN({args})>METHOD_DIVERGENCE_MAX,'
+            f'"REVISAR","OK")))')
+        self.assertNotIn('"Error"', formula)                       # aviso, nunca bloqueo
+        self.assertEqual(B.lint_formula(formula), [])
+        self.assertEqual(M.hardcoded_literals(formula), [])
+
+    def test_method_divergence_needs_at_least_one_value(self) -> None:
+        with self.assertRaises(ValueError):
+            B.method_divergence_formula([], "METHOD_DIVERGENCE_MAX")
+
 
 class TransitionYearTests(unittest.TestCase):
     """Issue #41: formula propia en la primera columna del forecast, declarada."""

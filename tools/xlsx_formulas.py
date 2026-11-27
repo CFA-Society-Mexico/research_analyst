@@ -10,6 +10,8 @@ que el builder coloca en la celda. Se importa a traves de la fachada
 # SIN ``from __future__ import annotations`` a proposito: ver el encabezado
 # de ``xlsx_builder.py`` (el builder tambien se carga por ruta).
 
+from typing import Sequence
+
 from openpyxl.formula import Tokenizer
 from openpyxl.formula.tokenizer import Token, TokenizerError
 
@@ -221,3 +223,21 @@ def center_check_formula(center: str, model_value: str) -> str:
     """La celda central de la cuadricula de sensibilidad reproduce el modelo."""
     return (f'=IF(OR(NOT(ISNUMBER({center})),NOT(ISNUMBER({model_value}))),"Error",'
             f'IF(ABS({center}-{model_value})>0.0001*MAX(1,ABS({model_value})),"Error","OK"))')
+
+
+def method_divergence_formula(values: Sequence[str], max_ratio: str) -> str:
+    """Check D5: dispersion entre los valores por accion de los metodos activos.
+
+    ``(MAX - MIN) / MEDIANA`` sobre las celdas numericas (un metodo en
+    ``n/s`` se ignora: MAX, MIN, MEDIAN y COUNT saltan texto de celdas).
+    Menos de dos numericos o mediana <= 0 => ``n/a``. Sobre ``max_ratio``
+    (constante con nombre METHOD_DIVERGENCE_MAX) => ``REVISAR``: aviso, nunca
+    bloqueo -con apalancamiento cambiante FCFE y FCFF divergen de verdad- y
+    jamas se promedia para ocultarlo.
+    """
+    if not values:
+        raise ValueError("method_divergence_formula: se necesita al menos un valor")
+    args = ",".join(values)
+    return (f'=IF(COUNT({args})<=1,"n/a",IF(MEDIAN({args})<=0,"n/a",'
+            f'IF((MAX({args})-MIN({args}))/MEDIAN({args})>{max_ratio},'
+            f'"{REVIEW_FLAG}","OK")))')
