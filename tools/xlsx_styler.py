@@ -12,7 +12,7 @@ captura (C9). Formato por construccion: lo que escribe pasa los checks F de
 # de ``xlsx_builder.py`` (el builder tambien se carga por ruta).
 
 from datetime import date
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from openpyxl import Workbook
 from openpyxl.comments import Comment
@@ -38,7 +38,13 @@ from xlsx_contract import (
     PeriodHeader,
     transition_year_of,
 )
-from xlsx_formulas import NO_GROWTH_BELOW_WACC, NO_REAL_SOLUTION, NOT_MEANINGFUL, lint_formula
+from xlsx_formulas import (
+    NO_GROWTH_BELOW_WACC,
+    NO_REAL_SOLUTION,
+    NOT_MEANINGFUL,
+    REVIEW_FLAG,
+    lint_formula,
+)
 from xlsx_scan import _has_quarter_header
 
 
@@ -442,12 +448,37 @@ class ModelStyler:
     # -- Valuacion: terminal normalizado, g implicita, sensibilidad ----------
 
     def _value_row(self, ws: Worksheet, row: int, col: int, label: str,
-                   formula: str, numfmt: NumFmt) -> str:
+                   formula: str, numfmt: NumFmt,
+                   role: CellRole = CellRole.FORMULA) -> str:
         """Fila de valor unico: label en B, valor en ``col`` (C por contrato)."""
         ws.cell(row=row, column=2, value=label).font = Font(name=FONT_NAME, size=11)
-        self.set_cell(ws, f"{get_column_letter(col)}{row}", formula,
-                      CellRole.FORMULA, numfmt)
+        self.set_cell(ws, f"{get_column_letter(col)}{row}", formula, role, numfmt)
         return f"${get_column_letter(col)}${row}"
+
+    def _normalized_terminal(self, ws: Worksheet, row: int, col: int, *, base_ref: str,
+                             g_ref: str, rate_ref: str, return_ref: str,
+                             labels: tuple[str, str, str]) -> dict[str, str]:
+        """Terminal de Gordon con flujo normalizado, generico (tres filas).
+
+        ``flujo = base x (1+g) x (1 - g/retorno)`` y ``TV = flujo / (tasa - g)``.
+        Lado firma: base = NOPAT_n, tasa = WACC, retorno = RONIC. Lado equity:
+        base = NI_n, tasa = ke, retorno = ROE terminal. Una sola matematica;
+        los labels dicen cual es cual. Devuelve ``reinvestment``, ``flow``,
+        ``tv`` y ``next_row``.
+        """
+        reinvestment = self._value_row(
+            ws, row, col, labels[0],
+            f'=IF({return_ref}<=0,"{NOT_MEANINGFUL}",{g_ref}/{return_ref})', NumFmt.PCT1)
+        flow = self._value_row(
+            ws, row + 1, col, labels[1],
+            f'=IF({return_ref}<=0,"{NOT_MEANINGFUL}",'
+            f"{base_ref}*(1+{g_ref})*(1-{g_ref}/{return_ref}))", NumFmt.NUM)
+        tv = self._value_row(
+            ws, row + 2, col, labels[2],
+            f'=IF(OR({rate_ref}<={g_ref},NOT(ISNUMBER({flow}))),"{NOT_MEANINGFUL}",'
+            f"{flow}/({rate_ref}-{g_ref}))", NumFmt.NUM)
+        return {"reinvestment": reinvestment, "flow": flow, "tv": tv,
+                "next_row": str(row + 3)}
 
     def gordon_terminal_block(self, ws: Worksheet, row: int, *, nopat_ref: str,
                               g_ref: str, wacc_ref: str, ronic_ref: str,
@@ -465,19 +496,172 @@ class ModelStyler:
         Devuelve las referencias absolutas ``reinvestment``, ``flow``, ``tv``
         y ``next_row``.
         """
-        reinvestment = self._value_row(
-            ws, row, col, "Tasa de reinversion terminal (g / RONIC)",
-            f'=IF({ronic_ref}<=0,"{NOT_MEANINGFUL}",{g_ref}/{ronic_ref})', NumFmt.PCT1)
-        flow = self._value_row(
-            ws, row + 1, col, "Flujo terminal normalizado (NOPAT_n x (1+g) x (1 - g/RONIC))",
-            f'=IF({ronic_ref}<=0,"{NOT_MEANINGFUL}",'
-            f"{nopat_ref}*(1+{g_ref})*(1-{g_ref}/{ronic_ref}))", NumFmt.NUM)
-        tv = self._value_row(
-            ws, row + 2, col, "TV Gordon (flujo terminal / (WACC - g))",
-            f'=IF(OR({wacc_ref}<={g_ref},NOT(ISNUMBER({flow}))),"{NOT_MEANINGFUL}",'
-            f"{flow}/({wacc_ref}-{g_ref}))", NumFmt.NUM)
-        return {"reinvestment": reinvestment, "flow": flow, "tv": tv,
-                "next_row": str(row + 3)}
+        return self._normalized_terminal(
+            ws, row, col, base_ref=nopat_ref, g_ref=g_ref, rate_ref=wacc_ref,
+            return_ref=ronic_ref,
+            labels=("Tasa de reinversion terminal (g / RONIC)",
+                    "Flujo terminal normalizado (NOPAT_n x (1+g) x (1 - g/RONIC))",
+                    "TV Gordon (flujo terminal / (WACC - g))"))
+
+    def equity_terminal_block(self, ws: Worksheet, row: int, *, ni_ref: str, g_ref: str,
+                              ke_ref: str, roe_ref: str, col: int = 3) -> dict[str, str]:
+        """Terminal del equity con flujo NORMALIZADO (tres filas, valores en C).
+
+        ``flujo = NI_n x (1+g) x (1 - g/ROE terminal)`` y ``TV = flujo / (ke - g)``:
+        la misma matematica que el terminal de la firma con NI, ke y ROE en
+        lugar de NOPAT, WACC y RONIC. Un solo terminal sirve a DDM y FCFE: en
+        estado estable todo el FCFE se distribuye, asi que DDM y FCFE solo
+        difieren en el tramo explicito. ROE terminal es input ``supuesto`` de
+        Assumptions; default = link a ke (el crecimiento no crea valor).
+        """
+        return self._normalized_terminal(
+            ws, row, col, base_ref=ni_ref, g_ref=g_ref, rate_ref=ke_ref,
+            return_ref=roe_ref,
+            labels=("Tasa de reinversion terminal del equity (g / ROE terminal)",
+                    "Flujo terminal al accionista (NI_n x (1+g) x (1 - g/ROE))",
+                    "TV del equity (flujo terminal / (ke - g))"))
+
+    def equity_value_block(self, ws: Worksheet, row: int, *, title: str, flow_range: str,
+                           exponent_range: str, ke_ref: str, tv_ref: str,
+                           tv_exponent_ref: str, shares_ref: str,
+                           require_positive_flows: bool = False,
+                           stub_flow_ref: Optional[str] = None,
+                           stub_exponent_ref: Optional[str] = None,
+                           col: int = 3) -> dict[str, str]:
+        """Valor del equity por flujos al accionista (DDM o FCFE), linea por linea.
+
+        Cinco filas: VP de los flujos explicitos, VP del terminal, valor del
+        equity, valor por accion y % del valor en el terminal. NO resta deuda
+        neta: los flujos ya son del accionista. ``exponent_range`` y
+        ``tv_exponent_ref`` son celdas de la fila de exponentes del DCF
+        (mid-year incluido). Con ``require_positive_flows`` (DDM) una sexta
+        fila marca ``REVISAR`` si la suma de flujos explicitos no es positiva:
+        el metodo esta mal activado en el perfil.
+
+        Stub (modo ``quarterly`` con el ultimo trimestre reportado distinto de
+        4Q): ``stub_flow_ref`` es la celda con la suma de las columnas de
+        trimestres E del anio en curso en ``Operating`` (dividendos, o los
+        componentes del FCFE), que el llamador escribe como formula;
+        ``stub_exponent_ref`` es el exponente del stub de la fila del DCF
+        (``f`` o ``f/2``). Van los dos o ninguno. Con stub, ``flow_range`` y
+        ``exponent_range`` cubren SOLO los anios completos despues del stub:
+        el FY completo del anio en curso contaria flujos ya pagados.
+        """
+        if (stub_flow_ref is None) != (stub_exponent_ref is None):
+            raise ValueError("stub_flow_ref y stub_exponent_ref van juntos o ninguno")
+        explicit = f"SUMPRODUCT({flow_range}/(1+{ke_ref})^{exponent_range})"
+        flows_sum = f"SUM({flow_range})"
+        if stub_flow_ref is not None:
+            explicit = f"{stub_flow_ref}/(1+{ke_ref})^{stub_exponent_ref}+{explicit}"
+            flows_sum = f"{stub_flow_ref}+{flows_sum}"
+        pv_explicit = self._value_row(
+            ws, row, col, f"{title}: VP de los flujos explicitos",
+            f"={explicit}", NumFmt.NUM)
+        pv_tv = self._value_row(
+            ws, row + 1, col, f"{title}: VP del terminal",
+            f'=IF(ISNUMBER({tv_ref}),{tv_ref}/(1+{ke_ref})^{tv_exponent_ref},'
+            f'"{NOT_MEANINGFUL}")', NumFmt.NUM)
+        equity = self._value_row(
+            ws, row + 2, col, f"{title}: valor del equity",
+            f'=IF(ISNUMBER({pv_tv}),{pv_explicit}+{pv_tv},"{NOT_MEANINGFUL}")', NumFmt.NUM)
+        per_share = self._value_row(
+            ws, row + 3, col, f"{title}: valor por accion",
+            f'=IF(OR(NOT(ISNUMBER({equity})),{shares_ref}<=0),"{NOT_MEANINGFUL}",'
+            f"{equity}/{shares_ref})", NumFmt.DEC2)
+        tv_share = self._value_row(
+            ws, row + 4, col, f"{title}: % del valor en el terminal",
+            f'=IF(OR(NOT(ISNUMBER({equity})),{equity}<=0),"{NOT_MEANINGFUL}",'
+            f"{pv_tv}/{equity})", NumFmt.PCT1)
+        refs = {"pv_explicit": pv_explicit, "pv_tv": pv_tv, "equity": equity,
+                "per_share": per_share, "tv_share": tv_share, "next_row": str(row + 5)}
+        if require_positive_flows:
+            refs["flag"] = self._value_row(
+                ws, row + 5, col, f"{title}: flujos explicitos positivos",
+                f'=IF({flows_sum}<=0,"{REVIEW_FLAG}","OK")', NumFmt.GENERAL,
+                role=CellRole.WARN)
+            refs["next_row"] = str(row + 6)
+        return refs
+
+    def method_consistency_block(self, ws: Worksheet, row: int, *, g_ref: str,
+                                 roe_last_ref: str, dividends_last_ref: str,
+                                 ni_last_ref: str, ke_equity_ref: str, ke_wacc_ref: str,
+                                 equity_reinvestment_ref: str, net_debt_first_ref: str,
+                                 ebitda_first_ref: str, net_debt_last_ref: str,
+                                 ebitda_last_ref: str, col: int = 3) -> dict[str, str]:
+        """Diagnostico de D5: de donde suele salir la divergencia (siete filas).
+
+        Cero inputs nuevos, todo por referencia: g terminal contra el
+        crecimiento sostenible del ultimo anio explicito (ROE x retencion), ke
+        de los metodos de equity contra el ke del WACC (debe ser 0), payout
+        terminal implicito contra el ultimo explicito, y deuda neta / EBITDA
+        al inicio y al final del horizonte (apalancamiento cambiante = FCFE y
+        FCFF divergen legitimamente). Material de entrevista, no veredicto.
+
+        ``equity_reinvestment_ref`` es ``equity_terminal_block(...)["reinvestment"]``
+        (g / ROE terminal), nunca el de Gordon del lado de la firma.
+        """
+        nm = NOT_MEANINGFUL
+        sustainable = self._value_row(
+            ws, row, col, "Crecimiento sostenible, ultimo anio explicito (ROE x retencion)",
+            f'=IF(OR(NOT(ISNUMBER({roe_last_ref})),NOT(ISNUMBER({ni_last_ref})),'
+            f'{ni_last_ref}<=0),"{nm}",'
+            f"{roe_last_ref}*(1-{dividends_last_ref}/{ni_last_ref}))", NumFmt.PCT2)
+        g_gap = self._value_row(
+            ws, row + 1, col, "g terminal - crecimiento sostenible",
+            f'=IF(ISNUMBER({sustainable}),{g_ref}-{sustainable},"{nm}")', NumFmt.PCT2)
+        ke_gap = self._value_row(
+            ws, row + 2, col, "ke de los metodos de equity - ke del WACC",
+            f"={ke_equity_ref}-{ke_wacc_ref}", NumFmt.PCT2)
+        terminal_payout = self._value_row(
+            ws, row + 3, col, "Payout terminal implicito (1 - g / ROE terminal)",
+            f'=IF(ISNUMBER({equity_reinvestment_ref}),1-{equity_reinvestment_ref},"{nm}")', NumFmt.PCT1)
+        last_payout = self._value_row(
+            ws, row + 4, col, "Ultimo payout explicito (dividendos / NI)",
+            f'=IF(OR(NOT(ISNUMBER({ni_last_ref})),{ni_last_ref}<=0),"{nm}",'
+            f"{dividends_last_ref}/{ni_last_ref})", NumFmt.PCT1)
+        leverage_first = self._value_row(
+            ws, row + 5, col, "Deuda neta / EBITDA, primer anio explicito",
+            f'=IF(OR(NOT(ISNUMBER({ebitda_first_ref})),{ebitda_first_ref}<=0),"{nm}",'
+            f"{net_debt_first_ref}/{ebitda_first_ref})",
+            NumFmt.DEC2)
+        leverage_last = self._value_row(
+            ws, row + 6, col, "Deuda neta / EBITDA, ultimo anio explicito",
+            f'=IF(OR(NOT(ISNUMBER({ebitda_last_ref})),{ebitda_last_ref}<=0),"{nm}",'
+            f"{net_debt_last_ref}/{ebitda_last_ref})",
+            NumFmt.DEC2)
+        return {"sustainable_g": sustainable, "g_gap": g_gap, "ke_gap": ke_gap,
+                "terminal_payout": terminal_payout, "last_payout": last_payout,
+                "leverage_first": leverage_first, "leverage_last": leverage_last,
+                "next_row": str(row + 7)}
+
+    def equity_flow_rows(self, ws: Worksheet, row: int, first_col: int, n_cols: int, *,
+                         dividends_row: int, cfo_row: int, capex_row: int,
+                         issuance_rows: Sequence[int] = (),
+                         repayment_rows: Sequence[int] = ()) -> dict[str, str]:
+        """Flujos al accionista en TODO el horizonte (dos filas, una serie = una fila).
+
+        ``Dividendos al accionista = dividendos pagados`` y
+        ``FCFE = CFO - capex + emision de deuda - amortizacion``. Signos del
+        contrato (C11): los canonicos guardan los pagos como MAGNITUD POSITIVA
+        y la formula los resta; los dividendos entran sin voltear. Emision y
+        amortizacion son listas porque deuda y bonos vienen en lineas
+        separadas. Historico y forecast: el flujo realizado es sanity visible,
+        como el FCFF. El principal pagado de arrendamientos es una amortizacion
+        tipo deuda y va en ``repayment_rows``; si no, el FCFE sale inflado
+        frente a un par cuyos arrendamientos no se capitalizan.
+        """
+        for r, text in ((row, "Dividendos al accionista"),
+                        (row + 1, "FCFE (CFO - capex + emision de deuda - amortizacion)")):
+            ws.cell(row=r, column=2, value=text).font = Font(name=FONT_NAME, size=11)
+        for k in range(n_cols):
+            c = get_column_letter(first_col + k)
+            self.set_cell(ws, f"{c}{row}", f"={c}{dividends_row}", CellRole.FORMULA)
+            fcfe = (f"={c}{cfo_row}-{c}{capex_row}"
+                    + "".join(f"+{c}{r}" for r in issuance_rows)
+                    + "".join(f"-{c}{r}" for r in repayment_rows))
+            self.set_cell(ws, f"{c}{row + 1}", fcfe, CellRole.FORMULA)
+        return {"dividends_row": str(row), "fcfe_row": str(row + 1),
+                "next_row": str(row + 2)}
 
     def implied_growth_block(self, ws: Worksheet, row: int, *, title: str,
                              tv_ref: str, nopat_ref: str, wacc_ref: str,

@@ -59,7 +59,7 @@ skill dueña.
 | D2 | **Reconciliación de revenue**: ruta bottom-up (schedules) vs top-down (PIB × industria × participación) | divergencia > umbral (default 10%) = flag: supuesto roto. **Solo aplica a años PLENAMENTE ESTIMADOS** (0 trimestres observados): la reconciliación contrasta dos rutas de SUPUESTOS, y un año ya ocurrido no se reconcilia contra una fórmula de PIB × prima — se observa. Detección genérica con `COUNTIF` de headers `*Q<año>A` en Operating: 4 observados ⇒ `n/a (observado)`; 1–3 ⇒ `n/a (transición)`; 0 ⇒ reconcilia de verdad. Si un año estimado diverge, ahí sí es supuesto roto |
 | D3 | **Staleness de comps**: `as_of` de cada snapshot dentro de `stale_days` | snapshot viejo = flag en Val_Comps. **Por código** (`tools/model_check.py`): lee `as_of` y `stale_days` (default 5) de cada `comps/*.yaml`; por comparable cuenta su snapshot más reciente; vencido o sin `as_of` = `[aviso]`, nunca bloquea. Sin snapshots: n/a |
 | D4 | **Cruce de terminales**: múltiplo implícito por Gordon y g implícita por exit multiple, ambos visibles | divergencia grande = revisar g o múltiplo con el analista |
-| D5 | **Convergencia de métodos**: si DDM/FCFE/RI activos junto a DCF, divergencia extrema entre métodos se reporta como supuesto inconsistente | nunca se "promedia" para ocultarla |
+| D5 | **Convergencia de métodos**: si DDM y/o FCFE activos junto al DCF, dispersión `(MAX − MIN) / MEDIANA` de los valores por acción numéricos contra `METHOD_DIVERGENCE_MAX` (constante con nombre, default 0.2). **Entradas:** el DCF entra UNA vez, con su valor por acción del terminal Gordon (no también el del múltiplo de salida: ese cruce es D4); DDM y FCFE con su valor por acción. Todos los métodos dividen entre la MISMA celda de acciones diluidas | **Aviso, no bloqueo** (fórmula viva en `Checks`, `method_divergence_formula`): sobre el umbral marca `REVISAR`, que el reporte por código lista como `[aviso]`; signos opuestos (un método > 0 y otro ≤ 0) = `REVISAR` sin calcular dispersión; menos de dos métodos numéricos o todos ≤ 0 = `n/a`; un método en `n/s` se excluye. La celda de error del `Cover` cuenta `Error`, no `REVISAR`. Nunca se "promedia" para ocultarla: el diagnóstico (`method_consistency_block`, en `Annual` debajo de la última sección de equity) va a la entrevista de cierre |
 | D6 | **Staleness de macro-view**: `updated_at` dentro de `staleness_warn_months` | aviso, no bloqueo. **Por código**: `<raiz>/macro/macro-view.yaml`, `staleness_warn_months` default 3; archivo ausente o `updated_at` vacío = `[aviso]` |
 | D7 | **Monitor NIF B-10**: si emisora NIF y acumulado trienal en macro-view ≥ 22%, exigir escenario de reconexión pre-modelado | ver framework-mapper reference |
 | D8 | Etiquetas de trazabilidad presentes: inputs con comentario de fuente (observado) o marca guidance/supuesto | muestreo por tab |
@@ -114,7 +114,9 @@ evaluar** — nunca verdes.
 
 Con el libro recalculado se leen además los **checks vivos** (fórmulas de las
 tabs `Checks` y `Cover`): cualquier `Error` o error de Excel es falla y se
-nombra el check. Sobre un libro sin valores calculados el reporte dice
+nombra el check. Un `REVISAR` (D5, la marca del DDM enlazada a `Checks`) sale
+`[aviso]`: se lista con su celda, no cambia el exit code y nunca tapa una
+falla ni un check sin evaluar. Sobre un libro sin valores calculados el reporte dice
 `N de M checks vivos SIN evaluar` y queda `[pendiente]`: un check que nunca
 se evaluó no es un check verde.
 
@@ -149,7 +151,7 @@ Falla => exit report "FALLA", lista de celdas/hojas afectadas, siguiente acción
 ## Resultados en la tab Checks: fórmula viva o escaneo FECHADO
 
 Un check de la tab `Checks` es una **fórmula viva** sobre el libro (C1–C5, C7, D2,
-D4, D9, D11, D12, celda central de Sensitivity) o el **resultado de un escaneo por código** al construir (C8, C9, D3,
+D4, D5, D9, D11, D12, celda central de Sensitivity) o el **resultado de un escaneo por código** al construir (C8, C9, D3,
 D6, D10, D1). Un literal `"OK"` sin fecha ni nota es un check congelado: queda
 verde aunque el hecho cambie (bug de la auditoría AAPL 2026-09-02: D3 decía
 `OK` con snapshots vencidos). Regla: todo resultado que no sea fórmula se

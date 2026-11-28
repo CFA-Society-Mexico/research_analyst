@@ -75,6 +75,12 @@ class ValuationBlockStructureTests(unittest.TestCase):
                 wacc=w, g=g, fcff_range="$D$5:$H$5", exponent_range="$D$6:$H$6",
                 nopat_n="$H$3", ronic="RONIC", tv_exponent="$C$7",
                 net_debt="$C$8", shares="$C$9"))
+        self.styler.equity_terminal_block(self.ws, 70, ni_ref="$T$20", g_ref="G_TERMINAL",
+                                          ke_ref="KE", roe_ref="ROE_TERMINAL")
+        self.styler.equity_value_block(
+            self.ws, 80, title="DDM", flow_range="$D$40:$H$40",
+            exponent_range="$D$30:$H$30", ke_ref="KE", tv_ref="$C$72",
+            tv_exponent_ref="$C$31", shares_ref="$C$32", require_positive_flows=True)
         for formula in _formulas(self.ws):
             with self.subTest(formula=formula):
                 self.assertEqual(M.hardcoded_literals(formula), [])
@@ -108,6 +114,157 @@ class ValuationBlockStructureTests(unittest.TestCase):
         self.assertIn(B.REVIEW_FLAG, flag)
         self.assertEqual(B.lint_formula(flag), [])
         self.assertEqual(M.hardcoded_literals(flag), [])
+
+    def test_gordon_terminal_cells_are_frozen_across_the_refactor(self) -> None:
+        self.styler.gordon_terminal_block(self.ws, 40, nopat_ref="$T$8", g_ref="G_TERMINAL",
+                                          wacc_ref="WACC", ronic_ref="RONIC")
+        self.assertEqual(self.ws["B40"].value, "Tasa de reinversion terminal (g / RONIC)")
+        self.assertEqual(self.ws["C40"].value, '=IF(RONIC<=0,"n/s",G_TERMINAL/RONIC)')
+        self.assertEqual(self.ws["B41"].value,
+                         "Flujo terminal normalizado (NOPAT_n x (1+g) x (1 - g/RONIC))")
+        self.assertEqual(self.ws["C41"].value,
+                         '=IF(RONIC<=0,"n/s",$T$8*(1+G_TERMINAL)*(1-G_TERMINAL/RONIC))')
+        self.assertEqual(self.ws["B42"].value, "TV Gordon (flujo terminal / (WACC - g))")
+        self.assertEqual(self.ws["C42"].value,
+                         '=IF(OR(WACC<=G_TERMINAL,NOT(ISNUMBER($C$41))),"n/s",'
+                         '$C$41/(WACC-G_TERMINAL))')
+
+    def test_equity_terminal_normalizes_net_income_with_terminal_roe(self) -> None:
+        refs = self.styler.equity_terminal_block(
+            self.ws, 70, ni_ref="$T$20", g_ref="G_TERMINAL", ke_ref="KE",
+            roe_ref="ROE_TERMINAL")
+        self.assertEqual(refs["reinvestment"], "$C$70")
+        self.assertEqual(refs["tv"], "$C$72")
+        self.assertEqual(refs["next_row"], "73")
+        self.assertEqual(refs["flow"], "$C$71")
+        self.assertIn("NI_n", self.ws["B71"].value)
+        self.assertEqual(self.ws["C70"].value,
+                         '=IF(ROE_TERMINAL<=0,"n/s",G_TERMINAL/ROE_TERMINAL)')
+        self.assertEqual(self.ws["C71"].value,
+                         '=IF(ROE_TERMINAL<=0,"n/s",'
+                         '$T$20*(1+G_TERMINAL)*(1-G_TERMINAL/ROE_TERMINAL))')
+        self.assertEqual(self.ws["C72"].value,
+                         '=IF(OR(KE<=G_TERMINAL,NOT(ISNUMBER($C$71))),"n/s",'
+                         '$C$71/(KE-G_TERMINAL))')
+        self.assertIn("ROE terminal", self.ws["B70"].value)
+        self.assertIn("ke - g", self.ws["B72"].value)
+
+    def _value_block(self, **kwargs: object) -> dict[str, str]:
+        return self.styler.equity_value_block(
+            self.ws, 80, title="DDM", flow_range="$D$40:$H$40",
+            exponent_range="$D$30:$H$30", ke_ref="KE", tv_ref="$C$72",
+            tv_exponent_ref="$C$31", shares_ref="$C$32", **kwargs)
+
+    def test_equity_value_block_discounts_equity_flows_without_net_debt(self) -> None:
+        refs = self._value_block()
+        self.assertEqual(self.ws["C80"].value, "=SUMPRODUCT($D$40:$H$40/(1+KE)^$D$30:$H$30)")
+        self.assertEqual(self.ws["C81"].value, '=IF(ISNUMBER($C$72),$C$72/(1+KE)^$C$31,"n/s")')
+        self.assertEqual(self.ws["C82"].value, '=IF(ISNUMBER($C$81),$C$80+$C$81,"n/s")')
+        self.assertEqual(self.ws["C83"].value,
+                         '=IF(OR(NOT(ISNUMBER($C$82)),$C$32<=0),"n/s",$C$82/$C$32)')
+        self.assertEqual(self.ws["C84"].value,
+                         '=IF(OR(NOT(ISNUMBER($C$82)),$C$82<=0),"n/s",$C$81/$C$82)')
+        self.assertEqual(refs["per_share"], "$C$83")
+        self.assertEqual(refs["next_row"], "85")
+        self.assertNotIn("flag", refs)
+        self.assertIsNone(self.ws["C85"].value)
+        self.assertTrue(str(self.ws["B83"].value).startswith("DDM: "))
+
+    def test_ddm_flags_a_method_activated_without_dividends(self) -> None:
+        refs = self._value_block(require_positive_flows=True)
+        self.assertEqual(refs["flag"], "$C$85")
+        self.assertEqual(refs["next_row"], "86")
+        self.assertEqual(self.ws["C85"].value, '=IF(SUM($D$40:$H$40)<=0,"REVISAR","OK")')
+        self.assertEqual(self.ws["B85"].value, "DDM: flujos explicitos positivos")
+        self.assertEqual(self.ws["C85"].font.color.rgb, B.Color.WARN_RED.value)
+
+    def test_equity_value_block_discounts_the_stub_before_the_full_years(self) -> None:
+        # Stub (trimestres E del anio en curso) con su exponente f; los anios
+        # completos despues del stub en flow_range / exponent_range.
+        refs = self._value_block(stub_flow_ref="$C$38", stub_exponent_ref="$C$29",
+                                 require_positive_flows=True)
+        self.assertEqual(self.ws["C80"].value,
+                         "=$C$38/(1+KE)^$C$29+SUMPRODUCT($D$40:$H$40/(1+KE)^$D$30:$H$30)")
+        self.assertEqual(self.ws["B80"].value, "DDM: VP de los flujos explicitos")
+        self.assertEqual(self.ws["C85"].value,
+                         '=IF($C$38+SUM($D$40:$H$40)<=0,"REVISAR","OK")')
+        self.assertEqual(refs["next_row"], "86")
+        # El resto del bloque no cambia con el stub.
+        self.assertEqual(self.ws["C82"].value, '=IF(ISNUMBER($C$81),$C$80+$C$81,"n/s")')
+        for formula in _formulas(self.ws):
+            with self.subTest(formula=formula):
+                self.assertEqual(M.hardcoded_literals(formula), [])
+                self.assertEqual(B.lint_formula(formula), [])
+
+    def test_equity_value_block_stub_needs_both_flow_and_exponent(self) -> None:
+        for kwargs in ({"stub_flow_ref": "$C$38"}, {"stub_exponent_ref": "$C$29"}):
+            with self.subTest(**kwargs), self.assertRaises(ValueError):
+                self._value_block(**kwargs)
+
+    def test_equity_flow_rows_subtract_payments_stored_as_positive_magnitudes(self) -> None:
+        refs = self.styler.equity_flow_rows(
+            self.ws, 40, 4, 3, dividends_row=20, cfo_row=21, capex_row=22,
+            issuance_rows=[23], repayment_rows=[24, 25])
+        self.assertEqual(refs, {"dividends_row": "40", "fcfe_row": "41", "next_row": "42"})
+        self.assertEqual(self.ws["D40"].value, "=D20")             # dividendos sin voltear
+        self.assertEqual(self.ws["F40"].value, "=F20")
+        self.assertEqual(self.ws["D41"].value, "=D21-D22+D23-D24-D25")
+        self.assertEqual(self.ws["F41"].value, "=F21-F22+F23-F24-F25")
+        self.assertIsNone(self.ws["G41"].value)                    # solo n_cols columnas
+        self.assertEqual(self.ws["B40"].value, "Dividendos al accionista")
+        self.assertEqual(self.ws["B41"].value,
+                         "FCFE (CFO - capex + emision de deuda - amortizacion)")
+        for formula in _formulas(self.ws):
+            with self.subTest(formula=formula):
+                self.assertEqual(M.hardcoded_literals(formula), [])
+                self.assertEqual(B.lint_formula(formula), [])
+
+    def test_equity_flow_rows_without_debt_lines(self) -> None:
+        self.styler.equity_flow_rows(self.ws, 40, 4, 1, dividends_row=20, cfo_row=21,
+                                     capex_row=22)
+        self.assertEqual(self.ws["D41"].value, "=D21-D22")
+
+    def test_method_divergence_is_spread_over_median_and_only_warns(self) -> None:
+        formula = B.method_divergence_formula(["$C$90", "$C$83", "$C$95"],
+                                              "METHOD_DIVERGENCE_MAX")
+        args = "$C$90,$C$83,$C$95"
+        self.assertEqual(
+            formula,
+            f'=IF(COUNT({args})<=1,"n/a",IF(MAX({args})<=0,"n/a",'
+            f'IF(MIN({args})<=0,"REVISAR",'
+            f'IF((MAX({args})-MIN({args}))/MEDIAN({args})>METHOD_DIVERGENCE_MAX,'
+            f'"REVISAR","OK"))))')
+        self.assertNotIn('"Error"', formula)                       # aviso, nunca bloqueo
+        self.assertEqual(B.lint_formula(formula), [])
+        self.assertEqual(M.hardcoded_literals(formula), [])
+
+    def test_method_divergence_needs_at_least_one_value(self) -> None:
+        with self.assertRaises(ValueError):
+            B.method_divergence_formula([], "METHOD_DIVERGENCE_MAX")
+
+    def test_method_divergence_rejects_a_bare_string(self) -> None:
+        with self.assertRaises(TypeError):
+            B.method_divergence_formula("$C$90", "METHOD_DIVERGENCE_MAX")
+
+    def test_method_consistency_block_lists_the_usual_sources_of_divergence(self) -> None:
+        refs = self.styler.method_consistency_block(
+            self.ws, 100, g_ref="G_TERMINAL", roe_last_ref="$H$60",
+            dividends_last_ref="$H$40", ni_last_ref="$H$20", ke_equity_ref="KE",
+            ke_wacc_ref="$C$12", equity_reinvestment_ref="$C$70", net_debt_first_ref="$D$50",
+            ebitda_first_ref="$D$15", net_debt_last_ref="$H$50", ebitda_last_ref="$H$15")
+        self.assertEqual(refs["next_row"], "107")
+        self.assertEqual(self.ws["C100"].value, '=IF(OR(NOT(ISNUMBER($H$60)),NOT(ISNUMBER($H$20)),$H$20<=0),"n/s",'
+                         '$H$60*(1-$H$40/$H$20))')
+        self.assertEqual(self.ws["C101"].value, '=IF(ISNUMBER($C$100),G_TERMINAL-$C$100,"n/s")')
+        self.assertEqual(self.ws["C102"].value, "=KE-$C$12")
+        self.assertEqual(self.ws["C103"].value, '=IF(ISNUMBER($C$70),1-$C$70,"n/s")')
+        self.assertEqual(self.ws["C104"].value, '=IF(OR(NOT(ISNUMBER($H$20)),$H$20<=0),"n/s",$H$40/$H$20)')
+        self.assertEqual(self.ws["C105"].value, '=IF(OR(NOT(ISNUMBER($D$15)),$D$15<=0),"n/s",$D$50/$D$15)')
+        self.assertEqual(self.ws["C106"].value, '=IF(OR(NOT(ISNUMBER($H$15)),$H$15<=0),"n/s",$H$50/$H$15)')
+        for formula in _formulas(self.ws):
+            with self.subTest(formula=formula):
+                self.assertEqual(M.hardcoded_literals(formula), [])
+                self.assertEqual(B.lint_formula(formula), [])
 
 
 class TransitionYearTests(unittest.TestCase):
@@ -284,6 +441,168 @@ class ExcelEvaluationTests(unittest.TestCase):
         # 8 USD por ADS / 5 acciones por ADS x 12,500 acciones x 32 = 640,000
         self.assertAlmostEqual(self._v("C64"), 640_000.0, places=6)
         self.assertEqual(self._v("C68"), B.REVIEW_FLAG)     # 1.0x fuera de 2x-60x
+
+
+@unittest.skipUnless(R.find_engine("excel") is R.Engine.EXCEL, "requiere Excel (COM)")
+class EquityValuationExcelTests(unittest.TestCase):
+    """DDM, FCFE y D5 evaluados con Excel."""
+
+    NI, KE, G, ROE, SHARES = 100.0, 0.10, 0.03, 0.10, 10.0
+    FLOWS = (40.0, 44.0, 48.0)
+    STUB_FLOW, STUB_F = 10.0, 0.5
+    # FCFE = CFO - capex + emision - amortizacion = dividendos (40, 44, 48):
+    # D5 sigue convergiendo, pero ahora prueba el cableado y los signos.
+    CFO = (70.0, 75.0, 80.0)
+    CAPEX = (35.0, 36.0, 37.0)
+    ISSUANCE = (10.0, 12.0, 14.0)
+    REPAYMENT = (5.0, 7.0, 9.0)
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.tmp.cleanup)
+        styler = B.ModelStyler()
+        ws = styler.new_sheet("Annual")
+        for coord, value in (("C5", cls.KE), ("C6", cls.G), ("C7", cls.ROE),
+                             ("C8", cls.NI), ("C9", cls.SHARES), ("C10", 3),
+                             ("C11", 0.2), ("C12", 0.02)):
+            ws[coord] = value
+        for name, coord in (("KE", "C5"), ("G_TERMINAL", "C6"), ("ROE_TERMINAL", "C7"),
+                            ("METHOD_DIVERGENCE_MAX", "C11")):
+            styler.define_constant(name, "Annual", coord)
+        for i, flow in enumerate(cls.FLOWS):
+            ws.cell(row=15, column=4 + i, value=flow)          # dividendos
+            ws.cell(row=16, column=4 + i, value=i + 1)         # exponentes 1..3
+        # Partidas del flujo (pagos como MAGNITUD POSITIVA, contrato C11) en
+        # filas 70-73; equity_flow_rows arma dividendos y FCFE en 75-76.
+        for r, series in zip(range(70, 74), (cls.CFO, cls.CAPEX, cls.ISSUANCE,
+                                             cls.REPAYMENT)):
+            for i, value in enumerate(series):
+                ws.cell(row=r, column=4 + i, value=value)
+        flows = styler.equity_flow_rows(ws, 75, 4, len(cls.FLOWS), dividends_row=15,
+                                        cfo_row=70, capex_row=71, issuance_rows=[72],
+                                        repayment_rows=[73])
+        tv = styler.equity_terminal_block(ws, 20, ni_ref="$C$8", g_ref="G_TERMINAL",
+                                          ke_ref="KE", roe_ref="ROE_TERMINAL")
+        common = dict(flow_range="$D$15:$F$15", exponent_range="$D$16:$F$16",
+                      ke_ref="KE", tv_ref=tv["tv"], tv_exponent_ref="$C$10",
+                      shares_ref="$C$9")
+        last = B.get_column_letter(3 + len(cls.FLOWS))
+        ddm = styler.equity_value_block(
+            ws, 25, title="DDM", require_positive_flows=True,
+            **{**common, "flow_range": f"$D${flows['dividends_row']}:${last}"
+                                       f"${flows['dividends_row']}"})
+        fcfe = styler.equity_value_block(
+            ws, 32, title="FCFE",
+            **{**common, "flow_range": f"$D${flows['fcfe_row']}:${last}${flows['fcfe_row']}"})
+        cls.fcfe_row = int(flows["fcfe_row"])
+        # ROE terminal <= 0: el terminal es n/s. Acciones <= 0: por accion n/s.
+        ws["C13"] = 0.0
+        ws["C14"] = 0.0
+        tv_roe = styler.equity_terminal_block(ws, 80, ni_ref="$C$8", g_ref="G_TERMINAL",
+                                              ke_ref="KE", roe_ref="$C$13")
+        no_shares = styler.equity_value_block(ws, 84, title="sin acciones",
+                                              **{**common, "shares_ref": "$C$14"})
+        # ke <= g: terminal y valor por accion en n/s
+        tv_bad = styler.equity_terminal_block(ws, 40, ni_ref="$C$8", g_ref="G_TERMINAL",
+                                              ke_ref="$C$12", roe_ref="ROE_TERMINAL")
+        bad = styler.equity_value_block(ws, 44, title="malo", **{**common, "ke_ref": "$C$12",
+                                                                "tv_ref": tv_bad["tv"]})
+        styler.set_cell(ws, "C51", f"={ddm['per_share']}*(1+METHOD_DIVERGENCE_MAX+"
+                        "METHOD_DIVERGENCE_MAX)", B.CellRole.FORMULA)     # 40% arriba
+        # Stub del anio en curso: flujo de los trimestres E con exponente f; los
+        # anios completos despues del stub descuentan a f + k y el TV a f + n.
+        ws["C57"] = cls.STUB_FLOW
+        ws["C58"] = cls.STUB_F
+        for i in range(len(cls.FLOWS)):
+            ws.cell(row=59, column=4 + i, value=cls.STUB_F + i + 1)
+        ws["C60"] = cls.STUB_F + len(cls.FLOWS)
+        stub = styler.equity_value_block(
+            ws, 62, title="DDM stub", require_positive_flows=True,
+            **{**common, "exponent_range": "$D$59:$F$59", "tv_exponent_ref": "$C$60"},
+            stub_flow_ref="$C$57", stub_exponent_ref="$C$58")
+        cls.refs = {"tv": tv["tv"], "ddm": ddm["per_share"], "fcfe": fcfe["per_share"],
+                    "flag": ddm["flag"], "tv_bad": tv_bad["tv"], "bad": bad["per_share"],
+                    "stub": stub["per_share"], "stub_flag": stub["flag"],
+                    "tv_roe": tv_roe["tv"], "no_shares": no_shares["per_share"],
+                    "no_shares_equity": no_shares["equity"]}
+        # Valores por accion negativos: signo opuesto al DDM y todos <= 0.
+        styler.set_cell(ws, "E51", f"=-{ddm['per_share']}", B.CellRole.FORMULA)
+        styler.set_cell(ws, "F51", "=-$C$51", B.CellRole.FORMULA)
+        for coord, values in (("C53", [ddm["per_share"], fcfe["per_share"]]),
+                              ("C54", [ddm["per_share"], "$C$51"]),
+                              ("C55", [ddm["per_share"], bad["per_share"]]),
+                              ("C56", [ddm["per_share"], "$E$51", "$F$51"]),
+                              ("D55", ["$E$51", "$F$51"])):
+            styler.set_cell(ws, coord, B.method_divergence_formula(
+                values, "METHOD_DIVERGENCE_MAX"), B.CellRole.WARN, B.NumFmt.GENERAL)
+        source = Path(cls.tmp.name) / "equity.xlsx"
+        styler.save(str(source))
+        cls.source = source
+        cls.recalculated = R.recalculate(source, Path(cls.tmp.name) / "wd", R.Engine.EXCEL)
+        cls.values = load_workbook(str(cls.recalculated), data_only=True)["Annual"]
+
+    def _v(self, key: str) -> object:
+        return self.values[self.refs.get(key, key).replace("$", "")].value
+
+    def test_excel_keeps_every_formula_the_builder_wrote(self) -> None:
+        self.assertEqual(R.formula_cells(self.source) - R.formula_cells(self.recalculated),
+                         set())
+        self.assertEqual(R.error_cells(self.recalculated), [])
+
+    def test_equity_value_per_share_matches_the_hand_calculation(self) -> None:
+        flow = self.NI * (1 + self.G) * (1 - self.G / self.ROE)
+        tv = flow / (self.KE - self.G)
+        pv = sum(f / (1 + self.KE) ** (i + 1) for i, f in enumerate(self.FLOWS))
+        expected = (pv + tv / (1 + self.KE) ** 3) / self.SHARES
+        self.assertAlmostEqual(self._v("tv"), tv, places=6)
+        self.assertAlmostEqual(self._v("ddm"), expected, places=6)
+        self.assertEqual(self._v("flag"), "OK")
+
+    def test_stub_year_discounts_only_the_estimated_quarters(self) -> None:
+        flow = self.NI * (1 + self.G) * (1 - self.G / self.ROE)
+        tv = flow / (self.KE - self.G)
+        f = self.STUB_F
+        pv = self.STUB_FLOW / (1 + self.KE) ** f + sum(
+            fl / (1 + self.KE) ** (f + i + 1) for i, fl in enumerate(self.FLOWS))
+        expected = (pv + tv / (1 + self.KE) ** (f + len(self.FLOWS))) / self.SHARES
+        self.assertAlmostEqual(self._v("stub"), expected, places=6)
+        self.assertEqual(self._v("stub_flag"), "OK")
+
+    def test_fcfe_row_built_by_the_builder_subtracts_payments(self) -> None:
+        for i, parts in enumerate(zip(self.CFO, self.CAPEX, self.ISSUANCE, self.REPAYMENT)):
+            cfo, capex, issuance, repayment = parts
+            with self.subTest(column=i):
+                value = self.values.cell(row=self.fcfe_row, column=4 + i).value
+                self.assertAlmostEqual(value, cfo - capex + issuance - repayment, places=9)
+                self.assertAlmostEqual(value, self.FLOWS[i], places=9)
+
+    def test_terminal_roe_not_positive_is_not_meaningful(self) -> None:
+        self.assertEqual(self._v("tv_roe"), B.NOT_MEANINGFUL)
+
+    def test_shares_not_positive_is_not_meaningful_per_share(self) -> None:
+        self.assertEqual(self._v("no_shares"), B.NOT_MEANINGFUL)
+        self.assertIsInstance(self._v("no_shares_equity"), float)
+
+    def test_ke_not_above_g_is_not_meaningful_never_a_number(self) -> None:
+        self.assertEqual(self._v("tv_bad"), B.NOT_MEANINGFUL)
+        self.assertEqual(self._v("bad"), B.NOT_MEANINGFUL)
+
+    def test_d5_identical_flows_converge(self) -> None:
+        self.assertAlmostEqual(self._v("ddm"), self._v("fcfe"), places=9)
+        self.assertEqual(self._v("C53"), "OK")
+
+    def test_d5_over_threshold_warns(self) -> None:
+        self.assertEqual(self._v("C54"), B.REVIEW_FLAG)
+
+    def test_d5_with_a_single_numeric_method_is_not_applicable(self) -> None:
+        self.assertEqual(self._v("C55"), "n/a")
+
+    def test_d5_opposite_signs_warn_even_with_a_negative_median(self) -> None:
+        self.assertEqual(self._v("C56"), B.REVIEW_FLAG)
+
+    def test_d5_all_values_not_positive_is_not_applicable(self) -> None:
+        self.assertEqual(self._v("D55"), "n/a")
 
 
 if __name__ == "__main__":
