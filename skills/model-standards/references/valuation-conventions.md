@@ -229,7 +229,10 @@ activos contra `METHOD_DIVERGENCE_MAX` (constante con nombre, default 0.2).
 Entradas: el DCF entra UNA vez, con su valor por acción del terminal Gordon
 (no también el del múltiplo de salida, que ya cruza D4); DDM y FCFE con el
 suyo. Todos los métodos dividen entre la MISMA celda de acciones diluidas: un
-denominador distinto fabrica divergencia. Avisa con `REVISAR`, nunca bloquea.
+denominador distinto fabrica divergencia. Signos opuestos (un método > 0 y otro
+≤ 0) marcan `REVISAR` sin calcular dispersión, porque la mediana puede salir ≤ 0
+y esconder la divergencia más extrema; todos ≤ 0 o menos de dos numéricos =
+`n/a`. Avisa con `REVISAR`, nunca bloquea.
 El diagnóstico, `method_consistency_block`, va en `Annual` debajo de la última
 sección de equity (no en `Checks`) y muestra las fuentes típicas: g terminal vs
 ROE × retención, ke de equity vs ke del WACC, payout terminal implícito vs

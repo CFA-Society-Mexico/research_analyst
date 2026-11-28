@@ -230,9 +230,10 @@ class ValuationBlockStructureTests(unittest.TestCase):
         args = "$C$90,$C$83,$C$95"
         self.assertEqual(
             formula,
-            f'=IF(COUNT({args})<=1,"n/a",IF(MEDIAN({args})<=0,"n/a",'
+            f'=IF(COUNT({args})<=1,"n/a",IF(MAX({args})<=0,"n/a",'
+            f'IF(MIN({args})<=0,"REVISAR",'
             f'IF((MAX({args})-MIN({args}))/MEDIAN({args})>METHOD_DIVERGENCE_MAX,'
-            f'"REVISAR","OK")))')
+            f'"REVISAR","OK"))))')
         self.assertNotIn('"Error"', formula)                       # aviso, nunca bloqueo
         self.assertEqual(B.lint_formula(formula), [])
         self.assertEqual(M.hardcoded_literals(formula), [])
@@ -525,9 +526,14 @@ class EquityValuationExcelTests(unittest.TestCase):
                     "stub": stub["per_share"], "stub_flag": stub["flag"],
                     "tv_roe": tv_roe["tv"], "no_shares": no_shares["per_share"],
                     "no_shares_equity": no_shares["equity"]}
+        # Valores por accion negativos: signo opuesto al DDM y todos <= 0.
+        styler.set_cell(ws, "E51", f"=-{ddm['per_share']}", B.CellRole.FORMULA)
+        styler.set_cell(ws, "F51", "=-$C$51", B.CellRole.FORMULA)
         for coord, values in (("C53", [ddm["per_share"], fcfe["per_share"]]),
                               ("C54", [ddm["per_share"], "$C$51"]),
-                              ("C55", [ddm["per_share"], bad["per_share"]])):
+                              ("C55", [ddm["per_share"], bad["per_share"]]),
+                              ("C56", [ddm["per_share"], "$E$51", "$F$51"]),
+                              ("D55", ["$E$51", "$F$51"])):
             styler.set_cell(ws, coord, B.method_divergence_formula(
                 values, "METHOD_DIVERGENCE_MAX"), B.CellRole.WARN, B.NumFmt.GENERAL)
         source = Path(cls.tmp.name) / "equity.xlsx"
@@ -591,6 +597,12 @@ class EquityValuationExcelTests(unittest.TestCase):
 
     def test_d5_with_a_single_numeric_method_is_not_applicable(self) -> None:
         self.assertEqual(self._v("C55"), "n/a")
+
+    def test_d5_opposite_signs_warn_even_with_a_negative_median(self) -> None:
+        self.assertEqual(self._v("C56"), B.REVIEW_FLAG)
+
+    def test_d5_all_values_not_positive_is_not_applicable(self) -> None:
+        self.assertEqual(self._v("D55"), "n/a")
 
 
 if __name__ == "__main__":

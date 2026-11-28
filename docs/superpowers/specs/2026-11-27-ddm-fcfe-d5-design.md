@@ -109,7 +109,10 @@ Una celda: dispersión `(MAX − MIN) / MEDIANA` sobre los valores por acción
 de los métodos activos (DCF FCFF siempre; DDM y FCFE si existen).
 
 - Solo cuentan los numéricos (un método en `n/s` se excluye, no rompe D5).
-- Menos de 2 numéricos ⇒ `n/a`; mediana ≤ 0 ⇒ `n/a`.
+- Menos de 2 numéricos ⇒ `n/a`; todos ≤ 0 ⇒ `n/a`.
+- Signos opuestos (alguno > 0 y alguno ≤ 0) ⇒ `REVISAR` sin calcular la
+  dispersión: con mediana ≤ 0 la regla anterior devolvía `n/a` justo en la
+  divergencia más extrema (p. ej. DCF 50 vs FCFE −60).
 - Dispersión > `max_ratio` ⇒ `REVISAR`; si no, `OK`.
 - `max_ratio` = constante con nombre `METHOD_DIVERGENCE_MAX` en Assumptions
   (`supuesto`, default del plugin 0.2). Sin literales (S4) y sin operaciones
@@ -172,7 +175,8 @@ Operating CF (dividendos pagados, CFO, capex, emisión/amortización de deuda)
 | equity ≤ 0 | `n/s` en % del valor en el terminal |
 | DDM con Σ dividendos explícitos ≤ 0 | `REVISAR` en el bloque DDM |
 | D5 con < 2 valores numéricos | `n/a` |
-| D5 con mediana ≤ 0 | `n/a` |
+| D5 con todos los valores ≤ 0 | `n/a` |
+| D5 con signos opuestos | `REVISAR` |
 | método en `n/s` | excluido de D5 |
 
 ## D5 — Pruebas (TDD)

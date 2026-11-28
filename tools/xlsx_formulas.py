@@ -230,16 +230,19 @@ def method_divergence_formula(values: Sequence[str], max_ratio: str) -> str:
 
     ``(MAX - MIN) / MEDIANA`` sobre las celdas numericas (un metodo en
     ``n/s`` se ignora: MAX, MIN, MEDIAN y COUNT saltan texto de celdas).
-    Menos de dos numericos o mediana <= 0 => ``n/a``. Sobre ``max_ratio``
-    (constante con nombre METHOD_DIVERGENCE_MAX) => ``REVISAR``: aviso, nunca
-    bloqueo -con apalancamiento cambiante FCFE y FCFF divergen de verdad- y
-    jamas se promedia para ocultarlo.
+    Menos de dos numericos o todos <= 0 => ``n/a``. Signos opuestos (alguno
+    <= 0 y alguno > 0) => ``REVISAR`` sin calcular la dispersion: la mediana
+    puede salir <= 0 y esconder la divergencia mas extrema. Sobre
+    ``max_ratio`` (constante con nombre METHOD_DIVERGENCE_MAX) => ``REVISAR``:
+    aviso, nunca bloqueo -con apalancamiento cambiante FCFE y FCFF divergen
+    de verdad- y jamas se promedia para ocultarlo.
     """
     if isinstance(values, str):
         raise TypeError("method_divergence_formula: values es una lista de refs, no un str")
     if not values:
         raise ValueError("method_divergence_formula: se necesita al menos un valor")
     args = ",".join(values)
-    return (f'=IF(COUNT({args})<=1,"n/a",IF(MEDIAN({args})<=0,"n/a",'
+    return (f'=IF(COUNT({args})<=1,"n/a",IF(MAX({args})<=0,"n/a",'
+            f'IF(MIN({args})<=0,"{REVIEW_FLAG}",'
             f'IF((MAX({args})-MIN({args}))/MEDIAN({args})>{max_ratio},'
-            f'"{REVIEW_FLAG}","OK")))')
+            f'"{REVIEW_FLAG}","OK"))))')
